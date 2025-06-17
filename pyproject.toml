@@ -9,6 +9,7 @@ description = "Japanese personal information detection and masking tool for PDF 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # PDF処理とPresidio関連
     "click>=8.0.0",
     "spacy[transformers]>=3.7.0",
     "presidio-analyzer>=2.2.0",
@@ -17,14 +18,17 @@ dependencies = [
     "reportlab>=4.0.0",
     "PyYAML>=6.0",
     "colorama>=0.4.0",
+    
+    # 日本語NLPモデル
     "ja-core-news-sm",
-    "numpy<2.0",
     "ja-core-news-lg",
-    "ja-core-news-trf",
+    "ja-core-news-trf", 
     "ginza>=5.2.0",
     "ja-ginza>=5.2.0",
     "ja-ginza-electra>=5.2.0",
-    "opencv-python>=4.11.0.86",
+    
+    # 機械学習・画像処理
+    "numpy<2.0",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +39,17 @@ dev = [
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
+]
+
+# 軽量版（Presidio PDF処理のみ）
+minimal = [
+    "click>=8.0.0",
+    "spacy>=3.7.0",
+    "presidio-analyzer>=2.2.0", 
+    "pdfplumber>=0.10.0",
+    "PyMuPDF>=1.23.0",
+    "PyYAML>=6.0",
+    "numpy<2.0",
 ]
 
 [project.scripts]

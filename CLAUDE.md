@@ -35,12 +35,14 @@ The project follows modern Python development practices with uv for dependency m
 
 ## Core Architecture
 
+### PDF Processing (Presidio-based)
 - **PDFPresidioProcessor class**: Main processor that integrates spaCy NLP, Presidio analyzers, and PyMuPDF
 - **ConfigManager class**: Unified configuration management supporting YAML files and command-line arguments
 - **Custom recognizers**: Japanese-specific patterns for マイナンバー (Individual Number), 年号 (Japanese Era), honorific names, and phone numbers
 - **Entity masking**: Maps detected entity types to annotations or highlights in PDF documents
 - **Batch processing**: Supports single files or recursive folder processing
 - **Reporting system**: Generates detailed processing statistics and reports
+
 
 ## System Requirements
 
@@ -162,6 +164,7 @@ uv run python src/pdf_presidio_processor.py document.pdf --deduplication-overlap
 # Combined deduplication settings
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode score --deduplication-overlap-mode contain_only
 ```
+
 
 ### Testing
 ```bash
