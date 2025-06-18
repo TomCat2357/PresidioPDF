@@ -123,9 +123,10 @@ thresholds:
 ```yaml
 pdf_processing:
   masking:
-    method: "highlight"    # マスキング方式: annotation（ボックス）, highlight（ハイライト）, both（両方）
+    method: "highlight"          # マスキング方式: annotation（ボックス）, highlight（ハイライト）, both（両方）
+    text_display_mode: "verbose" # 文字表示モード: silent（文字なし）, minimal（最小限）, verbose（詳細）
     annotation_settings:
-      include_text: false  # 注釈にテキストを含めるか
+      include_text: false        # 注釈にテキストを含めるか
       font_size: 12
   
   output_suffix: "_masked" # 出力ファイルのサフィックス
@@ -200,13 +201,22 @@ exclusions:
 # ヘルプ表示
 uv run python src/pdf_presidio_processor.py --help
 
-# 主要オプション
+# 基本設定オプション
 --config, -c          # 設定ファイルのパス
 --verbose, -v         # 詳細ログ表示
+--output-dir, -o      # 出力ディレクトリ
+
+# モード選択オプション
+--read-mode, -r       # 読み取りモード
+
+# マスキング設定オプション
+--masking-method      # マスキング方式 (annotation/highlight/both)
+--masking-text-mode   # マスキング文字表示モード (silent/minimal/verbose)
+
+# 処理設定オプション
 --spacy-model, -m     # 使用するspaCyモデル名
 --deduplication-mode         # 重複除去モード
 --deduplication-overlap-mode  # 重複判定モード
---read-mode, -r       # 読み取りモード
 
 # 例：カスタム設定ファイル使用
 uv run python src/pdf_presidio_processor.py document.pdf --config config/highlighting_only.yaml
@@ -225,6 +235,11 @@ uv run python src/pdf_presidio_processor.py document.pdf --spacy-model ja_ginza
 
 # 例：GINZA Electra使用（最高精度、処理時間長め）
 uv run python src/pdf_presidio_processor.py document.pdf --spacy-model ja_ginza_electra
+
+# 例：マスキング方式と文字表示モードの指定
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method annotation --masking-text-mode verbose
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method highlight --masking-text-mode minimal  
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method both --masking-text-mode silent
 ```
 
 ### 新しいコマンドライン引数サポート
@@ -271,7 +286,13 @@ uv run python src/pdf_presidio_processor.py document.pdf --exclusions '{
 
 ```bash
 # PDFマスキング方式の指定
-uv run python src/pdf_presidio_processor.py document.pdf --pdf_masking_method annotation
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method annotation
+
+# PDFマスキング文字表示モードの指定  
+uv run python src/pdf_presidio_processor.py document.pdf --masking-text-mode silent
+
+# マスキング方式と文字表示モードの組み合わせ
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method both --masking-text-mode minimal
 
 # PDF出力サフィックスの指定
 uv run python src/pdf_presidio_processor.py document.pdf --pdf_output_suffix "_secured"
@@ -306,7 +327,8 @@ uv run python src/pdf_presidio_processor.py folder/ --recursive false
 uv run python src/pdf_presidio_processor.py document.pdf \
   --entities PERSON PHONE_NUMBER INDIVIDUAL_NUMBER \
   --thresholds '{"PERSON": 0.9, "PHONE_NUMBER": 0.95, "INDIVIDUAL_NUMBER": 0.99}' \
-  --pdf_masking_method annotation \
+  --masking-method annotation \
+  --masking-text-mode minimal \
   --deduplication-mode entity_type \
   --deduplication-overlap-mode contain_only \
   --backup true \

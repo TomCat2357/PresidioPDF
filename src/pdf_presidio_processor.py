@@ -796,18 +796,27 @@ class PDFPresidioProcessor:
                         
                         # 注釈内容を生成
                         content = self._generate_annotation_content(entity)
+                        text_display_mode = self.config_manager.get_masking_text_display_mode()
                         
-                        # フリーテキスト注釈を追加
-                        annot = page.add_freetext_annot(
-                            rect,
-                            content,
-                            fontsize=8,
-                            text_color=color,
-                            fill_color=[c * 0.3 for c in color]  # 薄い背景色
-                        )
+                        if text_display_mode == "silent":
+                            # silentモードでは色のみの矩形注釈を作成
+                            annot = page.add_square_annot(rect)
+                            annot.set_colors(stroke=color, fill=[c * 0.3 for c in color])
+                            annot.set_info(title="", content="")
+                        else:
+                            # フリーテキスト注釈を追加
+                            annot = page.add_freetext_annot(
+                                rect,
+                                content,
+                                fontsize=8,
+                                text_color=color,
+                                fill_color=[c * 0.3 for c in color]  # 薄い背景色
+                            )
+                            
+                            # 注釈の設定
+                            title = "個人情報検出" if text_display_mode == "verbose" else ""
+                            annot.set_info(title=title, content=content)
                         
-                        # 注釈の設定
-                        annot.set_info(title="個人情報検出", content=content)
                         annot.update()
                         
                         annotations_added += 1
@@ -868,7 +877,22 @@ class PDFPresidioProcessor:
                         # ハイライト注釈を追加
                         highlight = page.add_highlight_annot(rect)
                         highlight.set_colors(stroke=color)
-                        highlight.set_info(title=f"個人情報: {entity['entity_type']}", content=entity['text'])
+                        
+                        # 文字表示モードに応じてタイトルと内容を設定
+                        text_display_mode = self.config_manager.get_masking_text_display_mode()
+                        if text_display_mode == "silent":
+                            highlight.set_info(title="", content="")
+                        elif text_display_mode == "minimal":
+                            type_names = {
+                                'PERSON': '人名', 'LOCATION': '場所', 'DATE_TIME': '日時',
+                                'PHONE_NUMBER': '電話番号', 'INDIVIDUAL_NUMBER': 'マイナンバー',
+                                'YEAR': '年号', 'PROPER_NOUN': '固有名詞'
+                            }
+                            type_name = type_names.get(entity['entity_type'], entity['entity_type'])
+                            highlight.set_info(title=type_name, content="")
+                        else:  # verbose
+                            highlight.set_info(title=f"個人情報: {entity['entity_type']}", content=entity['text'])
+                        
                         highlight.update()
                         
                         highlights_added += 1
@@ -917,6 +941,12 @@ class PDFPresidioProcessor:
     
     def _generate_annotation_content(self, entity: Dict) -> str:
         """注釈内容を生成"""
+        text_display_mode = self.config_manager.get_masking_text_display_mode()
+        
+        # silentモードの場合は空文字を返す
+        if text_display_mode == "silent":
+            return ""
+        
         entity_type = entity['entity_type']
         confidence = entity.get('score', 0.0)
         text = entity.get('text', '')
@@ -933,17 +963,27 @@ class PDFPresidioProcessor:
         }
         
         type_name = type_names.get(entity_type, entity_type)
-        content = f"【個人情報】{type_name}"
         
-        if confidence > 0:
-            content += f" (信頼度: {confidence:.1%})"
-        
-        # 設定によってはテキスト内容も含める
-        annotation_settings = self.config_manager.get_pdf_annotation_settings()
-        if annotation_settings.get('include_text', False):
-            content += f"\nテキスト: {text[:20]}..."
-        
-        return content
+        if text_display_mode == "minimal":
+            # 最小限の情報：エンティティタイプのみ
+            return type_name
+        elif text_display_mode == "verbose":
+            # 詳細情報：エンティティタイプ + 信頼度
+            content = f"【個人情報】{type_name}"
+            
+            if confidence > 0:
+                content += f" (信頼度: {confidence:.1%})"
+            
+            # 設定によってはテキスト内容も含める
+            annotation_settings = self.config_manager.get_pdf_annotation_settings()
+            if annotation_settings.get('include_text', False):
+                content += f"\nテキスト: {text[:20]}..."
+            
+            return content
+        else:
+            # 未知のモードの場合はverboseとして扱う
+            logger.warning(f"未知の文字表示モード: {text_display_mode}. verboseとして扱います。")
+            return f"【個人情報】{type_name}"
     
     def _create_backup(self, file_path: str) -> str:
         """ファイルのバックアップを作成"""
@@ -1432,17 +1472,25 @@ class PDFPresidioProcessor:
 
 @click.command()
 @click.argument('path', type=click.Path(exists=True), required=True)
+# 基本設定オプション
 @click.option('--config', '-c', type=click.Path(exists=True), help='YAML設定ファイルのパス')
 @click.option('--verbose', '-v', is_flag=True, help='詳細なログを表示')
+@click.option('--output-dir', '-o', type=click.Path(), help='出力ディレクトリ')
+# モード選択オプション
 @click.option('--read-mode', '-r', is_flag=True, help='読み取りモード: 既存の注釈・ハイライトを読み取り')
 @click.option('--read-report', is_flag=True, default=True, help='読み取りレポートを生成 (デフォルト: True)')
+# マスキング設定オプション  
+@click.option('--masking-method', type=click.Choice(['annotation', 'highlight', 'both']), 
+              help='マスキング方式 (annotation: 注釈, highlight: ハイライト, both: 両方)')
+@click.option('--masking-text-mode', type=click.Choice(['silent', 'minimal', 'verbose']), 
+              help='マスキング文字表示モード (silent: 文字なし, minimal: 最小限, verbose: 詳細)')
+# 処理設定オプション
 @click.option('--spacy-model', '-m', type=str, help='使用するspaCyモデル名 (ja_core_news_sm, ja_core_news_md, ja_ginza, ja_ginza_electra)')
 @click.option('--deduplication-mode', type=click.Choice(['score', 'wider_range', 'narrower_range', 'entity_type']), 
               help='重複除去モード (score: スコア優先, wider_range: 広い範囲優先, narrower_range: 狭い範囲優先, entity_type: エンティティタイプ優先)')
 @click.option('--deduplication-overlap-mode', type=click.Choice(['contain_only', 'partial_overlap']),
               help='重複判定モード (contain_only: 包含関係のみ, partial_overlap: 一部重なりも含む)')
-@click.option('--output-dir', '-o', type=click.Path(), help='出力ディレクトリ')
-def main(path, config, verbose, read_mode, read_report, spacy_model, deduplication_mode, deduplication_overlap_mode, output_dir):
+def main(path, config, verbose, output_dir, read_mode, read_report, masking_method, masking_text_mode, spacy_model, deduplication_mode, deduplication_overlap_mode):
     """PyMuPDF版 PDF個人情報検出・マスキング・読み取りツール
     
     [通常モード] PDFファイルから個人情報を検出し、高性能なPyMuPDFライブラリで注釈またはハイライトでマスキングします。
@@ -1456,12 +1504,14 @@ def main(path, config, verbose, read_mode, read_report, spacy_model, deduplicati
     # 引数を辞書に変換
     args_dict = {
         'verbose': verbose,
+        'output_dir': output_dir,
         'read_mode': read_mode,
         'read_report': read_report,
+        'pdf_masking_method': masking_method,
+        'masking_text_mode': masking_text_mode,
         'spacy_model': spacy_model,
         'deduplication_mode': deduplication_mode,
-        'deduplication_overlap_mode': deduplication_overlap_mode,
-        'output_dir': output_dir
+        'deduplication_overlap_mode': deduplication_overlap_mode
     }
     
     # ConfigManagerを初期化
@@ -1560,6 +1610,7 @@ def main(path, config, verbose, read_mode, read_report, spacy_model, deduplicati
             enabled_entities = config_manager.get_enabled_entities()
             click.echo(f"検出対象: {', '.join(enabled_entities)}")
             click.echo(f"マスキング方式: {masking_method or processor._get_masking_method()}")
+            click.echo(f"文字表示モード: {masking_text_mode or config_manager.get_masking_text_display_mode()}")
             
             for result in results:
                 if 'error' in result:

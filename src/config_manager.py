@@ -69,6 +69,7 @@ class ConfigManager:
             "pdf_processing": {
                 "masking": {
                     "method": "annotation",  # annotation, highlight, both
+                    "text_display_mode": "verbose",  # silent, minimal, verbose
                     "annotation_settings": {
                         "include_text": False,
                         "font_size": 12,
@@ -231,6 +232,11 @@ class ConfigManager:
             config['pdf_processing'] = config.get('pdf_processing', {})
             config['pdf_processing']['masking'] = config['pdf_processing'].get('masking', {})
             config['pdf_processing']['masking']['method'] = args['pdf_masking_method']
+        
+        if 'masking_text_mode' in args and args['masking_text_mode']:
+            config['pdf_processing'] = config.get('pdf_processing', {})
+            config['pdf_processing']['masking'] = config['pdf_processing'].get('masking', {})
+            config['pdf_processing']['masking']['text_display_mode'] = args['masking_text_mode']
         
         if 'pdf_output_suffix' in args and args['pdf_output_suffix']:
             config['pdf_processing'] = config.get('pdf_processing', {})
@@ -489,6 +495,10 @@ class ConfigManager:
             'font_size': 12,
             'font_family': 'Helvetica'
         })
+    
+    def get_masking_text_display_mode(self) -> str:
+        """マスキング時の文字表示モードを返す"""
+        return self._safe_get_config('pdf_processing.masking.text_display_mode', 'verbose')
     
     
     def get_pdf_file_exclusions(self) -> List[str]:

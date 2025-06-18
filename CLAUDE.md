@@ -163,6 +163,14 @@ uv run python src/pdf_presidio_processor.py document.pdf --deduplication-overlap
 
 # Combined deduplication settings
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode score --deduplication-overlap-mode contain_only
+
+# マスキング方式と文字表示モードの指定
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method annotation --masking-text-mode verbose
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method highlight --masking-text-mode minimal
+uv run python src/pdf_presidio_processor.py document.pdf --masking-method both --masking-text-mode silent
+
+# 読み取りモード
+uv run python src/pdf_presidio_processor.py document.pdf --read-mode --read-report
 ```
 
 
@@ -216,6 +224,10 @@ Processed files are saved with configurable suffixes (default: `_masked`) in the
 - **Backup system**: Automatic backup creation before processing
 - **Detailed reporting**: JSON/text reports with processing statistics
 - **Masking customization**: Configurable masking methods and annotation settings
+- **Text display modes**: Control text display in masking annotations
+  - **silent**: No text, color-only masking
+  - **minimal**: Entity type only (e.g., "人名", "電話番号")  
+  - **verbose**: Detailed information with confidence scores
 
 ### Testing Infrastructure
 - **Comprehensive test suite**: Mock-based testing for PDF processing dependencies
