@@ -171,6 +171,14 @@ uv run python src/pdf_presidio_processor.py document.pdf --masking-method both -
 
 # 読み取りモード
 uv run python src/pdf_presidio_processor.py document.pdf --read-mode --read-report
+
+# 復元モード（レポートからPDFを復元）
+uv run python src/pdf_presidio_processor.py original.pdf --restore-mode --report-file annotations_report_20241215_143052.json
+
+# 操作モード指定
+uv run python src/pdf_presidio_processor.py document.pdf --operation-mode clear_all        # 既存注釈を全削除
+uv run python src/pdf_presidio_processor.py document.pdf --operation-mode append          # 既存注釈に追記
+uv run python src/pdf_presidio_processor.py document.pdf --operation-mode reset_and_append # 全削除後に追記
 ```
 
 
@@ -228,6 +236,14 @@ Processed files are saved with configurable suffixes (default: `_masked`) in the
   - **silent**: No text, color-only masking
   - **minimal**: Entity type only (e.g., "人名", "電話番号")  
   - **verbose**: Detailed information with confidence scores
+- **Operation modes**: Control how annotations are handled
+  - **clear_all**: Remove all existing annotations/highlights only
+  - **append**: Add new annotations while preserving existing ones
+  - **reset_and_append**: Remove all existing then add new annotations
+- **PDF Report Restoration**: Restore PDF annotations/highlights from JSON reports
+  - **Text position-based**: Highlights restored using line/character positions
+  - **Coordinate-based**: Annotations restored using precise coordinates
+  - **Identical duplicate removal**: Automatic removal of duplicate annotations
 
 ### Testing Infrastructure
 - **Comprehensive test suite**: Mock-based testing for PDF processing dependencies

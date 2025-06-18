@@ -126,7 +126,7 @@ pdf_processing:
     method: "highlight"          # マスキング方式: annotation（ボックス）, highlight（ハイライト）, both（両方）
     text_display_mode: "verbose" # 文字表示モード: silent（文字なし）, minimal（最小限）, verbose（詳細）
     annotation_settings:
-      include_text: false        # 注釈にテキストを含めるか
+      include_text: false        # 注釈にテキストを含めるか（verboseモード時のみ有効）
       font_size: 12
   
   output_suffix: "_masked" # 出力ファイルのサフィックス
@@ -137,6 +137,23 @@ pdf_processing:
     generate_report: true  # レポート生成
     format: "json"        # レポート形式: json, csv
     include_detected_text: false
+```
+
+#### 文字表示設定の優先関係
+
+**最優先**: `text_display_mode`（文字表示モード）
+**補助設定**: `annotation_settings.include_text`
+
+| モード | 表示内容 | `include_text`の影響 | 例 |
+|--------|----------|---------------------|-----|
+| `silent` | 文字なし（色のみ） | **無視** | 色付き矩形のみ |
+| `minimal` | エンティティタイプのみ | **無視** | 「人名」「電話番号」 |
+| `verbose` | 詳細情報 | **有効** | 「【個人情報】人名 (信頼度: 85%)」 |
+
+**`include_text: true`の効果（verboseモード時のみ）**:
+```
+【個人情報】人名 (信頼度: 85.0%)
+テキスト: 田中太郎...
 ```
 
 ### 重複除去設定
@@ -383,6 +400,7 @@ uv run python src/pdf_presidio_processor.py test_pdfs/ --read-mode --verbose
 
 **読み取り可能な情報:**
 - **場所**: 座標（x0, y0, x1, y1）、ページ番号、幅・高さ
+- **テキスト位置**: 行番号、文字位置、行内容 ⭐ NEW
 - **文字列**: 注釈がカバーしているテキスト内容
 - **色**: RGB値とHex色コード（線色・塗り色）
 - **透明度**: 0.0〜1.0の透明度値
@@ -399,6 +417,13 @@ uv run python src/pdf_presidio_processor.py test_pdfs/ --read-mode --verbose
     {
       "annotation_type": "Highlight",
       "coordinates": {"page_number": 1, "x0": 100.5, "y0": 200.3, "x1": 180.2, "y1": 215.8},
+      "text_position": {
+        "line_number": 15,
+        "char_start_in_line": 8,
+        "char_end_in_line": 12,
+        "line_content": "申請者: 田中太郎 (東京都渋谷区在住)",
+        "total_lines_on_page": 45
+      },
       "covered_text": "田中太郎",
       "color_info": {"stroke_color": {"rgb": [1.0, 0.0, 0.0], "hex": "#ff0000"}},
       "opacity": 0.5,
@@ -407,6 +432,13 @@ uv run python src/pdf_presidio_processor.py test_pdfs/ --read-mode --verbose
   ]
 }
 ```
+
+**テキスト位置情報の説明:**
+- `line_number`: ページ内の行番号（1から開始）
+- `char_start_in_line`: 行内の開始文字位置（0から開始）
+- `char_end_in_line`: 行内の終了文字位置
+- `line_content`: その行の全体テキスト内容
+- `total_lines_on_page`: ページ内の総行数
 
 ## 検出される個人情報の種類
 

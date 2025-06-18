@@ -714,20 +714,21 @@ class PDFPresidioProcessor:
         output_path = self._generate_output_path(pdf_path)
         
         try:
+            # 操作モードを取得
+            operation_mode = self.config_manager.get_operation_mode()
+            
+            # 入力ファイルをベースとしてコピー
+            shutil.copy2(pdf_path, output_path)
+            
             if masking_method == "annotation":
-                return self._apply_annotation_masking_pymupdf(pdf_path, entities, output_path)
+                return self._apply_annotation_masking_with_mode(output_path, entities, operation_mode)
             elif masking_method == "highlight":
-                return self._apply_highlight_masking_pymupdf(pdf_path, entities, output_path)
+                return self._apply_highlight_masking_with_mode(output_path, entities, operation_mode)
             elif masking_method == "both":
-                # まずハイライトを適用
-                temp_path = output_path.replace('.pdf', '_temp.pdf')
-                self._apply_highlight_masking_pymupdf(pdf_path, entities, temp_path)
-                # 次に注釈を適用
-                final_path = self._apply_annotation_masking_pymupdf(temp_path, entities, output_path)
-                # 一時ファイルを削除
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                return final_path
+                # ハイライトを適用
+                self._apply_highlight_masking_with_mode(output_path, entities, operation_mode)
+                # 注釈を適用（appendモードで既存のハイライトを保持）
+                return self._apply_annotation_masking_with_mode(output_path, entities, "append")
             else:
                 raise ValueError(f"未対応のマスキング方式: {masking_method}")
         
@@ -756,6 +757,116 @@ class PDFPresidioProcessor:
             return str(output_dir_path / f"{path_obj.stem}{suffix}{path_obj.suffix}")
         else:
             return str(path_obj.parent / f"{path_obj.stem}{suffix}{path_obj.suffix}")
+    
+    def _apply_annotation_masking_with_mode(self, pdf_path: str, entities: List[Dict], operation_mode: str) -> str:
+        """操作モードに対応した注釈マスキング"""
+        logger.info(f"注釈マスキング適用中: {pdf_path} (モード: {operation_mode})")
+        
+        try:
+            doc = fitz.open(pdf_path)
+            
+            # 操作モードに応じた前処理
+            if operation_mode == "clear_all":
+                # 全注釈を削除
+                self._clear_all_annotations(doc)
+                logger.info("既存の全注釈を削除しました")
+            elif operation_mode == "reset_and_append":
+                # 全注釈を削除してから追加
+                self._clear_all_annotations(doc)
+                logger.info("既存の全注釈を削除しました（リセット後追加モード）")
+            # "append"の場合は何もしない（既存注釈を保持）
+            
+            # 重複除去が有効な場合、既存の注釈をチェック
+            existing_annotations = []
+            if self.config_manager.should_remove_identical_annotations():
+                existing_annotations = self._get_existing_annotations(doc)
+            
+            annotations_added = 0
+            
+            for entity in entities:
+                coords = entity.get('coordinates', {})
+                page_num = coords.get('page_number', 1) - 1  # 0-based index
+                
+                if page_num < len(doc):
+                    page = doc[page_num]
+                    
+                    # 注釈の位置を計算
+                    x0 = float(coords.get('x0', 50))
+                    y0 = float(coords.get('y0', 700))
+                    x1 = float(coords.get('x1', 200))
+                    y1 = float(coords.get('y1', 715))
+                    
+                    # 座標の妥当性をチェック
+                    if x0 >= x1 or y0 >= y1 or any(not float('-inf') < coord < float('inf') for coord in [x0, y0, x1, y1]):
+                        logger.warning(f"無効な座標をスキップ: {coords}")
+                        continue
+                    
+                    rect = fitz.Rect(x0, y0, x1, y1)
+                    
+                    # 矩形が有効かチェック
+                    if rect.is_empty or rect.is_infinite:
+                        logger.warning(f"無効な矩形をスキップ: {rect}")
+                        continue
+                    
+                    # 重複チェック
+                    if self._is_duplicate_annotation(rect, entity, existing_annotations, page_num):
+                        logger.debug(f"重複注釈をスキップ: {entity['text']} ({entity['entity_type']})")
+                        continue
+                    
+                    try:
+                        # 注釈の色を決定
+                        color = self._get_annotation_color_pymupdf(entity['entity_type'])
+                        
+                        # 注釈内容を生成
+                        content = self._generate_annotation_content(entity)
+                        text_display_mode = self.config_manager.get_masking_text_display_mode()
+                        
+                        if text_display_mode == "silent":
+                            # silentモードでは色のみの矩形注釈を作成
+                            annot = page.add_square_annot(rect)
+                            annot.set_colors(stroke=color, fill=[c * 0.3 for c in color])
+                            annot.set_info(title="", content="")
+                        else:
+                            # フリーテキスト注釈を追加
+                            annot = page.add_freetext_annot(
+                                rect,
+                                content,
+                                fontsize=8,
+                                text_color=color,
+                                fill_color=[c * 0.3 for c in color]  # 薄い背景色
+                            )
+                            
+                            # 注釈の設定
+                            title = "個人情報検出" if text_display_mode == "verbose" else ""
+                            annot.set_info(title=title, content=content)
+                        
+                        annot.update()
+                        
+                        # 既存注釈リストに追加（重複チェック用）
+                        existing_annotations.append({
+                            'rect': rect,
+                            'entity_type': entity['entity_type'],
+                            'text': entity.get('text', ''),
+                            'page_num': page_num
+                        })
+                        
+                        annotations_added += 1
+                        logger.debug(f"注釈を追加: {entity['entity_type']} - {entity['text']}")
+                        
+                    except Exception as e:
+                        logger.warning(f"注釈追加でエラー: {e} (エンティティ: {entity['text']})")
+                        continue
+            
+            # PDFを保存
+            doc.save(pdf_path)
+            doc.close()
+            
+            logger.info(f"注釈マスキング完了: {pdf_path} ({annotations_added}件の注釈を追加)")
+            return pdf_path
+            
+        except Exception as e:
+            logger.error(f"注釈マスキングエラー: {e}")
+            raise
     
     def _apply_annotation_masking_pymupdf(self, pdf_path: str, entities: List[Dict], output_path: str) -> str:
         """PyMuPDFを使用した注釈マスキング"""
@@ -835,6 +946,112 @@ class PDFPresidioProcessor:
             
         except Exception as e:
             logger.error(f"PyMuPDF注釈マスキングエラー: {e}")
+            raise
+    
+    def _apply_highlight_masking_with_mode(self, pdf_path: str, entities: List[Dict], operation_mode: str) -> str:
+        """操作モードに対応したハイライトマスキング"""
+        logger.info(f"ハイライトマスキング適用中: {pdf_path} (モード: {operation_mode})")
+        
+        try:
+            doc = fitz.open(pdf_path)
+            
+            # 操作モードに応じた前処理
+            if operation_mode == "clear_all":
+                # 全ハイライトを削除
+                self._clear_all_highlights(doc)
+                logger.info("既存の全ハイライトを削除しました")
+            elif operation_mode == "reset_and_append":
+                # 全ハイライトを削除してから追加
+                self._clear_all_highlights(doc)
+                logger.info("既存の全ハイライトを削除しました（リセット後追加モード）")
+            # "append"の場合は何もしない（既存ハイライトを保持）
+            
+            # 重複除去が有効な場合、既存のハイライトをチェック
+            existing_highlights = []
+            if self.config_manager.should_remove_identical_annotations():
+                existing_highlights = self._get_existing_highlights(doc)
+            
+            highlights_added = 0
+            
+            for entity in entities:
+                coords = entity.get('coordinates', {})
+                page_num = coords.get('page_number', 1) - 1  # 0-based index
+                
+                if page_num < len(doc):
+                    page = doc[page_num]
+                    
+                    # ハイライトの位置を計算
+                    x0 = float(coords.get('x0', 50))
+                    y0 = float(coords.get('y0', 700))
+                    x1 = float(coords.get('x1', 200))
+                    y1 = float(coords.get('y1', 715))
+                    
+                    # 座標の妥当性をチェック
+                    if x0 >= x1 or y0 >= y1 or any(not float('-inf') < coord < float('inf') for coord in [x0, y0, x1, y1]):
+                        logger.warning(f"無効な座標をスキップ: {coords}")
+                        continue
+                    
+                    rect = fitz.Rect(x0, y0, x1, y1)
+                    
+                    # 矩形が有効かチェック
+                    if rect.is_empty or rect.is_infinite:
+                        logger.warning(f"無効な矩形をスキップ: {rect}")
+                        continue
+                    
+                    # 重複チェック
+                    if self._is_duplicate_highlight(rect, entity, existing_highlights, page_num):
+                        logger.debug(f"重複ハイライトをスキップ: {entity['text']} ({entity['entity_type']})")
+                        continue
+                    
+                    try:
+                        # ハイライトの色を決定
+                        color = self._get_highlight_color_pymupdf(entity['entity_type'])
+                        
+                        # ハイライト注釈を追加
+                        highlight = page.add_highlight_annot(rect)
+                        highlight.set_colors(stroke=color)
+                        
+                        # 文字表示モードに応じてタイトルと内容を設定
+                        text_display_mode = self.config_manager.get_masking_text_display_mode()
+                        if text_display_mode == "silent":
+                            highlight.set_info(title="", content="")
+                        elif text_display_mode == "minimal":
+                            type_names = {
+                                'PERSON': '人名', 'LOCATION': '場所', 'DATE_TIME': '日時',
+                                'PHONE_NUMBER': '電話番号', 'INDIVIDUAL_NUMBER': 'マイナンバー',
+                                'YEAR': '年号', 'PROPER_NOUN': '固有名詞'
+                            }
+                            type_name = type_names.get(entity['entity_type'], entity['entity_type'])
+                            highlight.set_info(title=type_name, content="")
+                        else:  # verbose
+                            highlight.set_info(title=f"個人情報: {entity['entity_type']}", content=entity['text'])
+                        
+                        highlight.update()
+                        
+                        # 既存ハイライトリストに追加（重複チェック用）
+                        existing_highlights.append({
+                            'rect': rect,
+                            'entity_type': entity['entity_type'],
+                            'text': entity.get('text', ''),
+                            'page_num': page_num
+                        })
+                        
+                        highlights_added += 1
+                        logger.debug(f"ハイライトを追加: {entity['entity_type']} - {entity['text']}")
+                        
+                    except Exception as e:
+                        logger.warning(f"ハイライト追加でエラー: {e} (エンティティ: {entity['text']})")
+                        continue
+            
+            # PDFを保存
+            doc.save(pdf_path)
+            doc.close()
+            
+            logger.info(f"ハイライトマスキング完了: {pdf_path} ({highlights_added}件のハイライトを追加)")
+            return pdf_path
+            
+        except Exception as e:
+            logger.error(f"ハイライトマスキングエラー: {e}")
             raise
     
     def _apply_highlight_masking_pymupdf(self, pdf_path: str, entities: List[Dict], output_path: str) -> str:
@@ -1262,6 +1479,9 @@ class PDFPresidioProcessor:
             # カバーされているテキストを抽出
             covered_text = self._extract_covered_text(rect, page)
             
+            # テキスト位置情報を抽出
+            text_position_info = self._extract_text_position_info(rect, page, covered_text)
+            
             # 色情報
             color_info = self._extract_annotation_colors(annot)
             
@@ -1271,6 +1491,7 @@ class PDFPresidioProcessor:
             annotation_info = {
                 'annotation_type': annot_type,
                 'coordinates': coordinates,
+                'text_position': text_position_info,
                 'covered_text': covered_text,
                 'title': title,
                 'content': content,
@@ -1311,6 +1532,507 @@ class PDFPresidioProcessor:
         except Exception as e:
             logger.debug(f"カバーテキスト抽出エラー: {e}")
             return ""
+    
+    def _extract_text_position_info(self, rect: fitz.Rect, page, covered_text: str) -> Dict:
+        """テキストの位置情報（行番号、文字位置など）を抽出"""
+        try:
+            # ページ全体のテキストを行単位で取得
+            page_text = page.get_text()
+            lines = page_text.split('\n')
+            
+            # 注釈がカバーするテキストが見つかった場合の位置情報
+            if covered_text and covered_text.strip():
+                # 行番号と文字位置を特定
+                for line_num, line in enumerate(lines, 1):
+                    if covered_text.strip() in line:
+                        char_start = line.find(covered_text.strip())
+                        char_end = char_start + len(covered_text.strip())
+                        
+                        # より詳細な位置情報を取得
+                        detailed_position = self._get_detailed_text_position(page, rect, covered_text, line_num, char_start)
+                        
+                        return {
+                            'line_number': line_num,
+                            'char_start_in_line': char_start,
+                            'char_end_in_line': char_end,
+                            'line_content': line.strip(),
+                            'total_lines_on_page': len(lines),
+                            'detailed_position': detailed_position
+                        }
+            
+            # テキストが見つからない場合の推定位置
+            estimated_position = self._estimate_text_position_from_coordinates(page, rect)
+            return {
+                'line_number': estimated_position.get('estimated_line', 0),
+                'char_start_in_line': 0,
+                'char_end_in_line': 0,
+                'line_content': '',
+                'total_lines_on_page': len(lines),
+                'estimated': True,
+                'estimation_info': estimated_position
+            }
+            
+        except Exception as e:
+            logger.debug(f"テキスト位置情報抽出エラー: {e}")
+            return {
+                'line_number': 0,
+                'char_start_in_line': 0,
+                'char_end_in_line': 0,
+                'line_content': '',
+                'total_lines_on_page': 0,
+                'error': str(e)
+            }
+    
+    def _get_detailed_text_position(self, page, rect: fitz.Rect, covered_text: str, line_num: int, char_start: int) -> Dict:
+        """より詳細なテキスト位置情報を取得"""
+        try:
+            # PyMuPDFのtext instancesを使って精密な位置を特定
+            text_instances = page.get_text("words")
+            
+            # 該当するテキストインスタンスを探す
+            for word_info in text_instances:
+                word_rect = fitz.Rect(word_info[:4])  # x0, y0, x1, y1
+                word_text = word_info[4]
+                
+                # 注釈の矩形と重複するテキストを探す
+                if word_rect.intersect(rect) and covered_text in word_text:
+                    return {
+                        'word_rect': {
+                            'x0': float(word_rect.x0),
+                            'y0': float(word_rect.y0), 
+                            'x1': float(word_rect.x1),
+                            'y1': float(word_rect.y1)
+                        },
+                        'word_text': word_text,
+                        'font_info': {
+                            'font': word_info[6] if len(word_info) > 6 else '',
+                            'flags': word_info[7] if len(word_info) > 7 else 0,
+                            'font_size': word_info[5] if len(word_info) > 5 else 0
+                        }
+                    }
+            
+            return {'method': 'rect_based', 'rect_area': float(rect.width * rect.height)}
+            
+        except Exception as e:
+            logger.debug(f"詳細テキスト位置取得エラー: {e}")
+            return {'error': str(e)}
+    
+    def _estimate_text_position_from_coordinates(self, page, rect: fitz.Rect) -> Dict:
+        """座標からテキスト位置を推定"""
+        try:
+            page_height = float(page.rect.height)
+            page_width = float(page.rect.width)
+            
+            # 一般的な行高さを推定（12-16pt程度）
+            estimated_line_height = 20.0
+            estimated_line = int((page_height - rect.y0) / estimated_line_height) + 1
+            
+            # ページ内での相対的な位置
+            relative_y = rect.y0 / page_height
+            relative_x = rect.x0 / page_width
+            
+            return {
+                'estimated_line': estimated_line,
+                'relative_position': {
+                    'x_percent': round(relative_x * 100, 1),
+                    'y_percent': round(relative_y * 100, 1)
+                },
+                'estimation_method': 'coordinate_based',
+                'page_dimensions': {
+                    'width': page_width,
+                    'height': page_height
+                }
+            }
+            
+        except Exception as e:
+            logger.debug(f"位置推定エラー: {e}")
+            return {'error': str(e)}
+    
+    def _clear_all_annotations(self, doc) -> None:
+        """PDFから全ての注釈を削除"""
+        try:
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                annotations = list(page.annots())
+                for annot in annotations:
+                    # ハイライト以外の注釈を削除
+                    if annot.type[1] != "Highlight":
+                        page.delete_annot(annot)
+        except Exception as e:
+            logger.error(f"注釈削除エラー: {e}")
+    
+    def _clear_all_highlights(self, doc) -> None:
+        """PDFから全てのハイライトを削除"""
+        try:
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                annotations = list(page.annots())
+                for annot in annotations:
+                    # ハイライトのみを削除
+                    if annot.type[1] == "Highlight":
+                        page.delete_annot(annot)
+        except Exception as e:
+            logger.error(f"ハイライト削除エラー: {e}")
+    
+    def _get_existing_annotations(self, doc) -> List[Dict]:
+        """既存の注釈情報を取得"""
+        existing = []
+        try:
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                annotations = page.annots()
+                for annot in annotations:
+                    if annot.type[1] != "Highlight":  # ハイライト以外
+                        rect = annot.rect
+                        existing.append({
+                            'rect': rect,
+                            'page_num': page_num,
+                            'content': annot.info.get('content', ''),
+                            'title': annot.info.get('title', '')
+                        })
+        except Exception as e:
+            logger.debug(f"既存注釈取得エラー: {e}")
+        return existing
+    
+    def _get_existing_highlights(self, doc) -> List[Dict]:
+        """既存のハイライト情報を取得"""
+        existing = []
+        try:
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                annotations = page.annots()
+                for annot in annotations:
+                    if annot.type[1] == "Highlight":  # ハイライトのみ
+                        rect = annot.rect
+                        existing.append({
+                            'rect': rect,
+                            'page_num': page_num,
+                            'content': annot.info.get('content', ''),
+                            'title': annot.info.get('title', '')
+                        })
+        except Exception as e:
+            logger.debug(f"既存ハイライト取得エラー: {e}")
+        return existing
+    
+    def _is_duplicate_annotation(self, rect: fitz.Rect, entity: Dict, existing_annotations: List[Dict], page_num: int) -> bool:
+        """注釈が重複しているかをチェック"""
+        if not self.config_manager.should_remove_identical_annotations():
+            return False
+        
+        tolerance = self.config_manager.get_annotation_comparison_tolerance()
+        entity_text = entity.get('text', '')
+        entity_type = entity.get('entity_type', '')
+        
+        for existing in existing_annotations:
+            if existing['page_num'] != page_num:
+                continue
+            
+            existing_rect = existing['rect']
+            
+            # 座標の比較（許容誤差内）
+            if (abs(rect.x0 - existing_rect.x0) <= tolerance and
+                abs(rect.y0 - existing_rect.y0) <= tolerance and
+                abs(rect.x1 - existing_rect.x1) <= tolerance and
+                abs(rect.y1 - existing_rect.y1) <= tolerance):
+                
+                # テキストとタイプが同じ場合は重複と判定
+                if (existing.get('text', '') == entity_text and
+                    existing.get('entity_type', '') == entity_type):
+                    return True
+        
+        return False
+    
+    def _is_duplicate_highlight(self, rect: fitz.Rect, entity: Dict, existing_highlights: List[Dict], page_num: int) -> bool:
+        """ハイライトが重複しているかをチェック"""
+        if not self.config_manager.should_remove_identical_annotations():
+            return False
+        
+        tolerance = self.config_manager.get_annotation_comparison_tolerance()
+        entity_text = entity.get('text', '')
+        
+        for existing in existing_highlights:
+            if existing['page_num'] != page_num:
+                continue
+            
+            existing_rect = existing['rect']
+            
+            # 座標の比較（許容誤差内）
+            if (abs(rect.x0 - existing_rect.x0) <= tolerance and
+                abs(rect.y0 - existing_rect.y0) <= tolerance and
+                abs(rect.x1 - existing_rect.x1) <= tolerance and
+                abs(rect.y1 - existing_rect.y1) <= tolerance):
+                
+                # テキストが同じ場合は重複と判定
+                if existing.get('text', '') == entity_text:
+                    return True
+        
+        return False
+    
+    def restore_pdf_from_report(self, pdf_path: str, report_path: str) -> str:
+        """レポートからPDFの注釈・ハイライトを復元"""
+        logger.info(f"レポートからPDF復元開始: {pdf_path} <- {report_path}")
+        
+        try:
+            # レポートファイルを読み込み
+            with open(report_path, 'r', encoding='utf-8') as f:
+                report_data = json.load(f)
+            
+            # 出力ファイルパスを生成
+            output_path = self._generate_output_path(pdf_path)
+            
+            # 入力ファイルをベースとしてコピー
+            shutil.copy2(pdf_path, output_path)
+            
+            # レポートから注釈・ハイライトを復元
+            annotations = report_data.get('annotations', [])
+            if not annotations:
+                logger.warning("レポートに注釈データが見つかりません")
+                return output_path
+            
+            restored_count = 0
+            
+            # 各注釈を復元
+            for annotation in annotations:
+                try:
+                    if self._restore_single_annotation(output_path, annotation):
+                        restored_count += 1
+                except Exception as e:
+                    logger.warning(f"注釈復元エラー: {e} (注釈: {annotation.get('annotation_type', 'Unknown')})")
+                    continue
+            
+            logger.info(f"PDF復元完了: {output_path} ({restored_count}件の注釈・ハイライトを復元)")
+            return output_path
+            
+        except FileNotFoundError:
+            logger.error(f"レポートファイルが見つかりません: {report_path}")
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"レポートファイルの読み込みエラー: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"PDF復元エラー: {e}")
+            raise
+    
+    def _restore_single_annotation(self, pdf_path: str, annotation_data: Dict) -> bool:
+        """単一の注釈・ハイライトを復元"""
+        try:
+            doc = fitz.open(pdf_path)
+            
+            annotation_type = annotation_data.get('annotation_type', '')
+            coordinates = annotation_data.get('coordinates', {})
+            text_position = annotation_data.get('text_position', {})
+            covered_text = annotation_data.get('covered_text', '')
+            title = annotation_data.get('title', '')
+            content = annotation_data.get('content', '')
+            color_info = annotation_data.get('color_info', {})
+            opacity = annotation_data.get('opacity', 1.0)
+            
+            page_num = coordinates.get('page_number', 1) - 1  # 0-based index
+            
+            if page_num >= len(doc):
+                logger.warning(f"無効なページ番号: {page_num + 1}")
+                doc.close()
+                return False
+            
+            page = doc[page_num]
+            
+            # 復元方法を決定
+            if annotation_type == "Highlight":
+                success = self._restore_highlight_from_data(page, annotation_data, text_position, coordinates)
+            else:
+                success = self._restore_annotation_from_data(page, annotation_data, coordinates)
+            
+            # PDFを保存
+            doc.save(pdf_path)
+            doc.close()
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"単一注釈復元エラー: {e}")
+            return False
+    
+    def _restore_highlight_from_data(self, page, annotation_data: Dict, text_position: Dict, coordinates: Dict) -> bool:
+        """テキスト位置情報を優先してハイライトを復元"""
+        try:
+            # テキスト位置情報がある場合は優先使用
+            if text_position and text_position.get('line_number', 0) > 0:
+                rect = self._calculate_rect_from_text_position(page, text_position)
+                if rect is None:
+                    # フォールバック: 座標を使用
+                    rect = self._extract_rect_from_coordinates(coordinates)
+            else:
+                # 座標情報を使用
+                rect = self._extract_rect_from_coordinates(coordinates)
+            
+            if rect is None or rect.is_empty or rect.is_infinite:
+                logger.warning("有効な矩形を取得できませんでした")
+                return False
+            
+            # ハイライトを追加
+            highlight = page.add_highlight_annot(rect)
+            
+            # 色情報を復元
+            color = self._extract_color_from_report(annotation_data.get('color_info', {}), 'stroke_color')
+            if color:
+                highlight.set_colors(stroke=color)
+            
+            # メタデータを復元
+            title = annotation_data.get('title', '')
+            content = annotation_data.get('content', '')
+            highlight.set_info(title=title, content=content)
+            
+            highlight.update()
+            
+            logger.debug(f"ハイライト復元成功: {annotation_data.get('covered_text', '')} (ページ{coordinates.get('page_number', '?')})")
+            return True
+            
+        except Exception as e:
+            logger.debug(f"ハイライト復元エラー: {e}")
+            return False
+    
+    def _restore_annotation_from_data(self, page, annotation_data: Dict, coordinates: Dict) -> bool:
+        """座標情報から注釈を復元"""
+        try:
+            # 座標情報を使用
+            rect = self._extract_rect_from_coordinates(coordinates)
+            
+            if rect is None or rect.is_empty or rect.is_infinite:
+                logger.warning("有効な矩形を取得できませんでした")
+                return False
+            
+            # 注釈の種類に応じて復元
+            annotation_type = annotation_data.get('annotation_type', '')
+            title = annotation_data.get('title', '')
+            content = annotation_data.get('content', '')
+            
+            if annotation_type == "FreeText" or "text" in annotation_type.lower():
+                # フリーテキスト注釈
+                annot = page.add_freetext_annot(rect, content, fontsize=8)
+            elif annotation_type == "Square" or "square" in annotation_type.lower():
+                # 矩形注釈
+                annot = page.add_square_annot(rect)
+            else:
+                # デフォルトはフリーテキスト
+                annot = page.add_freetext_annot(rect, content, fontsize=8)
+            
+            # 色情報を復元
+            stroke_color = self._extract_color_from_report(annotation_data.get('color_info', {}), 'stroke_color')
+            fill_color = self._extract_color_from_report(annotation_data.get('color_info', {}), 'fill_color')
+            
+            if stroke_color or fill_color:
+                annot.set_colors(stroke=stroke_color, fill=fill_color)
+            
+            # メタデータを復元
+            annot.set_info(title=title, content=content)
+            
+            # 透明度を復元
+            opacity = annotation_data.get('opacity', 1.0)
+            if hasattr(annot, 'set_opacity'):
+                annot.set_opacity(opacity)
+            
+            annot.update()
+            
+            logger.debug(f"注釈復元成功: {annotation_data.get('covered_text', '')} (ページ{coordinates.get('page_number', '?')})")
+            return True
+            
+        except Exception as e:
+            logger.debug(f"注釈復元エラー: {e}")
+            return False
+    
+    def _calculate_rect_from_text_position(self, page, text_position: Dict) -> fitz.Rect:
+        """テキスト位置情報から矩形を計算"""
+        try:
+            line_number = text_position.get('line_number', 0)
+            char_start = text_position.get('char_start_in_line', 0)
+            char_end = text_position.get('char_end_in_line', 0)
+            line_content = text_position.get('line_content', '')
+            
+            if not line_content or line_number <= 0:
+                return None
+            
+            # ページのテキストを行単位で取得
+            page_text = page.get_text()
+            lines = page_text.split('\n')
+            
+            if line_number > len(lines):
+                logger.warning(f"行番号が範囲外: {line_number} > {len(lines)}")
+                return None
+            
+            target_line = lines[line_number - 1]  # 1-based to 0-based
+            
+            # 行内容が一致しない場合は近似検索
+            if target_line.strip() != line_content.strip():
+                # 部分一致で検索
+                for i, line in enumerate(lines):
+                    if line_content.strip() in line or line in line_content.strip():
+                        target_line = line
+                        line_number = i + 1
+                        break
+                else:
+                    logger.warning(f"対象行が見つかりません: {line_content[:30]}...")
+                    return None
+            
+            # テキストインスタンスから座標を取得
+            text_instances = page.get_text("words")
+            
+            # 対象のテキスト部分を探す
+            target_text = line_content[char_start:char_end] if char_end > char_start else line_content.strip()
+            
+            for word_info in text_instances:
+                word_rect = fitz.Rect(word_info[:4])
+                word_text = word_info[4]
+                
+                if target_text in word_text or word_text in target_text:
+                    # 文字レベルで調整
+                    if char_end > char_start and len(word_text) > 1:
+                        char_ratio_start = char_start / len(line_content) if len(line_content) > 0 else 0
+                        char_ratio_end = char_end / len(line_content) if len(line_content) > 0 else 1
+                        
+                        width = word_rect.width
+                        adjusted_x0 = word_rect.x0 + (width * char_ratio_start)
+                        adjusted_x1 = word_rect.x0 + (width * char_ratio_end)
+                        
+                        return fitz.Rect(adjusted_x0, word_rect.y0, adjusted_x1, word_rect.y1)
+                    else:
+                        return word_rect
+            
+            logger.warning(f"テキストの座標が見つかりません: {target_text}")
+            return None
+            
+        except Exception as e:
+            logger.debug(f"テキスト位置から矩形計算エラー: {e}")
+            return None
+    
+    def _extract_rect_from_coordinates(self, coordinates: Dict) -> fitz.Rect:
+        """座標情報から矩形を抽出"""
+        try:
+            x0 = float(coordinates.get('x0', 0))
+            y0 = float(coordinates.get('y0', 0))
+            x1 = float(coordinates.get('x1', 100))
+            y1 = float(coordinates.get('y1', 20))
+            
+            if x0 >= x1 or y0 >= y1:
+                logger.warning(f"無効な座標: ({x0}, {y0}, {x1}, {y1})")
+                return None
+            
+            return fitz.Rect(x0, y0, x1, y1)
+            
+        except (ValueError, TypeError) as e:
+            logger.warning(f"座標抽出エラー: {e}")
+            return None
+    
+    def _extract_color_from_report(self, color_info: Dict, color_type: str) -> List[float]:
+        """レポートから色情報を抽出"""
+        try:
+            if color_type in color_info:
+                rgb = color_info[color_type].get('rgb', [])
+                if len(rgb) >= 3:
+                    return rgb[:3]  # RGBのみ
+            return None
+        except Exception as e:
+            logger.debug(f"色情報抽出エラー: {e}")
+            return None
     
     def _extract_annotation_colors(self, annot) -> Dict:
         """注釈の色情報を抽出"""
@@ -1479,22 +2201,27 @@ class PDFPresidioProcessor:
 # モード選択オプション
 @click.option('--read-mode', '-r', is_flag=True, help='読み取りモード: 既存の注釈・ハイライトを読み取り')
 @click.option('--read-report', is_flag=True, default=True, help='読み取りレポートを生成 (デフォルト: True)')
+@click.option('--restore-mode', is_flag=True, help='復元モード: レポートからPDFの注釈・ハイライトを復元')
+@click.option('--report-file', type=click.Path(exists=True), help='復元に使用するレポートファイルのパス')
 # マスキング設定オプション  
 @click.option('--masking-method', type=click.Choice(['annotation', 'highlight', 'both']), 
               help='マスキング方式 (annotation: 注釈, highlight: ハイライト, both: 両方)')
 @click.option('--masking-text-mode', type=click.Choice(['silent', 'minimal', 'verbose']), 
               help='マスキング文字表示モード (silent: 文字なし, minimal: 最小限, verbose: 詳細)')
+@click.option('--operation-mode', type=click.Choice(['clear_all', 'append', 'reset_and_append']),
+              help='操作モード (clear_all: 全削除のみ, append: 追記, reset_and_append: 全削除後追記)')
 # 処理設定オプション
 @click.option('--spacy-model', '-m', type=str, help='使用するspaCyモデル名 (ja_core_news_sm, ja_core_news_md, ja_ginza, ja_ginza_electra)')
 @click.option('--deduplication-mode', type=click.Choice(['score', 'wider_range', 'narrower_range', 'entity_type']), 
               help='重複除去モード (score: スコア優先, wider_range: 広い範囲優先, narrower_range: 狭い範囲優先, entity_type: エンティティタイプ優先)')
 @click.option('--deduplication-overlap-mode', type=click.Choice(['contain_only', 'partial_overlap']),
               help='重複判定モード (contain_only: 包含関係のみ, partial_overlap: 一部重なりも含む)')
-def main(path, config, verbose, output_dir, read_mode, read_report, masking_method, masking_text_mode, spacy_model, deduplication_mode, deduplication_overlap_mode):
-    """PyMuPDF版 PDF個人情報検出・マスキング・読み取りツール
+def main(path, config, verbose, output_dir, read_mode, read_report, restore_mode, report_file, masking_method, masking_text_mode, operation_mode, spacy_model, deduplication_mode, deduplication_overlap_mode):
+    """PyMuPDF版 PDF個人情報検出・マスキング・読み取り・復元ツール
     
     [通常モード] PDFファイルから個人情報を検出し、高性能なPyMuPDFライブラリで注釈またはハイライトでマスキングします。
     [読み取りモード] 既存のPDF注釈・ハイライトを読み取り、詳細情報を抽出します。
+    [復元モード] 読み取りレポートからPDFの注釈・ハイライトを復元します。
     
     詳細な設定はYAML設定ファイルで指定してください。
     
@@ -1509,6 +2236,7 @@ def main(path, config, verbose, output_dir, read_mode, read_report, masking_meth
         'read_report': read_report,
         'pdf_masking_method': masking_method,
         'masking_text_mode': masking_text_mode,
+        'operation_mode': operation_mode,
         'spacy_model': spacy_model,
         'deduplication_mode': deduplication_mode,
         'deduplication_overlap_mode': deduplication_overlap_mode
@@ -1525,8 +2253,39 @@ def main(path, config, verbose, output_dir, read_mode, read_report, masking_meth
     processor = PDFPresidioProcessor(config_manager)
     
     try:
-        # 読み取りモードかマスキングモードかで処理を分岐
-        if config_manager.is_read_mode_enabled():
+        # モードに応じて処理を分岐
+        if restore_mode:
+            # 復元モード
+            if not report_file:
+                click.echo("エラー: 復元モードでは --report-file オプションが必要です")
+                return
+            
+            click.echo(f"\n=== PDF復元モード ===")
+            click.echo(f"復元対象: {path}")
+            click.echo(f"レポートファイル: {report_file}")
+            
+            try:
+                output_path = processor.restore_pdf_from_report(path, report_file)
+                click.echo(f"\n✅ 復元成功: {output_path}")
+                
+                # 復元後の確認情報を表示
+                restored_annotations = processor.read_pdf_annotations(output_path)
+                click.echo(f"復元された注釈・ハイライト数: {len(restored_annotations)}")
+                
+                if verbose and restored_annotations:
+                    click.echo("復元詳細:")
+                    for i, annotation in enumerate(restored_annotations[:3]):  # 最初の3件のみ表示
+                        click.echo(f"  {i+1}. {annotation.get('annotation_type', 'Unknown')}")
+                        click.echo(f"     ページ: {annotation.get('coordinates', {}).get('page_number', '?')}")
+                        click.echo(f"     テキスト: {annotation.get('covered_text', '')[:30]}...")
+                    
+                    if len(restored_annotations) > 3:
+                        click.echo(f"  ... および他{len(restored_annotations) - 3}件")
+                
+            except Exception as e:
+                click.echo(f"\n❌ 復元エラー: {e}")
+        
+        elif config_manager.is_read_mode_enabled():
             # 読み取りモード
             results = processor.process_files(path)
             
@@ -1572,8 +2331,31 @@ def main(path, config, verbose, output_dir, read_mode, read_report, masking_meth
                         click.echo("   注釈詳細:")
                         for i, annotation in enumerate(result['annotations'][:5]):  # 最初の5件のみ表示
                             click.echo(f"     {i+1}. {annotation.get('annotation_type', 'Unknown')}")
-                            click.echo(f"        場所: ページ{annotation.get('coordinates', {}).get('page_number', '?')}")
-                            click.echo(f"        テキスト: {annotation.get('covered_text', '')[:50]}...")
+                            
+                            # 座標情報
+                            coords = annotation.get('coordinates', {})
+                            click.echo(f"        場所: ページ{coords.get('page_number', '?')}")
+                            
+                            # テキスト位置情報（新機能）
+                            text_pos = annotation.get('text_position', {})
+                            if text_pos and text_pos.get('line_number', 0) > 0:
+                                line_num = text_pos.get('line_number', '?')
+                                char_start = text_pos.get('char_start_in_line', '?')
+                                char_end = text_pos.get('char_end_in_line', '?')
+                                total_lines = text_pos.get('total_lines_on_page', '?')
+                                click.echo(f"        位置: {line_num}行目 {char_start}-{char_end}文字目 (ページ内{total_lines}行)")
+                                
+                                # 行の内容を表示（50文字まで）
+                                line_content = text_pos.get('line_content', '')
+                                if line_content:
+                                    display_line = line_content[:50] + "..." if len(line_content) > 50 else line_content
+                                    click.echo(f"        行内容: {display_line}")
+                            
+                            # カバーしているテキスト
+                            covered_text = annotation.get('covered_text', '')
+                            click.echo(f"        テキスト: {covered_text[:30]}..." if len(covered_text) > 30 else f"        テキスト: {covered_text}")
+                            
+                            # 色情報
                             if annotation.get('color_info'):
                                 colors = []
                                 if 'stroke_color' in annotation['color_info']:
@@ -1582,6 +2364,8 @@ def main(path, config, verbose, output_dir, read_mode, read_report, masking_meth
                                     colors.append(f"塗り: {annotation['color_info']['fill_color'].get('hex', '#000000')}")
                                 if colors:
                                     click.echo(f"        色: {', '.join(colors)}")
+                            
+                            # 透明度
                             click.echo(f"        透明度: {annotation.get('opacity', 1.0)}")
                         
                         if len(result['annotations']) > 5:
@@ -1611,6 +2395,7 @@ def main(path, config, verbose, output_dir, read_mode, read_report, masking_meth
             click.echo(f"検出対象: {', '.join(enabled_entities)}")
             click.echo(f"マスキング方式: {masking_method or processor._get_masking_method()}")
             click.echo(f"文字表示モード: {masking_text_mode or config_manager.get_masking_text_display_mode()}")
+            click.echo(f"操作モード: {operation_mode or config_manager.get_operation_mode()}")
             
             for result in results:
                 if 'error' in result:

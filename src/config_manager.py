@@ -70,6 +70,11 @@ class ConfigManager:
                 "masking": {
                     "method": "annotation",  # annotation, highlight, both
                     "text_display_mode": "verbose",  # silent, minimal, verbose
+                    "operation_mode": "append",  # clear_all, append, reset_and_append
+                    "duplicate_removal": {
+                        "remove_identical": True,  # 完全同一の注釈・ハイライトを除去
+                        "comparison_tolerance": 0.1  # 座標比較の許容誤差（ポイント）
+                    },
                     "annotation_settings": {
                         "include_text": False,
                         "font_size": 12,
@@ -237,6 +242,11 @@ class ConfigManager:
             config['pdf_processing'] = config.get('pdf_processing', {})
             config['pdf_processing']['masking'] = config['pdf_processing'].get('masking', {})
             config['pdf_processing']['masking']['text_display_mode'] = args['masking_text_mode']
+        
+        if 'operation_mode' in args and args['operation_mode']:
+            config['pdf_processing'] = config.get('pdf_processing', {})
+            config['pdf_processing']['masking'] = config['pdf_processing'].get('masking', {})
+            config['pdf_processing']['masking']['operation_mode'] = args['operation_mode']
         
         if 'pdf_output_suffix' in args and args['pdf_output_suffix']:
             config['pdf_processing'] = config.get('pdf_processing', {})
@@ -499,6 +509,18 @@ class ConfigManager:
     def get_masking_text_display_mode(self) -> str:
         """マスキング時の文字表示モードを返す"""
         return self._safe_get_config('pdf_processing.masking.text_display_mode', 'verbose')
+    
+    def get_operation_mode(self) -> str:
+        """注釈・ハイライトの操作モードを返す"""
+        return self._safe_get_config('pdf_processing.masking.operation_mode', 'append')
+    
+    def should_remove_identical_annotations(self) -> bool:
+        """完全同一の注釈・ハイライト除去が有効かどうかを返す"""
+        return self._safe_get_config('pdf_processing.masking.duplicate_removal.remove_identical', True)
+    
+    def get_annotation_comparison_tolerance(self) -> float:
+        """注釈比較の許容誤差を返す"""
+        return self._safe_get_config('pdf_processing.masking.duplicate_removal.comparison_tolerance', 0.1)
     
     
     def get_pdf_file_exclusions(self) -> List[str]:
