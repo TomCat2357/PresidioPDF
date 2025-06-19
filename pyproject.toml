@@ -18,17 +18,19 @@ dependencies = [
     "reportlab>=4.0.0",
     "PyYAML>=6.0",
     "colorama>=0.4.0",
-    
     # 日本語NLPモデル
     "ja-core-news-sm",
     "ja-core-news-lg",
-    "ja-core-news-trf", 
+    "ja-core-news-trf",
     "ginza>=5.2.0",
     "ja-ginza>=5.2.0",
     "ja-ginza-electra>=5.2.0",
-    
     # 機械学習・画像処理
     "numpy<2.0",
+    # GUI関連
+    "TkEasyGUI>=1.0.0",
+    "Pillow>=10.0.0",
+    "pdf2image>=1.16.0",
 ]
 
 [project.optional-dependencies]
