@@ -412,6 +412,15 @@ wheels = [
 ]
 
 [[package]]
+name = "freesimplegui"
+version = "5.2.0.post1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/41/8a56f3d4a3760fec6b1f63ff48fa57620f0552eb5f0986fb4aa35f4119f1/freesimplegui-5.2.0.post1.tar.gz", hash = "sha256:e58a0e6758e9a9e87152256911f94fcc3998356d1309973a9f4d9df2dc55f98a", size = 718668 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/b4/ce89b4b40d1d2f726583b4d00b99589ba37580012890a8bc4b88d1d2a239/freesimplegui-5.2.0.post1-py3-none-any.whl", hash = "sha256:3d61eb519324503232f86b2f1bd7f5c6813ce225f6e189d0fd737ddb036af4d5", size = 733618 },
+]
+
+[[package]]
 name = "fsspec"
 version = "2025.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1237,6 +1246,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "colorama" },
+    { name = "freesimplegui" },
     { name = "ginza" },
     { name = "ja-core-news-lg" },
     { name = "ja-core-news-sm" },
@@ -1252,7 +1262,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "reportlab" },
     { name = "spacy", extra = ["transformers"] },
-    { name = "tkeasygui" },
 ]
 
 [package.optional-dependencies]
@@ -1281,6 +1290,7 @@ requires-dist = [
     { name = "click", marker = "extra == 'minimal'", specifier = ">=8.0.0" },
     { name = "colorama", specifier = ">=0.4.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
+    { name = "freesimplegui", specifier = ">=5.0.0" },
     { name = "ginza", specifier = ">=5.2.0" },
     { name = "ja-core-news-lg", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.7.0/ja_core_news_lg-3.7.0-py3-none-any.whl" },
     { name = "ja-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl" },
@@ -1306,7 +1316,6 @@ requires-dist = [
     { name = "reportlab", specifier = ">=4.0.0" },
     { name = "spacy", marker = "extra == 'minimal'", specifier = ">=3.7.0" },
     { name = "spacy", extras = ["transformers"], specifier = ">=3.7.0" },
-    { name = "tkeasygui", specifier = ">=1.0.0" },
 ]
 
 [[package]]
@@ -1458,12 +1467,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/f3/8d3a350efb4286b5ebdabcf6736f51d8e3b10dbe68804c6930b00f5cf329/pypdfium2-4.30.1-py3-none-win_amd64.whl", hash = "sha256:598a7f20264ab5113853cba6d86c4566e4356cad037d7d1f849c8c9021007e05", size = 2960157 },
     { url = "https://files.pythonhosted.org/packages/e1/6b/2706497c86e8d69fb76afe5ea857fe1794621aa0f3b1d863feb953fe0f22/pypdfium2-4.30.1-py3-none-win_arm64.whl", hash = "sha256:c2b6d63f6d425d9416c08d2511822b54b8e3ac38e639fc41164b1d75584b3a8c", size = 2814810 },
 ]
-
-[[package]]
-name = "pyperclip"
-version = "1.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/30/23/2f0a3efc4d6a32f3b63cdff36cd398d9701d26cda58e3ab97ac79fb5e60d/pyperclip-1.9.0.tar.gz", hash = "sha256:b7de0142ddc81bfc5c7507eea19da920b92252b548b96186caf94a5e2527d310", size = 20961 }
 
 [[package]]
 name = "pytest"
@@ -1918,19 +1921,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/82/ce/aaff1f39bcc1e9a97bec5f3d20aa771c005a9faff3944fc56c7492c24466/thinc-8.2.5-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e8a8f2f249f2be9a5ce2a81a6efe7503b68be7b57e47ad54ab28204e1f0c723b", size = 818820 },
     { url = "https://files.pythonhosted.org/packages/d7/fa/c96b01e46e5962d02de1206e497fda2902aef2b8ffb2926d66d5f0159040/thinc-8.2.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:87e729f33c76ec6df9b375989743252ab880d79f3a2b4175169b21dece90f102", size = 865047 },
     { url = "https://files.pythonhosted.org/packages/cd/26/306b8bedb678c52464ed00e576edf9d365fce0bcae597a333bdad9fb5d67/thinc-8.2.5-cp312-cp312-win_amd64.whl", hash = "sha256:c5f750ea2dd32ca6d46947025dacfc0f6037340c4e5f7adb9af84c75f65aa7d8", size = 1447893 },
-]
-
-[[package]]
-name = "tkeasygui"
-version = "1.0.37"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pillow" },
-    { name = "pyperclip" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/ed/45cf1b3c32111ce654a889453e01102d88d4a885f1d3cc6ad1f8777d3cdc/tkeasygui-1.0.37.tar.gz", hash = "sha256:1208eb6154ae50facc88b4112a24f8f27412fc436f11af249e965904e56a674f", size = 59809 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/98/0f11ba1f1246e03a528b8108f93cd81ba4fa47465277bb2e6b8342dcf356/tkeasygui-1.0.37-py3-none-any.whl", hash = "sha256:8a7f916f3b236ed8d5b25270ce98f46a00cef2636bbf3efa94f75a6ebf6350e5", size = 57177 },
 ]
 
 [[package]]

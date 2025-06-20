@@ -28,7 +28,7 @@ dependencies = [
     # 機械学習・画像処理
     "numpy<2.0",
     # GUI関連
-    "TkEasyGUI>=1.0.0",
+    "FreeSimpleGUI>=5.0.0",
     "Pillow>=10.0.0",
     "pdf2image>=1.16.0",
 ]

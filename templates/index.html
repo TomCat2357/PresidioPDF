@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF個人情報マスキングツール</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+        }
+        
+        .main-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .left-panel {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            height: 100vh;
+            overflow-y: auto;
+        }
+        
+        .right-panel {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            height: 100vh;
+            overflow-y: auto;
+        }
+        
+        .pdf-viewer {
+            background: #f8f9fa;
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            min-height: 600px;
+            max-height: 80vh;
+            overflow: auto;
+            padding: 20px;
+            box-sizing: border-box;
+            position: relative;
+        }
+        
+        .pdf-image {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            display: block;
+            margin: 0 auto;
+            transition: width 0.2s ease;
+        }
+        
+        .pdf-placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #6c757d;
+            text-align: center;
+            width: calc(100% - 40px);
+        }
+        
+        .entity-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+        }
+        
+        .entity-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .entity-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .entity-item.selected {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .entity-type {
+            font-weight: bold;
+            color: #2196f3;
+        }
+        
+        .entity-confidence {
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .status-message {
+            min-height: 50px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            padding: 10px;
+            border-left: 4px solid #17a2b8;
+        }
+        
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        
+        .upload-area:hover {
+            border-color: #007bff;
+        }
+        
+        .upload-area.dragover {
+            border-color: #007bff;
+            background: #e3f2fd;
+        }
+        
+        .loading {
+            display: none;
+        }
+        
+        .loading.show {
+            display: block;
+        }
+        
+        .btn-group-vertical .btn {
+            margin-bottom: 5px;
+        }
+        
+        .page-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        
+        .zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        
+        .entity-details {
+            background: #f8f9fa;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        
+        .entity-details .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .entity-details .detail-label {
+            font-weight: bold;
+            color: #666;
+        }
+        
+        .entity-details .detail-value {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <div class="row">
+            <!-- 左側パネル -->
+            <div class="col-md-5">
+                <div class="left-panel">
+                    <h2 class="mb-4">
+                        <i class="fas fa-shield-alt"></i>
+                        PDF個人情報マスキングツール
+                    </h2>
+                    
+                    <!-- ファイルアップロード -->
+                    <div class="mb-4">
+                        <h5>PDFファイル選択</h5>
+                        <div class="upload-area" id="uploadArea">
+                            <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
+                            <p>PDFファイルをドラッグ&ドロップまたはクリックして選択</p>
+                            <input type="file" id="pdfFileInput" accept=".pdf" style="display: none;">
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">選択されたファイル: <span id="selectedFileName">なし</span></small>
+                        </div>
+                    </div>
+                    
+                    <!-- 操作ボタン -->
+                    <div class="mb-4">
+                        <div class="btn-group-vertical w-100">
+                            <button class="btn btn-primary" id="detectBtn" disabled>
+                                <i class="fas fa-search"></i> 検出開始
+                            </button>
+                            <button class="btn btn-secondary" id="settingsBtn">
+                                <i class="fas fa-cog"></i> 設定
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- PDF表示コントロール -->
+                    <div class="mb-4">
+                        <h5>PDFビューア</h5>
+                        <div class="page-controls">
+                            <button class="btn btn-sm btn-outline-secondary" id="prevPageBtn" disabled>
+                                <i class="fas fa-chevron-left"></i>
+                            </button>
+                            <span id="pageInfo">0/0</span>
+                            <button class="btn btn-sm btn-outline-secondary" id="nextPageBtn" disabled>
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
+                        </div>
+                        <div class="zoom-controls">
+                            <label for="zoomSlider">拡大率:</label>
+                            <input type="range" class="form-range" id="zoomSlider" min="25" max="400" value="100" step="25">
+                            <span id="zoomValue">100%</span>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="showHighlights" checked>
+                            <label class="form-check-label" for="showHighlights">
+                                ハイライト表示
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- 検出結果 -->
+                    <div class="mb-4">
+                        <h5>検出結果 <span id="resultCount" class="badge bg-primary">0</span></h5>
+                        <div class="entity-list" id="entityList">
+                            <div class="entity-item text-muted">
+                                検出結果がここに表示されます
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 選択されたエンティティの詳細 -->
+                    <div class="mb-4">
+                        <h5>エンティティ詳細</h5>
+                        <div class="entity-details" id="entityDetails">
+                            <div class="detail-row">
+                                <span class="detail-label">タイプ:</span>
+                                <span class="detail-value" id="entityType">-</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">テキスト:</span>
+                                <span class="detail-value" id="entityText">-</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">信頼度:</span>
+                                <span class="detail-value" id="entityConfidence">-</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">ページ:</span>
+                                <span class="detail-value" id="entityPage">-</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">位置:</span>
+                                <span class="detail-value" id="entityPosition">-</span>
+                            </div>
+                        </div>
+                        <div class="btn-group w-100">
+                            <button class="btn btn-danger" id="deleteBtn" disabled>
+                                <i class="fas fa-trash"></i> 削除
+                            </button>
+                            <button class="btn btn-success" id="applyBtn" disabled>
+                                <i class="fas fa-check"></i> PDFに適用
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- ステータス -->
+                    <div class="status-message" id="statusMessage">
+                        準備完了 - PDFファイルを選択してください
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 右側パネル -->
+            <div class="col-md-7">
+                <div class="right-panel">
+                    <h4 class="mb-3">PDF表示 <small class="text-muted" id="zoomDisplay">100%</small></h4>
+                    <div class="pdf-viewer" id="pdfViewer">
+                        <div class="pdf-placeholder">
+                            <i class="fas fa-file-pdf fa-4x mb-3"></i>
+                            <p>PDFファイルを選択すると、ここに表示されます</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 設定モーダル -->
+    <div class="modal fade" id="settingsModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">設定</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">検出対象エンティティ</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityPerson" value="PERSON">
+                            <label class="form-check-label" for="entityPerson">人名</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityLocation" value="LOCATION">
+                            <label class="form-check-label" for="entityLocation">場所</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityPhone" value="PHONE_NUMBER">
+                            <label class="form-check-label" for="entityPhone">電話番号</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityDate" value="DATE_TIME">
+                            <label class="form-check-label" for="entityDate">日時</label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="thresholdSlider" class="form-label">信頼度閾値: <span id="thresholdValue">0.5</span></label>
+                        <input type="range" class="form-range" id="thresholdSlider" min="0" max="1" step="0.1" value="0.5">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">マスキング方法</label>
+                        <select class="form-select" id="maskingMethod">
+                            <option value="highlight">ハイライト表示</option>
+                            <option value="annotation">注釈マーカー</option>
+                            <option value="both">両方</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
+                    <button type="button" class="btn btn-primary" id="saveSettingsBtn">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ローディングオーバーレイ -->
+    <div class="loading" id="loadingOverlay">
+        <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center" 
+             style="background: rgba(0,0,0,0.5); z-index: 9999;">
+            <div class="text-center text-white">
+                <div class="spinner-border mb-3" role="status"></div>
+                <p>処理中...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
