@@ -687,22 +687,15 @@ def detect_entities():
 
 @app.route('/api/page/<int:page_num>')
 def get_page_image(page_num):
-    """PDFページ画像を取得"""
+    """PDFページ画像を取得（PDF.js統合版では不要だが互換性のため残す）"""
     try:
-        app_instance = get_session_app()
-        zoom = float(request.args.get('zoom', 1.0))
-        show_highlights = request.args.get('highlights', 'false').lower() == 'true'
-        
-        img_base64 = app_instance.get_pdf_page_image(page_num, zoom, show_highlights)
-        if img_base64:
-            return jsonify({
-                'success': True,
-                'image': img_base64,
-                'page': page_num,
-                'highlights': show_highlights
-            })
-        else:
-            return jsonify({'success': False, 'message': 'ページ画像の取得に失敗'})
+        # PDF.js版では直接クライアントでPDFを処理するため、
+        # このエンドポイントは主に後方互換性のために残している
+        return jsonify({
+            'success': True,
+            'message': 'PDF.js版では直接クライアントでPDFを処理します',
+            'page': page_num
+        })
     
     except Exception as e:
         logger.error(f"ページ画像取得エラー: {e}")
@@ -937,33 +930,96 @@ def adjust_highlight_batch():
         return jsonify({'success': False, 'message': f'一括調整エラー: {str(e)}'})
 
 
-@app.route('/api/highlights/select', methods=['POST'])
-def select_highlight():
-    """座標からハイライトを選択"""
+@app.route('/api/highlights/add', methods=['POST'])
+def add_highlight():
+    """新しいハイライトを追加"""
     try:
         app_instance = get_session_app()
         
-        if not app_instance.current_pdf_path or not app_instance.pdf_document:
+        if not app_instance.current_pdf_path:
+            return jsonify({'success': False, 'message': 'PDFが読み込まれていません'})
+        
+        data = request.get_json()
+        text = data.get('text', '').strip()
+        entity_type = data.get('entity_type', 'CUSTOM')
+        page_num = data.get('page', 1)
+        coordinates = data.get('coordinates', {})
+        
+        if not text:
+            return jsonify({'success': False, 'message': 'テキストが指定されていません'})
+        
+        # 新しいエンティティを作成
+        new_entity = {
+            'entity_type': entity_type,
+            'text': text,
+            'confidence': 1.0,
+            'page': page_num,
+            'start': 0,
+            'end': len(text),
+            'coordinates': coordinates
+        }
+        
+        # 検出結果に追加
+        app_instance.detection_results.append(new_entity)
+        
+        logger.info(f"新しいハイライトを追加: {text} (タイプ: {entity_type})")
+        
+        return jsonify({
+            'success': True,
+            'message': f'ハイライトを追加しました: {text}',
+            'entity': new_entity,
+            'total_count': len(app_instance.detection_results)
+        })
+    
+    except Exception as e:
+        logger.error(f"ハイライト追加エラー: {e}")
+        return jsonify({'success': False, 'message': f'ハイライト追加エラー: {str(e)}'})
+
+@app.route('/api/highlights/select', methods=['POST'])
+def select_highlight():
+    """座標からハイライトを選択（PDF.js版用に簡略化）"""
+    try:
+        app_instance = get_session_app()
+        
+        if not app_instance.current_pdf_path:
             return jsonify({'success': False, 'message': 'PDFが読み込まれていません'})
         
         data = request.get_json()
         page_num = data.get('page_num', 0)
         x = data.get('x')
         y = data.get('y')
-        zoom = data.get('zoom', 1.0)
         
-        # 座標補正（zoom考慮）
-        pdf_x = x / zoom
-        pdf_y = y / zoom
+        # 現在のページのエンティティから座標が近いものを検索
+        page_entities = [
+            (i, entity) for i, entity in enumerate(app_instance.detection_results)
+            if entity.get('page', 1) == page_num + 1
+        ]
         
-        # 該当するハイライトを検索
-        selected_highlight = app_instance.find_highlight_at_position(page_num, pdf_x, pdf_y)
+        selected_index = -1
+        min_distance = float('inf')
         
-        if selected_highlight:
+        for i, entity in page_entities:
+            if 'coordinates' in entity and entity['coordinates']:
+                coords = entity['coordinates']
+                # 矩形の中心点との距離を計算
+                center_x = (coords.get('x0', 0) + coords.get('x1', 0)) / 2
+                center_y = (coords.get('y0', 0) + coords.get('y1', 0)) / 2
+                distance = ((x - center_x) ** 2 + (y - center_y) ** 2) ** 0.5
+                
+                # 矩形内かつ最も近い点を選択
+                if (coords.get('x0', 0) <= x <= coords.get('x1', 0) and
+                    coords.get('y0', 0) <= y <= coords.get('y1', 0) and
+                    distance < min_distance):
+                    min_distance = distance
+                    selected_index = i
+        
+        if selected_index >= 0:
+            selected_entity = app_instance.detection_results[selected_index]
+            selected_entity['id'] = selected_index
             return jsonify({
                 'success': True,
-                'highlight': selected_highlight,
-                'highlight_id': selected_highlight['id']
+                'highlight': selected_entity,
+                'highlight_id': selected_index
             })
         else:
             return jsonify({

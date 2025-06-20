@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PDF.js テスト</title>
+    <style>
+        canvas {
+            border: 1px solid #ccc;
+            display: block;
+            margin: 20px auto;
+        }
+        #status {
+            text-align: center;
+            margin: 20px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">PDF.js 読み込み中...</div>
+    <canvas id="pdfCanvas"></canvas>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        const statusDiv = document.getElementById('status');
+        const canvas = document.getElementById('pdfCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // PDF.js設定
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
+        statusDiv.textContent = 'PDF.js 読み込み完了 - テスト開始';
+        
+        // テスト用の簡単なPDF作成（Base64エンコードされたPDF）
+        const testPdfData = `
+JVBERi0xLjQKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDwKL1R5cGUgL1BhZ2VzCi9LaWRzIFsgMyAwIFIgXQovQ291bnQgMQo+PgplbmRvYmoKMyAwIG9iago8PAovVHlwZSAvUGFnZQovUGFyZW50IDIgMCBSCi9NZWRpYUJveCBbIDAgMCA2MTIgNzkyIF0KL0NvbnRlbnRzIDQgMCBSCj4+CmVuZG9iago0IDAgb2JqCjw8Ci9MZW5ndGggNDQKPj4Kc3RyZWFtCkJUCi9GMSAxMiBUZgo1MCA3MDAgVGQKKEhlbGxvIFdvcmxkISkgVGoKRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgNQowMDAwMDAwMDAwIDY1NTM1IGYKMDAwMDAwMDAwOSAwMDAwMCBuCjAwMDAwMDAwNTggMDAwMDAgbgowMDAwMDAwMTE1IDAwMDAwIG4KMDAwMDAwMDIwNCAwMDAwMCBuCnRyYWlsZXIKPDwKL1NpemUgNQovUm9vdCAxIDAgUgo+PgpzdGFydHhyZWYKMjk4CiUlRU9GCg==`;
+        
+        // Base64をUint8Arrayに変換
+        function base64ToUint8Array(base64) {
+            const binaryString = atob(base64.replace(/\s/g, ''));
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes;
+        }
+        
+        async function testPdfJs() {
+            try {
+                statusDiv.textContent = 'PDFドキュメントを読み込み中...';
+                
+                const pdfData = base64ToUint8Array(testPdfData);
+                const pdf = await pdfjsLib.getDocument(pdfData).promise;
+                
+                statusDiv.textContent = `PDF読み込み成功! ページ数: ${pdf.numPages}`;
+                
+                // 最初のページをレンダリング
+                const page = await pdf.getPage(1);
+                const viewport = page.getViewport({ scale: 1.5 });
+                
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                
+                const renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                
+                await page.render(renderContext).promise;
+                statusDiv.textContent = 'PDFレンダリング完了!';
+                
+            } catch (error) {
+                console.error('PDF.js テストエラー:', error);
+                statusDiv.textContent = `エラー: ${error.message}`;
+                statusDiv.style.background = '#ffeeee';
+                statusDiv.style.color = '#cc0000';
+            }
+        }
+        
+        // PDF.jsが読み込まれた後にテスト実行
+        if (typeof pdfjsLib !== 'undefined') {
+            testPdfJs();
+        } else {
+            statusDiv.textContent = 'PDF.js の読み込みに失敗しました';
+            statusDiv.style.background = '#ffeeee';
+            statusDiv.style.color = '#cc0000';
+        }
+    </script>
+</body>
+</html>
