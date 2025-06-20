@@ -535,16 +535,25 @@ class PDFPresidioProcessor:
                 if result.score >= min_score:
                     # エンティティ除外チェック
                     entity_text = text[result.start:result.end]
-                    if not self.config_manager.is_entity_excluded(result.entity_type, entity_text):
+                    
+                    # エンティティタイプに応じてテキスト境界を調整
+                    refined_text = self._refine_entity_text(entity_text, result.entity_type, text, result.start, result.end)
+                    
+                    if not self.config_manager.is_entity_excluded(result.entity_type, refined_text):
+                        # 調整されたテキストの位置を計算
+                        refined_start, refined_end = self._calculate_refined_positions(
+                            text, result.start, result.end, refined_text
+                        )
+                        
                         results.append({
-                            'start': result.start,
-                            'end': result.end,
+                            'start': refined_start,
+                            'end': refined_end,
                             'score': result.score,
                             'entity_type': result.entity_type,
-                            'text': entity_text
+                            'text': refined_text
                         })
                     else:
-                        logger.debug(f"エンティティ除外: '{entity_text}' ({result.entity_type})")
+                        logger.debug(f"エンティティ除外: '{refined_text}' ({result.entity_type})")
         
         # 重複除去処理（オプション）
         if self.config_manager.is_deduplication_enabled():
@@ -2190,6 +2199,48 @@ class PDFPresidioProcessor:
         except Exception as e:
             logger.error(f"レポート生成でエラー: {e}")
             return None
+
+    def _refine_entity_text(self, entity_text: str, entity_type: str, full_text: str, start: int, end: int) -> str:
+        """エンティティタイプに応じてテキスト境界を調整"""
+        import re
+        
+        if entity_type == "PERSON":
+            # 人名の場合: 英数字・記号で終わっている場合は除去
+            # 例: "佐藤花子06-9876" → "佐藤花子"
+            refined = re.sub(r'[0-9\-\s]*$', '', entity_text).strip()
+            if refined:
+                return refined
+        
+        elif entity_type == "LOCATION":
+            # 場所の場合: 数字で終わっている場合は除去
+            refined = re.sub(r'[0-9\-\s]*$', '', entity_text).strip()
+            if refined:
+                return refined
+        
+        elif entity_type == "PHONE_NUMBER":
+            # 電話番号の場合: 数字とハイフンのみを抽出
+            refined = re.findall(r'[0-9\-]+', entity_text)
+            if refined:
+                return ''.join(refined)
+        
+        # 調整できない場合は元のテキストを返す
+        return entity_text
+    
+    def _calculate_refined_positions(self, full_text: str, original_start: int, original_end: int, refined_text: str) -> tuple:
+        """調整されたテキストの新しい位置を計算"""
+        original_text = full_text[original_start:original_end]
+        
+        # 調整されたテキストが元のテキストの一部かチェック
+        if refined_text in original_text:
+            # 元のテキスト内での相対位置を見つける
+            relative_start = original_text.find(refined_text)
+            if relative_start != -1:
+                new_start = original_start + relative_start
+                new_end = new_start + len(refined_text)
+                return new_start, new_end
+        
+        # 見つからない場合は元の位置を返す
+        return original_start, original_end
 
 
 @click.command()

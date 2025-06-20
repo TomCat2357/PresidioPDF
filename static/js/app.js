@@ -47,7 +47,7 @@ class PresidioPDFWebApp {
             entityPage: document.getElementById('entityPage'),
             entityPosition: document.getElementById('entityPosition'),
             deleteBtn: document.getElementById('deleteBtn'),
-            applyBtn: document.getElementById('applyBtn'),
+            saveBtn: document.getElementById('saveBtn'),
             statusMessage: document.getElementById('statusMessage'),
             pdfViewer: document.getElementById('pdfViewer'),
             loadingOverlay: document.getElementById('loadingOverlay'),
@@ -119,8 +119,8 @@ class PresidioPDFWebApp {
             this.deleteSelectedEntity();
         });
         
-        this.elements.applyBtn.addEventListener('click', () => {
-            this.applyToPdf();
+        this.elements.saveBtn.addEventListener('click', () => {
+            this.savePdf();
         });
         
         // 設定モーダル
@@ -193,7 +193,7 @@ class PresidioPDFWebApp {
                 this.detectionResults = data.results || [];
                 this.updateResultsList();
                 this.updateStatus(data.message);
-                this.elements.applyBtn.disabled = this.detectionResults.length === 0;
+                this.elements.saveBtn.disabled = this.detectionResults.length === 0;
                 // 検出結果でページを再表示（ハイライト付き）
                 this.loadPageImage();
             } else {
@@ -339,7 +339,7 @@ class PresidioPDFWebApp {
                 this.updateResultsList();
                 this.clearEntityDetails();
                 this.updateStatus(data.message);
-                this.elements.applyBtn.disabled = this.detectionResults.length === 0;
+                this.elements.saveBtn.disabled = this.detectionResults.length === 0;
                 // エンティティ削除後にページを再表示（ハイライト更新）
                 this.loadPageImage();
             } else {
@@ -351,31 +351,40 @@ class PresidioPDFWebApp {
         });
     }
     
-    applyToPdf() {
+    savePdf() {
         if (this.detectionResults.length === 0) {
-            this.showError('適用する検出結果がありません');
+            this.showError('保存する検出結果がありません');
             return;
         }
         
         this.showLoading(true);
-        this.updateStatus('PDFに変更を適用中...');
+        this.updateStatus('PDFファイル生成中...');
         
-        fetch('/api/apply_pdf', {
+        fetch('/api/generate_pdf', {
             method: 'POST'
         })
         .then(response => response.json())
         .then(data => {
             this.showLoading(false);
             if (data.success) {
-                this.updateStatus(data.message);
-                alert(`PDFファイルに変更が適用されました:\n${data.filename}`);
+                this.updateStatus('PDFファイルをダウンロード中...');
+                // 生成されたPDFファイルをダウンロード
+                const downloadUrl = `/api/download_pdf/${data.filename}`;
+                const link = document.createElement('a');
+                link.href = downloadUrl;
+                link.download = data.download_filename || data.filename;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                this.updateStatus(`PDFファイルをダウンロードしました: ${data.download_filename || data.filename}`);
             } else {
                 this.showError(data.message);
             }
         })
         .catch(error => {
             this.showLoading(false);
-            this.showError('適用エラー: ' + error.message);
+            this.showError('PDF生成エラー: ' + error.message);
         });
     }
     
