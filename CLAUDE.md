@@ -83,10 +83,16 @@ This project is configured to work with Claude through MCP (Model Context Protoc
 When using the MCP server desktop-commander with Claude, the **Project root directory** should be set to:
 
 ```
-C:\Users\gk3t-\OneDrive - 又村 友幸\working\Presidio
+C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF
 ```
 
 This path serves as the base directory for all relative path operations and ensures proper file access permissions within the desktop-commander environment.
+
+**🔴 IMPORTANT: Desktop Commander Project Root 🔴**
+- **ALWAYS use the correct project root**: `C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF`
+- **This is the base directory** for all desktop-commander operations
+- **All relative paths** are resolved from this root directory
+- **File access permissions** are based on this path configuration
 
 ## Common Commands
 
@@ -95,7 +101,7 @@ ALL commands below MUST be executed through MCP desktop-commander. Direct execut
 
 **NOTE: All commands below should be executed through MCP desktop-commander with proper Windows path format:**
 ```
-cd "C:\Users\gk3t-\OneDrive - 又村 友幸\working\Presidio"
+cd "C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF"
 ```
 
 ### Virtual Environment Setup

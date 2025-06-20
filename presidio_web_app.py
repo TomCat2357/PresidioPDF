@@ -128,7 +128,16 @@ class PresidioPDFWebApp:
     
     def get_pdf_page_image(self, page_num: int, zoom: float = 1.0, show_highlights: bool = False) -> Optional[str]:
         """PDFページを画像として取得（Base64エンコード）"""
-        if not self.pdf_document or page_num >= self.total_pages:
+        logger.info(f"get_pdf_page_image called: page={page_num}, zoom={zoom}, highlights={show_highlights}")
+        logger.info(f"pdf_document exists: {self.pdf_document is not None}")
+        logger.info(f"total_pages: {self.total_pages}")
+        
+        if not self.pdf_document:
+            logger.error("PDF document is None")
+            return None
+            
+        if page_num >= self.total_pages:
+            logger.error(f"Page number {page_num} >= total pages {self.total_pages}")
             return None
         
         try:
@@ -191,8 +200,11 @@ class PresidioPDFWebApp:
             # 拡大率を適用してピクセルマップを取得
             base_resolution = 2.0
             actual_zoom = zoom * base_resolution
+            logger.info(f"Zoom calculation: zoom={zoom}, base_resolution={base_resolution}, actual_zoom={actual_zoom}")
+            
             mat = fitz.Matrix(actual_zoom, actual_zoom)
             pix = page.get_pixmap(matrix=mat)
+            logger.info(f"Generated pixmap size: {pix.width} x {pix.height}")
             
             # PIL Imageに変換
             img_data = pix.tobytes("png")
@@ -207,10 +219,12 @@ class PresidioPDFWebApp:
             img.save(bio, format='PNG')
             img_base64 = base64.b64encode(bio.getvalue()).decode('utf-8')
             
+            logger.info(f"ページ画像生成成功: page={page_num}, image_size={len(img_base64)} bytes")
             return img_base64
             
         except Exception as e:
             logger.error(f"ページ画像取得エラー: {e}")
+            logger.error(traceback.format_exc())
             return None    
     def run_detection(self) -> Dict:
         """個人情報検出処理を実行"""
@@ -474,6 +488,121 @@ class PresidioPDFWebApp:
             "DATE_TIME": "日時"
         }
         return mapping.get(entity_type, entity_type)
+    
+    def adjust_highlight_range(self, highlight_id: int, adjustment_type: str, amount: int = 1) -> Dict:
+        """ハイライト範囲を調整"""
+        try:
+            if highlight_id >= len(self.detection_results):
+                return {'success': False, 'message': '無効なハイライトIDです'}
+            
+            highlight = self.detection_results[highlight_id]
+            original_text = highlight['text']
+            page_num = highlight.get('page', 1) - 1  # 0-based index
+            
+            if not self.pdf_document or page_num >= len(self.pdf_document):
+                return {'success': False, 'message': '無効なページ番号です'}
+            
+            page = self.pdf_document[page_num]
+            page_text = page.get_text()
+            
+            # 現在のテキストの位置を特定
+            text_start = page_text.find(original_text)
+            if text_start == -1:
+                return {'success': False, 'message': 'テキストが見つかりません'}
+            
+            text_end = text_start + len(original_text)
+            
+            # 範囲調整
+            new_start = text_start
+            new_end = text_end
+            
+            if adjustment_type == "extend_left" and text_start > 0:
+                new_start = max(0, text_start - amount)
+            elif adjustment_type == "extend_right" and text_end < len(page_text):
+                new_end = min(len(page_text), text_end + amount)
+            elif adjustment_type == "shrink_left" and text_end - text_start > amount:
+                new_start = min(text_start + amount, text_end - 1)
+            elif adjustment_type == "shrink_right" and text_end - text_start > amount:
+                new_end = max(text_start + 1, text_end - amount)
+            else:
+                return {'success': False, 'message': f'調整できません: {adjustment_type}'}
+            
+            # 新しいテキスト
+            new_text = page_text[new_start:new_end].strip()
+            if not new_text:
+                return {'success': False, 'message': '無効な範囲です'}
+            
+            # 新しい座標を計算
+            text_instances = page.search_for(new_text)
+            if not text_instances:
+                return {'success': False, 'message': '新しいテキストの座標が見つかりません'}
+            
+            new_rect = text_instances[0]
+            
+            # ハイライト情報を更新
+            highlight['text'] = new_text
+            highlight['coordinates'] = {
+                'x0': new_rect.x0,
+                'y0': new_rect.y0,
+                'x1': new_rect.x1,
+                'y1': new_rect.y1
+            }
+            
+            logger.info(f"ハイライト調整完了: '{original_text}' -> '{new_text}'")
+            
+            return {
+                'success': True,
+                'message': f'ハイライト範囲を調整しました: {adjustment_type}',
+                'updated_highlight': highlight
+            }
+            
+        except Exception as e:
+            logger.error(f"ハイライト範囲調整エラー: {e}")
+            return {'success': False, 'message': f'調整エラー: {str(e)}'}
+    
+    def find_highlight_at_position(self, page_num: int, x: float, y: float) -> Optional[Dict]:
+        """指定座標のハイライトを検索"""
+        try:
+            page_based_1 = page_num + 1  # 1-based page number
+            
+            for i, entity in enumerate(self.detection_results):
+                if entity.get('page', 1) != page_based_1:
+                    continue
+                
+                # 座標情報をチェック
+                coords = entity.get('coordinates')
+                if coords and all(k in coords for k in ['x0', 'y0', 'x1', 'y1']):
+                    # 座標内かチェック
+                    if (coords['x0'] <= x <= coords['x1'] and 
+                        coords['y0'] <= y <= coords['y1']):
+                        # IDを追加
+                        entity_copy = entity.copy()
+                        entity_copy['id'] = i
+                        return entity_copy
+                else:
+                    # 座標情報がない場合はテキスト検索で推定
+                    if not self.pdf_document:
+                        continue
+                    
+                    page = self.pdf_document[page_num]
+                    text_instances = page.search_for(entity['text'])
+                    
+                    for rect in text_instances:
+                        if rect.x0 <= x <= rect.x1 and rect.y0 <= y <= rect.y1:
+                            # 座標を更新
+                            entity_copy = entity.copy()
+                            entity_copy['coordinates'] = {
+                                'x0': rect.x0, 'y0': rect.y0,
+                                'x1': rect.x1, 'y1': rect.y1
+                            }
+                            entity_copy['id'] = i
+                            return entity_copy
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"ハイライト検索エラー: {e}")
+            return None
 
 
 def allowed_file(filename):
@@ -697,6 +826,154 @@ def settings():
     except Exception as e:
         logger.error(f"設定処理エラー: {e}")
         return jsonify({'success': False, 'message': f'設定エラー: {str(e)}'})
+
+
+@app.route('/api/highlights/adjust', methods=['POST'])
+def adjust_highlight():
+    """ハイライト範囲を調整"""
+    try:
+        app_instance = get_session_app()
+        
+        if not app_instance.current_pdf_path or not app_instance.pdf_document:
+            return jsonify({'success': False, 'message': 'PDFが読み込まれていません'})
+        
+        data = request.get_json()
+        highlight_id = data.get('highlight_id')
+        page_num = data.get('page_num', 0)
+        adjustment_type = data.get('adjustment_type')  # 'extend_left', 'extend_right', 'shrink_left', 'shrink_right'
+        amount = data.get('amount', 1)  # 調整する文字数
+        
+        # ハイライトを特定
+        if highlight_id is None or highlight_id >= len(app_instance.detection_results):
+            return jsonify({'success': False, 'message': '無効なハイライトIDです'})
+        
+        highlight = app_instance.detection_results[highlight_id]
+        
+        # ページ番号チェック
+        if highlight.get('page', 1) != page_num + 1:
+            return jsonify({'success': False, 'message': 'ページ番号が一致しません'})
+        
+        # 範囲調整処理
+        result = app_instance.adjust_highlight_range(highlight_id, adjustment_type, amount)
+        
+        if result['success']:
+            # ページ画像を再生成
+            updated_image = app_instance.get_pdf_page_image(page_num, show_highlights=True)
+            
+            return jsonify({
+                'success': True,
+                'message': result['message'],
+                'updated_highlight': result['updated_highlight'],
+                'updated_image': updated_image
+            })
+        else:
+            return jsonify({'success': False, 'message': result['message']})
+    
+    except Exception as e:
+        logger.error(f"ハイライト調整エラー: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': f'ハイライト調整エラー: {str(e)}'})
+
+
+@app.route('/api/highlights/adjust_batch', methods=['POST'])
+def adjust_highlight_batch():
+    """ハイライト範囲を一括調整"""
+    try:
+        app_instance = get_session_app()
+        
+        if not app_instance.current_pdf_path or not app_instance.pdf_document:
+            return jsonify({'success': False, 'message': 'PDFが読み込まれていません'})
+        
+        data = request.get_json()
+        highlight_id = data.get('highlight_id')
+        page_num = data.get('page_num', 0)
+        adjustments = data.get('adjustments', [])
+        
+        # ハイライトを特定
+        if highlight_id is None or highlight_id >= len(app_instance.detection_results):
+            return jsonify({'success': False, 'message': '無効なハイライトIDです'})
+        
+        highlight = app_instance.detection_results[highlight_id]
+        
+        # ページ番号チェック
+        if highlight.get('page', 1) != page_num + 1:
+            return jsonify({'success': False, 'message': 'ページ番号が一致しません'})
+        
+        logger.info(f"一括調整開始: {len(adjustments)}回の操作")
+        
+        # 調整を順次適用
+        success_count = 0
+        for adjustment in adjustments:
+            adjustment_type = adjustment.get('type')
+            result = app_instance.adjust_highlight_range(highlight_id, adjustment_type, 1)
+            
+            if result['success']:
+                success_count += 1
+                # ハイライト情報を更新
+                highlight = result['updated_highlight']
+                app_instance.detection_results[highlight_id] = highlight
+            else:
+                logger.warning(f"調整失敗: {adjustment_type} - {result['message']}")
+                # 失敗した場合でも続行（部分的な成功を許可）
+        
+        if success_count > 0:
+            # ページ画像を再生成
+            updated_image = app_instance.get_pdf_page_image(page_num, show_highlights=True)
+            
+            return jsonify({
+                'success': True,
+                'message': f'{success_count}/{len(adjustments)}回の調整が完了しました',
+                'updated_highlight': highlight,
+                'updated_image': updated_image,
+                'success_count': success_count,
+                'total_count': len(adjustments)
+            })
+        else:
+            return jsonify({'success': False, 'message': 'すべての調整が失敗しました'})
+    
+    except Exception as e:
+        logger.error(f"一括ハイライト調整エラー: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': f'一括調整エラー: {str(e)}'})
+
+
+@app.route('/api/highlights/select', methods=['POST'])
+def select_highlight():
+    """座標からハイライトを選択"""
+    try:
+        app_instance = get_session_app()
+        
+        if not app_instance.current_pdf_path or not app_instance.pdf_document:
+            return jsonify({'success': False, 'message': 'PDFが読み込まれていません'})
+        
+        data = request.get_json()
+        page_num = data.get('page_num', 0)
+        x = data.get('x')
+        y = data.get('y')
+        zoom = data.get('zoom', 1.0)
+        
+        # 座標補正（zoom考慮）
+        pdf_x = x / zoom
+        pdf_y = y / zoom
+        
+        # 該当するハイライトを検索
+        selected_highlight = app_instance.find_highlight_at_position(page_num, pdf_x, pdf_y)
+        
+        if selected_highlight:
+            return jsonify({
+                'success': True,
+                'highlight': selected_highlight,
+                'highlight_id': selected_highlight['id']
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'この位置にはハイライトがありません'
+            })
+    
+    except Exception as e:
+        logger.error(f"ハイライト選択エラー: {e}")
+        return jsonify({'success': False, 'message': f'ハイライト選択エラー: {str(e)}'})
 
 
 if __name__ == '__main__':
