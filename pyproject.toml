@@ -18,6 +18,10 @@ dependencies = [
     "reportlab>=4.0.0",
     "PyYAML>=6.0",
     "colorama>=0.4.0",
+    # Web関連
+    "Flask>=3.0.0",
+    "Flask-CORS>=4.0.0",
+    "Werkzeug>=3.0.0",
     # 日本語NLPモデル
     "ja-core-news-sm",
     "ja-core-news-lg",
