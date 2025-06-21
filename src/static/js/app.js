@@ -453,6 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
             highlightEl.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.selectEntity(index);
+                this.scrollToEntityInList(index);
             });
 
             return highlightEl;
@@ -557,13 +558,22 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 this.renderEntityList();
                 this.renderHighlights();
+                this.scrollToEntityInPDF(index);
             }
         }
 
         changePage(newPage) {
             if (this.currentPdfDocument && newPage > 0 && newPage <= this.totalPages) {
                 this.currentPage = newPage;
-                this.renderPage(this.currentPage);
+                this.renderPage(this.currentPage).then(() => {
+                    // ページ変更後にエンティティが選択されている場合はスクロール
+                    if (this.selectedEntityIndex >= 0) {
+                        const entity = this.detectionResults[this.selectedEntityIndex];
+                        if (entity && entity.page === this.currentPage) {
+                            this.scrollToEntityInPDF(this.selectedEntityIndex);
+                        }
+                    }
+                });
             }
         }
 
@@ -928,6 +938,61 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.elements.resultCount.textContent = this.detectionResults.length;
             }
         }
+
+        scrollToEntityInList(index) {
+            const listEl = this.elements.entityList;
+            const items = listEl.querySelectorAll('.list-group-item');
+            
+            if (index >= 0 && index < items.length) {
+                const item = items[index];
+                item.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
+            }
+        }
+
+        scrollToEntityInPDF(index) {
+            const entity = this.detectionResults[index];
+            if (!entity || !entity.coordinates || entity.page !== this.currentPage) {
+                return;
+            }
+
+            // ハイライト要素を取得
+            const highlightEl = this.elements.highlightOverlay.querySelector(`[data-index="${index}"]`);
+            if (!highlightEl) {
+                return;
+            }
+
+            // PDFビューアコンテナを取得
+            const pdfViewer = this.elements.pdfViewer;
+            const pdfContainer = this.elements.pdfCanvasContainer;
+            
+            // ハイライト要素の位置を取得
+            const highlightRect = highlightEl.getBoundingClientRect();
+            const viewerRect = pdfViewer.getBoundingClientRect();
+            
+            // ハイライトがビューアの表示範囲内にあるかチェック
+            const isVisible = (
+                highlightRect.top >= viewerRect.top &&
+                highlightRect.bottom <= viewerRect.bottom &&
+                highlightRect.left >= viewerRect.left &&
+                highlightRect.right <= viewerRect.right
+            );
+            
+            // 表示範囲外の場合はスクロール
+            if (!isVisible) {
+                // ハイライト要素がビューアの中央に来るようにスクロール
+                const targetTop = highlightRect.top - viewerRect.top + pdfViewer.scrollTop - (viewerRect.height / 2) + (highlightRect.height / 2);
+                const targetLeft = highlightRect.left - viewerRect.left + pdfViewer.scrollLeft - (viewerRect.width / 2) + (highlightRect.width / 2);
+                
+                pdfViewer.scrollTo({
+                    top: Math.max(0, targetTop),
+                    left: Math.max(0, targetLeft),
+                    behavior: 'smooth'
+                });
+            }
+        }
         
         async deleteEntity(index) {
             try {
@@ -937,9 +1002,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 
                 const entity = this.detectionResults[index];
-                const confirmMessage = `以下のエンティティを削除しますか？\n\nタイプ: ${this.getEntityTypeJapanese(entity.entity_type)}\nテキスト: ${entity.text}\nページ: ${entity.page}`;
-                
-                if (!confirm(confirmMessage)) return;
                 
                 this.showLoading(true, 'エンティティを削除中...');
                 
