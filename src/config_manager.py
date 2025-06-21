@@ -31,7 +31,6 @@ class ConfigManager:
         """最小限のデフォルト設定を返す（YAML設定がない場合のフォールバック）"""
         return {
             "enabled_entities": {},
-            # "thresholds": {"default": 0.5},  # 閾値設定を削除
             "colors": {
                 "default": {"font_color": 0, "background_color": 16777215, "highlight_index": 0}
             },
@@ -185,27 +184,6 @@ class ConfigManager:
                     enabled_entities[entity] = False
             config['enabled_entities'] = enabled_entities
         
-        # threshold引数の処理を削除（閾値機能の廃止）
-        # if 'threshold' in args and args['threshold'] is not None:
-        #     config['thresholds'] = {'default': args['threshold']}
-        
-        # thresholds引数の処理を削除（閾値機能の廃止）
-        # if 'thresholds' in args and args['thresholds']:
-        #     try:
-        #         if isinstance(args['thresholds'], str):
-        #             # JSON文字列をパース
-        #             thresholds_dict = json.loads(args['thresholds'])
-        #         else:
-        #             # 既に辞書の場合
-        #             thresholds_dict = args['thresholds']
-        #         
-        #         if isinstance(thresholds_dict, dict):
-        #             config['thresholds'] = thresholds_dict
-        #         else:
-        #             logger.warning(f"Invalid thresholds format: {args['thresholds']}")
-        #     except json.JSONDecodeError as e:
-        #         logger.warning(f"Failed to parse thresholds JSON: {e}")
-        
         # カスタム人名設定の引数処理
         if 'custom_names' in args and args['custom_names']:
             try:
@@ -326,26 +304,6 @@ class ConfigManager:
             enabled_entities = {}
         
         return [entity for entity, is_enabled in enabled_entities.items() if is_enabled]
-    
-    # get_threshold メソッドを削除（閾値機能の廃止）
-    # def get_threshold(self, entity_type: str = None) -> float:
-    #     """指定されたエンティティタイプの閾値を返す"""
-    #     thresholds = self._safe_get_config('thresholds', {'default': 0.5})
-    #     if not isinstance(thresholds, dict):
-    #         thresholds = {'default': 0.5}
-    #     
-    #     # エンティティ固有の閾値をチェック
-    #     if entity_type and entity_type in thresholds:
-    #         threshold = thresholds[entity_type]
-    #         if isinstance(threshold, (int, float)) and 0.0 <= threshold <= 1.0:
-    #             return float(threshold)
-    #     
-    #     # デフォルト閾値を返す
-    #     default_threshold = thresholds.get('default', 0.5)
-    #     if isinstance(default_threshold, (int, float)) and 0.0 <= default_threshold <= 1.0:
-    #         return float(default_threshold)
-    #     
-    #     return 0.5  # フォールバック値
     
     def get_entity_colors(self, entity_type: str) -> Dict[str, int]:
         """エンティティタイプの色設定を返す"""

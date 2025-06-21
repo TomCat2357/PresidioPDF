@@ -29,7 +29,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-                // threshold: 0.5,  // 閾値設定を削除
                 masking_method: "highlight"
             };
 
@@ -63,8 +62,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 pdfCanvas: document.getElementById('pdfCanvas'),
                 textLayer: document.getElementById('textLayer'),
                 highlightOverlay: document.getElementById('highlightOverlay'),
-                // thresholdSlider: document.getElementById('thresholdSlider'),  // 閾値スライダーを削除
-                // thresholdValue: document.getElementById('thresholdValue'),    // 閾値表示を削除
                 saveSettingsBtn: document.getElementById('saveSettingsBtn'),
                 contextMenu: document.getElementById('contextMenu'),
                 cancelSelection: document.getElementById('cancelSelection')
@@ -96,7 +93,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.zoomSlider.addEventListener('input', (e) => this.updateZoom(parseInt(e.target.value, 10)));
             this.elements.showHighlights.addEventListener('change', () => this.renderHighlights());
             this.elements.saveBtn.addEventListener('click', () => this.generateAndDownloadPdf());
-            // this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });  // 閾値スライダーを削除
             this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
 
             // --- PDFビューアのインタラクティブなイベント（整理・統合済み） ---
@@ -629,7 +625,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         saveSettings() {
             this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
-            // this.settings.threshold = parseFloat(this.elements.thresholdSlider.value);  // 閾値設定を削除
             this.settings.masking_method = document.getElementById('maskingMethod').value;
             this.updateStatus('設定を保存しました');
             const modal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
@@ -641,8 +636,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const checkbox = document.querySelector(`#settingsModal input[value="${entityValue}"]`);
                 if (checkbox) checkbox.checked = true;
             });
-            // this.elements.thresholdSlider.value = this.settings.threshold;    // 閾値スライダー設定を削除
-            // this.elements.thresholdValue.textContent = this.settings.threshold; // 閾値表示設定を削除
             document.getElementById('maskingMethod').value = this.settings.masking_method;
         }
 

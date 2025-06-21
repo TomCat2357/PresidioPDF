@@ -13,7 +13,7 @@ When working with this project, use the desktop-commander MCP server for file op
 
 **Project Root Directory:**
 ```
-C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF
+"C:\\Users\\gk3t-\\OneDrive - 又村 友幸\\working\\PresidioPDF"
 ```
 
 **Important Notes:**

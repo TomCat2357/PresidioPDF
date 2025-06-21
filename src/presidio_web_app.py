@@ -104,7 +104,6 @@ class PresidioPDFWebApp:
         self.total_pages = 0
         self.settings = {
             "entities": ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-            # "threshold": 0.5,  # 閾値設定を削除
             "masking_method": "highlight"  # highlight, annotation, both
         }
         
@@ -265,7 +264,7 @@ class PresidioPDFWebApp:
 
     def _is_duplicate_auto_detection(self, new_entity: Dict, existing_entities: List[Dict]) -> bool:
         """自動検出の重複をチェック（同じ場所・同じタイプ）"""
-        OVERLAP_THRESHOLD = 0.8  # 80%以上の重複で同じ場所と判定
+        overlap_threshold = 0.8  # 80%以上の重複で同じ場所と判定
         
         for existing in existing_entities:
             # 手動追加は重複チェック対象外
@@ -281,7 +280,7 @@ class PresidioPDFWebApp:
                     new_entity["coordinates"], existing["coordinates"]
                 )
                 
-                if overlap_ratio >= OVERLAP_THRESHOLD:
+                if overlap_ratio >= overlap_threshold:
                     return True
         
         return False
@@ -436,7 +435,7 @@ class PresidioPDFWebApp:
 
     def _is_duplicate_manual_addition(self, new_entity: Dict) -> bool:
         """手動追加の重複をチェック（手動同士の重複防止）"""
-        OVERLAP_THRESHOLD = 0.9  # 90%以上の重複で同じ場所と判定（手動はより厳格）
+        overlap_threshold = 0.9  # 90%以上の重複で同じ場所と判定（手動はより厳格）
         
         for existing in self.detection_results:
             # 手動追加のみチェック
@@ -452,7 +451,7 @@ class PresidioPDFWebApp:
                     new_entity["coordinates"], existing["coordinates"]
                 )
                 
-                if overlap_ratio >= OVERLAP_THRESHOLD:
+                if overlap_ratio >= overlap_threshold:
                     return True
         
         return False
@@ -640,8 +639,6 @@ def settings():
             data = request.get_json()
             if 'entities' in data:
                 app_instance.settings['entities'] = data['entities']
-            if 'threshold' in data:
-                app_instance.settings['threshold'] = float(data['threshold'])
             if 'masking_method' in data:
                 app_instance.settings['masking_method'] = data['masking_method']
             

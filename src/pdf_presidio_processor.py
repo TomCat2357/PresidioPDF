@@ -212,23 +212,21 @@ class PDFPresidioProcessor:
     def _add_default_recognizers(self):
         """デフォルトの認識器を追加"""
         # マイナンバー認識
-        threshold = self.config_manager.get_threshold('INDIVIDUAL_NUMBER')
         individual_number_recognizer = PatternRecognizer(
             supported_entity="INDIVIDUAL_NUMBER",
             supported_language="ja",
-            patterns=[Pattern(name="マイナンバー", score=threshold, regex="[0-9]{11,13}")],
+            patterns=[Pattern(name="マイナンバー", score=0.9, regex="[0-9]{11,13}")],
         )
         self.analyzer.registry.add_recognizer(individual_number_recognizer)
         
         # 年号認識
-        threshold = self.config_manager.get_threshold('YEAR')
         year_recognizer = PatternRecognizer(
             supported_entity="YEAR",
             supported_language="ja",
             patterns=[
                 Pattern(
                     name="年",
-                    score=threshold,
+                    score=0.8,
                     regex="([1-9][0-9]{3}年|(令和|平成|昭和|大正|明治)([1-9][0-9]?)年)",
                 )
             ],
@@ -236,14 +234,13 @@ class PDFPresidioProcessor:
         self.analyzer.registry.add_recognizer(year_recognizer)
         
         # 敬称付き人名認識
-        threshold = self.config_manager.get_threshold('PERSON')
         person_name_recognizer = PatternRecognizer(
             supported_entity="PERSON",
             supported_language="ja",
             patterns=[
                 Pattern(
                     name="名前",
-                    score=threshold,
+                    score=0.7,
                     regex=r'([\u4e00-\u9fff]+)(?:くん|さん|君|ちゃん|様)',
                 )
             ],
@@ -251,11 +248,10 @@ class PDFPresidioProcessor:
         self.analyzer.registry.add_recognizer(person_name_recognizer)
         
         # 電話番号認識
-        threshold = self.config_manager.get_threshold('PHONE_NUMBER')
         phone_recognizer = PatternRecognizer(
             supported_entity="PHONE_NUMBER",
             supported_language="ja",
-            patterns=[Pattern(name="電話番号", regex=r'0\d{1,4}[-]?\d{1,4}[-]?\d{4}', score=threshold)]
+            patterns=[Pattern(name="電話番号", regex=r'0\d{1,4}[-]?\d{1,4}[-]?\d{4}', score=0.8)]
         )
         self.analyzer.registry.add_recognizer(phone_recognizer)
     
@@ -2241,7 +2237,6 @@ class PDFPresidioProcessor:
                     'file_results': results,
                     'config_summary': {
                         'enabled_entities': self.config_manager.get_enabled_entities(),
-                        'thresholds': {entity: self.config_manager.get_threshold(entity) for entity in self.config_manager.get_enabled_entities()},
                         'masking_method': self._get_masking_method()
                     }
                 }
