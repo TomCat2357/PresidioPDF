@@ -411,6 +411,25 @@ document.addEventListener('DOMContentLoaded', () => {
         createHighlightElement(entity, index) {
             if (!entity.coordinates) return null;
 
+            // デバッグ情報を追加
+            console.log('Creating highlight for entity:', {
+                text: entity.text,
+                hasLineRects: !!(entity.line_rects),
+                lineRectsCount: entity.line_rects ? entity.line_rects.length : 0,
+                coordinates: entity.coordinates
+            });
+
+            // 複数行矩形がある場合、または改行を含むテキストの場合は複数の矩形を作成
+            const isMultiLine = (entity.line_rects && entity.line_rects.length > 1) || 
+                               entity.text.includes('\n') || 
+                               (entity.start_line !== entity.end_line);
+            
+            if (isMultiLine) {
+                console.log('Using multi-line highlight for:', entity.text);
+                return this.createMultiLineHighlight(entity, index);
+            }
+
+            // 単一矩形の場合は従来通り
             const highlightEl = document.createElement('div');
             highlightEl.className = 'highlight-rect';
             highlightEl.classList.add(entity.entity_type.toLowerCase().replace(/_/g, '-'));
@@ -453,6 +472,103 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             return highlightEl;
+        }
+
+        createMultiLineHighlight(entity, index) {
+            // 複数行ハイライト用のコンテナを作成
+            const container = document.createElement('div');
+            container.className = 'multi-line-highlight';
+            container.dataset.index = index;
+
+            const pageHeight = this.viewport.viewBox[3];
+
+            // line_rectsが存在しない場合は、テキストを行分割して推定矩形を作成
+            let lineRects = entity.line_rects;
+            if (!lineRects || lineRects.length === 0) {
+                lineRects = this.estimateLineRects(entity);
+            }
+
+            // 各行の矩形を作成
+            lineRects.forEach((lineRect, lineIndex) => {
+                const highlightEl = document.createElement('div');
+                highlightEl.className = 'highlight-rect';
+                highlightEl.classList.add(entity.entity_type.toLowerCase().replace(/_/g, '-'));
+
+                if (index === this.selectedEntityIndex) {
+                    highlightEl.classList.add('selected');
+                }
+
+                const pdfRect = [
+                    lineRect.rect.x0,
+                    pageHeight - lineRect.rect.y1,
+                    lineRect.rect.x1,
+                    pageHeight - lineRect.rect.y0
+                ];
+
+                const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
+                
+                const left = Math.min(viewportRect[0], viewportRect[2]);
+                const top = Math.min(viewportRect[1], viewportRect[3]);
+                const right = Math.max(viewportRect[0], viewportRect[2]);
+                const bottom = Math.max(viewportRect[1], viewportRect[3]);
+                
+                const width = right - left;
+                const height = bottom - top;
+                
+                const minHeight = 12;
+                const adjustedHeight = Math.max(height, minHeight);
+
+                highlightEl.style.left = `${left}px`;
+                highlightEl.style.top = `${top}px`;
+                highlightEl.style.width = `${width}px`;
+                highlightEl.style.height = `${adjustedHeight}px`;
+                highlightEl.style.position = 'absolute';
+
+                highlightEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.selectEntity(index);
+                    this.scrollToEntityInList(index);
+                });
+
+                container.appendChild(highlightEl);
+            });
+
+            return container;
+        }
+
+        estimateLineRects(entity) {
+            // テキストが改行を含む場合、各行の矩形を推定
+            const lines = entity.text.split('\n');
+            const lineRects = [];
+            
+            if (lines.length > 1) {
+                const baseRect = entity.coordinates;
+                const lineHeight = (baseRect.y1 - baseRect.y0) / lines.length;
+                
+                lines.forEach((lineText, index) => {
+                    if (lineText.trim()) {
+                        lineRects.push({
+                            rect: {
+                                x0: baseRect.x0,
+                                y0: baseRect.y0 + (index * lineHeight),
+                                x1: baseRect.x1,
+                                y1: baseRect.y0 + ((index + 1) * lineHeight)
+                            },
+                            text: lineText,
+                            line_number: index + 1
+                        });
+                    }
+                });
+            } else {
+                // 単一行だが複数行として扱われている場合
+                lineRects.push({
+                    rect: entity.coordinates,
+                    text: entity.text,
+                    line_number: 1
+                });
+            }
+            
+            return lineRects;
         }
 
         async detectEntities() {
@@ -643,23 +759,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return mapping[entityType] || entityType;
         }
 
+        formatCoordinateInfo(entity) {
+            // 座標情報がある場合、PDF座標系(0,0-1.0,1.0)で開始座標のみ表示
+            if (entity.coordinates && entity.coordinates.x0 !== undefined) {
+                const x0 = (entity.coordinates.x0 / 1000).toFixed(3); // 座標を正規化
+                const y0 = (entity.coordinates.y0 / 1000).toFixed(3);
+                return `座標: (${x0},${y0})`;
+            }
+            return '';
+        }
+
         formatPositionInfo(entity) {
-            // 詳細位置情報がある場合
-            if (entity.start_page !== undefined && entity.start_line !== undefined) {
-                if (entity.start_page === entity.end_page && entity.start_line === entity.end_line) {
-                    // 同一ページ、同一行の場合
-                    return `P${entity.start_page} L${entity.start_line} (${entity.start_char}-${entity.end_char}文字目)`;
-                } else if (entity.start_page === entity.end_page) {
-                    // 同一ページ、複数行にまたがる場合
-                    return `P${entity.start_page} L${entity.start_line}:${entity.start_char}-L${entity.end_line}:${entity.end_char}`;
-                } else {
-                    // 複数ページにまたがる場合
-                    return `P${entity.start_page}L${entity.start_line}:${entity.start_char}-P${entity.end_page}L${entity.end_line}:${entity.end_char}`;
-                }
+            // ページ数のみを表示
+            const page = entity.start_page || entity.page || 1;
+            let positionInfo = `P${page}`;
+            
+            // 座標情報を追加
+            const coordinateInfo = this.formatCoordinateInfo(entity);
+            if (coordinateInfo) {
+                positionInfo += ` ${coordinateInfo}`;
             }
             
-            // フォールバック: 従来のページ情報
-            return `ページ: ${entity.page || 1}`;
+            return positionInfo;
         }
 
         updateStatus(message, isError = false) {
@@ -806,57 +927,76 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         async addManualEntity(entityType) {
-            if (!this.currentSelection || !this.currentSelection.text.trim()) {
+            if (!this.currentSelection || !this.currentSelection.text.trim() || !this.viewport) {
                 return;
             }
-            if (!this.viewport) {
-                return;
-            }
-
+            
             console.log('Adding manual entity:', {
                 entityType,
                 text: this.currentSelection.text,
                 selection: this.currentSelection
             });
 
-            // 座標の安全な計算（エラーが出ても続行）
-            let coordinates = {
-                x0: 100,
-                y0: 100,
-                x1: 200,
-                y1: 120
-            };
-            
-            if (this.currentSelection.pdfX !== undefined && this.currentSelection.pdfY !== undefined && 
-                this.currentSelection.rect && this.viewport) {
-                
+            const referenceRect = this.elements.textLayer.getBoundingClientRect();
+            const pageHeight = this.viewport.viewBox[3];
+
+            // Get all rects for the selection
+            const clientRects = Array.from(this.currentSelection.range.getClientRects());
+
+            const line_rects = clientRects.map(rect => {
                 const viewportRect = [
-                    this.currentSelection.pdfX || 0,
-                    this.currentSelection.pdfY || 0,
-                    (this.currentSelection.pdfX || 0) + (this.currentSelection.rect?.width || 100),
-                    (this.currentSelection.pdfY || 0) + (this.currentSelection.rect?.height || 20)
+                    rect.left - referenceRect.left,
+                    rect.top - referenceRect.top,
+                    rect.right - referenceRect.left,
+                    rect.bottom - referenceRect.top
                 ];
-                
+
                 const pdfPoint1 = this.viewport.convertToPdfPoint(viewportRect[0], viewportRect[1]);
                 const pdfPoint2 = this.viewport.convertToPdfPoint(viewportRect[2], viewportRect[3]);
-                const pageHeight = this.viewport.viewBox[3];
-                
-                coordinates = {
-                    x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
-                    y0: pageHeight - Math.max(pdfPoint1[1], pdfPoint2[1]),
-                    x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
-                    y1: pageHeight - Math.min(pdfPoint1[1], pdfPoint2[1])
+
+                return {
+                    rect: {
+                        x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
+                        y0: pageHeight - Math.max(pdfPoint1[1], pdfPoint2[1]),
+                        x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
+                        y1: pageHeight - Math.min(pdfPoint1[1], pdfPoint2[1])
+                    },
+                    text: '', // Cannot get text per line from clientRects
+                    line_number: 0 // Cannot get line number easily
                 };
-            }
-            
+            });
+
+            // The main 'coordinates' can be the overall bounding box
+            const mainRect = this.currentSelection.rect;
+            const mainViewportRect = [
+                mainRect.left - referenceRect.left,
+                mainRect.top - referenceRect.top,
+                mainRect.right - referenceRect.left,
+                mainRect.bottom - referenceRect.top
+            ];
+            const mainPdfPoint1 = this.viewport.convertToPdfPoint(mainViewportRect[0], mainViewportRect[1]);
+            const mainPdfPoint2 = this.viewport.convertToPdfPoint(mainViewportRect[2], mainViewportRect[3]);
+            const coordinates = {
+                x0: Math.min(mainPdfPoint1[0], mainPdfPoint2[0]),
+                y0: pageHeight - Math.max(mainPdfPoint1[1], mainPdfPoint2[1]),
+                x1: Math.max(mainPdfPoint1[0], mainPdfPoint2[0]),
+                y1: pageHeight - Math.min(mainPdfPoint1[1], mainPdfPoint2[1])
+            };
+
             const newEntity = {
                 entity_type: entityType,
                 text: this.currentSelection.text,
-                start: 0,
-                end: this.currentSelection.text.length,
                 page: this.currentPage,
                 coordinates: coordinates,
-                manual: true
+                line_rects: line_rects,
+                manual: true,
+                // 詳細位置情報を追加（手動追加でも表示するため）
+                start_page: this.currentPage,
+                end_page: this.currentPage,
+                start_line: 1, // デフォルト値（テキスト位置が不明な場合）
+                end_line: 1,
+                start: 0,
+                end: this.currentSelection.text.length,
             };
 
             console.log('Sending entity to server:', newEntity);
@@ -870,7 +1010,6 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(response => response.json())
             .then(data => {
                 console.log('Server response:', data);
-                
                 if (data.success && data.entity) {
                     // UIの更新
                     this.detectionResults.push(data.entity);
@@ -879,11 +1018,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     this.updateResultCount();
                     this.updateStatus(`手動追加: ${this.getEntityTypeLabel(entityType)} "${this.currentSelection.text}"`);
                     console.log('Manual entity added successfully');
+                } else if (data.message) {
+                    this.showError(data.message);
                 }
             })
             .catch(error => {
-                console.log('Request failed but continuing silently:', error);
-                // エラーメッセージは表示しない
+                console.error('Add highlight error:', error);
+                this.showError('ハイライトの追加に失敗しました。');
             });
 
             // 常に選択をクリア

@@ -1642,6 +1642,81 @@ class PDFPresidioProcessor:
                 'error': str(e)
             }
     
+    def _get_text_line_rects(self, page, text: str, start_pos: int, end_pos: int) -> List[Dict]:
+        """複数行テキストの各行の矩形座標を取得"""
+        try:
+            line_rects = []
+            text_instances = page.get_text("words")
+            
+            # テキストを単語単位で検索し、各行の矩形を構築
+            current_text = ""
+            current_y = None
+            current_line_words = []
+            
+            for word_info in text_instances:
+                word_text = word_info[4]
+                word_rect = fitz.Rect(word_info[:4])
+                
+                # テキストに含まれる単語かどうかチェック
+                if word_text in text:
+                    # 新しい行の開始を検出（Y座標の変化）
+                    if current_y is not None and abs(word_rect.y0 - current_y) > 5:
+                        # 前の行の矩形を確定
+                        if current_line_words:
+                            line_rect = self._merge_word_rects(current_line_words)
+                            line_rects.append({
+                                'rect': {
+                                    'x0': float(line_rect.x0),
+                                    'y0': float(line_rect.y0),
+                                    'x1': float(line_rect.x1),
+                                    'y1': float(line_rect.y1)
+                                },
+                                'text': current_text,
+                                'line_number': len(line_rects) + 1
+                            })
+                        
+                        # 新しい行を開始
+                        current_line_words = [word_rect]
+                        current_text = word_text
+                        current_y = word_rect.y0
+                    else:
+                        # 同じ行に単語を追加
+                        current_line_words.append(word_rect)
+                        current_text += " " + word_text
+                        current_y = word_rect.y0
+            
+            # 最後の行を追加
+            if current_line_words:
+                line_rect = self._merge_word_rects(current_line_words)
+                line_rects.append({
+                    'rect': {
+                        'x0': float(line_rect.x0),
+                        'y0': float(line_rect.y0),
+                        'x1': float(line_rect.x1),
+                        'y1': float(line_rect.y1)
+                    },
+                    'text': current_text,
+                    'line_number': len(line_rects) + 1
+                })
+            
+            return line_rects
+            
+        except Exception as e:
+            logger.debug(f"テキスト行矩形取得エラー: {e}")
+            return []
+    
+    def _merge_word_rects(self, word_rects: List[fitz.Rect]) -> fitz.Rect:
+        """複数の単語矩形を結合して行矩形を作成"""
+        if not word_rects:
+            return fitz.Rect(0, 0, 0, 0)
+        
+        min_x0 = min(rect.x0 for rect in word_rects)
+        min_y0 = min(rect.y0 for rect in word_rects)
+        max_x1 = max(rect.x1 for rect in word_rects)
+        max_y1 = max(rect.y1 for rect in word_rects)
+        
+        return fitz.Rect(min_x0, min_y0, max_x1, max_y1)
+
     def _get_detailed_text_position(self, page, rect: fitz.Rect, covered_text: str, line_num: int, char_start: int) -> Dict:
         """より詳細なテキスト位置情報を取得"""
         try:

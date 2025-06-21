@@ -207,6 +207,16 @@ class PresidioPDFWebApp:
                 # エンティティタイプでフィルタリング（閾値チェックを削除）
                 if entity['entity_type'] in self.settings['entities']:
                     
+                    # 複数行矩形情報を取得
+                    line_rects = []
+                    if hasattr(self, 'processor') and self.processor:
+                        try:
+                            line_rects = self.processor._get_text_line_rects(
+                                page, entity['text'], 0, len(entity['text'])
+                            )
+                        except Exception as e:
+                            logger.debug(f"複数行矩形取得エラー: {e}")
+
                     result = {
                         "entity_type": str(entity.get("entity_type", "UNKNOWN")),
                         "text": str(entity.get("text", "")),
@@ -226,6 +236,7 @@ class PresidioPDFWebApp:
                             "x1": float(rect.x1),
                             "y1": float(rect.y1)
                         },
+                        "line_rects": line_rects,  # 複数行矩形情報を追加
                         "manual": False  # 自動検出フラグ
                     }
                     
@@ -673,14 +684,37 @@ def add_highlight():
         if not text:
             return jsonify({'success': False, 'message': 'テキストが指定されていません'})
         
+        # フロントエンドから渡されたline_rectsを優先的に使用
+        line_rects = data.get('line_rects', [])
+
+        # line_rectsがフロントエンドから提供されない場合のフォールバック
+        if not line_rects and hasattr(app_instance, 'processor') and app_instance.processor:
+            try:
+                pdf_doc = fitz.open(app_instance.current_pdf_path)
+                page = pdf_doc[page_num - 1]
+                # テキストの各行矩形を取得
+                line_rects = app_instance.processor._get_text_line_rects(
+                    page, text, 0, len(text)
+                )
+                pdf_doc.close()
+            except Exception as e:
+                logger.debug(f"複数行矩形取得エラー（フォールバック）: {e}")
+
         new_entity = {
             'entity_type': entity_type,
             'text': text,
             'page': page_num,
-            'start': 0, # 手動追加のためオフセットは0
-            'end': len(text),
+            'start': data.get('start', 0),
+            'end': data.get('end', len(text)),
             'coordinates': coordinates,
-            'manual': True  # 手動追加フラグ
+            'line_rects': line_rects,  # 複数行矩形情報を追加
+            'manual': True, # 手動追加フラグ
+            'start_page': data.get('start_page', page_num),
+            'end_page': data.get('end_page', page_num),
+            'start_line': data.get('start_line', 0),
+            'end_line': data.get('end_line', 0),
+            'start_char': data.get('start_char', 0),
+            'end_char': data.get('end_char', len(text))
         }
         
         # 手動追加の重複チェック
