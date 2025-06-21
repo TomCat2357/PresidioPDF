@@ -28,7 +28,6 @@ class HighlightRegion:
     quad: fitz.Quad  # ハイライト座標
     annot: fitz.Annot  # 注釈オブジェクト
     entity_type: str   # エンティティタイプ
-    confidence: float  # 信頼度
     text: str         # ハイライトされたテキスト
     original_start: int  # 元の開始位置
     original_end: int    # 元の終了位置
@@ -60,18 +59,7 @@ class InteractivePDFEditor:
                 if annot.type[1] == "Highlight":
                     # 注釈からメタデータを取得
                     content = annot.content or ""
-                    entity_type = "UNKNOWN"
-                    confidence = 0.0
-                    
-                    # コンテンツからエンティティタイプと信頼度を抽出
-                    if ":" in content:
-                        parts = content.split(":")
-                        if len(parts) >= 2:
-                            entity_type = parts[0].strip()
-                            try:
-                                confidence = float(parts[1].strip().replace("%", "")) / 100
-                            except ValueError:
-                                confidence = 0.0
+                    entity_type = content.split(":")[0].strip() if ":" in content else "UNKNOWN"
                     
                     # ハイライトされたテキストを取得
                     quads = annot.vertices
@@ -84,7 +72,6 @@ class InteractivePDFEditor:
                             quad=quad,
                             annot=annot,
                             entity_type=entity_type,
-                            confidence=confidence,
                             text=text,
                             original_start=0,  # 後で計算
                             original_end=0     # 後で計算
@@ -272,7 +259,7 @@ class InteractivePDFEditor:
             
             # 新しいハイライト注釈を作成
             new_annot = page.add_highlight_annot(new_quads)
-            new_annot.set_content(f"{highlight.entity_type}: {highlight.confidence:.2%}")
+            new_annot.set_content(f"{highlight.entity_type}")
             new_annot.set_info(title="Presidio Detection")
             new_annot.update()
             

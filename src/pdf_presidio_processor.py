@@ -255,20 +255,17 @@ class PDFPresidioProcessor:
         )
         self.analyzer.registry.add_recognizer(phone_recognizer)
     
-    def _detect_proper_nouns(self, text: str, score: float = None) -> List[RecognizerResult]:
+    def _detect_proper_nouns(self, text: str) -> List[RecognizerResult]:
         """固有名詞を検出（大容量テキスト対応）"""
-        if score is None:
-            score = self.config_manager.get_threshold('PROPER_NOUN')
-        
         # テキストサイズチェック
         text_bytes = len(text.encode('utf-8'))
         if text_bytes > 45000:
             logger.debug(f"固有名詞検出: 大容量テキスト ({text_bytes:,} bytes) - チャンク処理")
-            return self._detect_proper_nouns_chunked(text, score)
+            return self._detect_proper_nouns_chunked(text)
         
-        return self._detect_proper_nouns_single(text, score)
+        return self._detect_proper_nouns_single(text)
 
-    def _detect_proper_nouns_single(self, text: str, score: float) -> List[RecognizerResult]:
+    def _detect_proper_nouns_single(self, text: str) -> List[RecognizerResult]:
         """単一テキストの固有名詞検出"""
         results = []
         doc = self.nlp(text)
@@ -279,14 +276,14 @@ class PDFPresidioProcessor:
                     entity_type="PROPER_NOUN",
                     start=token.idx,
                     end=token.idx + len(token.text),
-                    score=score,
+                    score=0.85,
                     recognition_metadata={'recognizer_name': 'ProperNounRecognizer'}
                 )
                 results.append(result)
         
         return results
 
-    def _detect_proper_nouns_chunked(self, text: str, score: float) -> List[RecognizerResult]:
+    def _detect_proper_nouns_chunked(self, text: str) -> List[RecognizerResult]:
         """チャンク分割による大容量テキストの固有名詞検出"""
         chunks = self._chunk_text(text)
         all_results = []
@@ -296,7 +293,7 @@ class PDFPresidioProcessor:
             start_offset = chunk_info['start_offset']
             
             try:
-                chunk_results = self._detect_proper_nouns_single(chunk_text, score)
+                chunk_results = self._detect_proper_nouns_single(chunk_text)
                 
                 # チャンクの結果の位置を全体テキストでの位置に調整
                 for result in chunk_results:
@@ -584,14 +581,12 @@ class PDFPresidioProcessor:
         analyzer_results = self.analyzer.analyze(text=text, language="ja", entities=entities)
         
         if "PROPER_NOUN" in entities:
-            # PROPER_NOUNのスコアは設定に依存せず固定値とします
-            proper_noun_results = self._detect_proper_nouns(text, score=0.85)
+            proper_noun_results = self._detect_proper_nouns(text)
             analyzer_results.extend(proper_noun_results)
         
         results = []
         for result in analyzer_results:
             if result.entity_type in entities:
-                # 信頼度チェックを削除
                 # エンティティ除外チェック
                 entity_text = text[result.start:result.end]
                 
@@ -604,7 +599,6 @@ class PDFPresidioProcessor:
                         text, result.start, result.end, refined_text
                     )
                     
-                    # 'score' を結果から削除し、位置情報を常に含める
                     results.append({
                         'start': refined_start,
                         'end': refined_end,
@@ -616,7 +610,6 @@ class PDFPresidioProcessor:
         
         # 重複除去処理（オプション）
         if self.config_manager.is_deduplication_enabled():
-            # スコアベースの重複除去は利用できなくなるため、他の基準を利用
             results = self._deduplicate_entities(results)
         
         return sorted(results, key=lambda x: x['start'])
@@ -701,12 +694,6 @@ class PDFPresidioProcessor:
     
     def _should_current_entity_win(self, current_entity: Dict, existing_entity: Dict, priority: str) -> bool:
         """2つのエンティティを比較して、現在のエンティティが優先されるべきかを判定"""
-        # score は廃止されたため、scoreに依存しないロジックに修正
-        if priority == "score":
-            # スコアが利用できないため、他の基準にフォールバック (例: wider_range)
-            priority = "wider_range"
-            logger.warning("優先順位基準 'score' は廃止されました。'wider_range' を使用します。")
-
         if priority == "wider_range":
             # 広い範囲優先
             current_range = current_entity['end'] - current_entity['start']
@@ -1241,7 +1228,6 @@ class PDFPresidioProcessor:
             return ""
         
         entity_type = entity['entity_type']
-        # confidence = entity.get('score', 0.0)  # 信頼度スコアは廃止
         text = entity.get('text', '')
         
         # エンティティタイプの日本語名
@@ -2326,8 +2312,8 @@ class PDFPresidioProcessor:
               help='操作モード (clear_all: 全削除のみ, append: 追記, reset_and_append: 全削除後追記)')
 # 処理設定オプション
 @click.option('--spacy-model', '-m', type=str, help='使用するspaCyモデル名 (ja_core_news_sm, ja_core_news_md, ja_ginza, ja_ginza_electra)')
-@click.option('--deduplication-mode', type=click.Choice(['score', 'wider_range', 'narrower_range', 'entity_type']), 
-              help='重複除去モード (score: スコア優先, wider_range: 広い範囲優先, narrower_range: 狭い範囲優先, entity_type: エンティティタイプ優先)')
+@click.option('--deduplication-mode', type=click.Choice(['wider_range', 'narrower_range', 'entity_type']),
+              help='重複除去モード (wider_range: 広い範囲優先, narrower_range: 狭い範囲優先, entity_type: エンティティタイプ優先)')
 @click.option('--deduplication-overlap-mode', type=click.Choice(['contain_only', 'partial_overlap']),
               help='重複判定モード (contain_only: 包含関係のみ, partial_overlap: 一部重なりも含む)')
 def main(path, config, verbose, output_dir, read_mode, read_report, restore_mode, report_file, masking_method, masking_text_mode, operation_mode, spacy_model, deduplication_mode, deduplication_overlap_mode):

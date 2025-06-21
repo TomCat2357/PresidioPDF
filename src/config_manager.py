@@ -57,7 +57,7 @@ class ConfigManager:
                 "enabled": False,  # デフォルトは無効
                 "method": "overlap",  # overlap（重複）, exact（完全一致）, contain（包含）
                 "overlap_mode": "partial_overlap",  # contain_only（包含のみ）, partial_overlap（一部重なりも含む）
-                "priority": "score",  # score（スコア優先）, wider_range（広い範囲優先）, narrower_range（狭い範囲優先）, entity_type（エンティティタイプ優先）
+                "priority": "wider_range",  # wider_range（広い範囲優先）, narrower_range（狭い範囲優先）, entity_type（エンティティタイプ優先）
                 "entity_priority_order": ["INDIVIDUAL_NUMBER", "PHONE_NUMBER", "PERSON", "LOCATION", "DATE_TIME", "YEAR", "PROPER_NOUN"]  # エンティティタイプ優先時の順序
             },
             "exclusions": {
@@ -563,7 +563,7 @@ class ConfigManager:
     
     def get_deduplication_priority(self) -> str:
         """重複除去の優先順位基準を返す"""
-        return self._safe_get_config('deduplication.priority', 'score')
+        return self._safe_get_config('deduplication.priority', 'wider_range')
     
     def get_entity_priority_order(self) -> List[str]:
         """エンティティタイプの優先順序を返す"""

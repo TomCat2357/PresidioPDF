@@ -210,7 +210,6 @@ class PresidioPDFWebApp:
                     result = {
                         "entity_type": str(entity.get("entity_type", "UNKNOWN")),
                         "text": str(entity.get("text", "")),
-                        # "confidence": float(entity.get("score", 0.0)),  # 信頼度を削除
                         "page": page_num,
                         # 詳細な位置情報を追加
                         "start_page": entity.get('position_details', {}).get('start_page'),
@@ -397,15 +396,13 @@ class PresidioPDFWebApp:
                 if masking_method in ["highlight", "both"]:
                     highlight = page.add_highlight_annot(rect)
                     highlight.set_colors(stroke=color)
-                    highlight.set_info(title=f"{self.get_entity_type_japanese(entity['entity_type'])}", 
-                                       content=f"テキスト: {entity['text']}\n信頼度: {entity['confidence']:.2f}")
+                    highlight.set_info(title=f"{self.get_entity_type_japanese(entity['entity_type'])}",
+                                       content=f"テキスト: {entity['text']}")
                     highlight.update()
 
                 if masking_method in ["annotation", "both"]:
-                    annotation = page.add_text_annot(rect.tl, 
-                                       f"{self.get_entity_type_japanese(entity['entity_type'])}")
-                    annotation.set_info(title="個人情報検出", 
-                                        content=f"タイプ: {entity['entity_type']}\nテキスト: {entity['text']}\n信頼度: {entity['confidence']:.2f}")
+                    annotation = page.add_text_annot(rect.tl, f"{self.get_entity_type_japanese(entity['entity_type'])}")
+                    annotation.set_info(title="個人情報検出", content=f"タイプ: {entity['entity_type']}\nテキスト: {entity['text']}")
                     annotation.update()
             
             new_doc.saveIncr() # 変更を追記保存
@@ -679,7 +676,6 @@ def add_highlight():
         new_entity = {
             'entity_type': entity_type,
             'text': text,
-            'confidence': 1.0,
             'page': page_num,
             'start': 0, # 手動追加のためオフセットは0
             'end': len(text),

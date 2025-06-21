@@ -510,7 +510,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     item.classList.add('active');
                 }
                 
-                // const confidence = (entity.confidence * 100).toFixed(0);  // 信頼度を削除
                 const isManual = entity.manual || false;
                 const manualBadge = isManual ? '<span class="badge bg-success ms-1">手動</span>' : '<span class="badge bg-info ms-1">自動</span>';
                 
@@ -855,7 +854,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 text: this.currentSelection.text,
                 start: 0,
                 end: this.currentSelection.text.length,
-                // confidence: 1.0,  // 信頼度を削除
                 page: this.currentPage,
                 coordinates: coordinates,
                 manual: true

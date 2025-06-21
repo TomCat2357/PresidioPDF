@@ -136,13 +136,11 @@ class PDFInteractiveGUI:
         list_container = ttk.Frame(list_frame)
         list_container.pack(fill=tk.BOTH, expand=True)
         
-        self.highlight_tree = ttk.Treeview(list_container, columns=("type", "confidence", "text"), show="headings", height=15)
+        self.highlight_tree = ttk.Treeview(list_container, columns=("type", "text"), show="headings", height=15)
         self.highlight_tree.heading("type", text="タイプ")
-        self.highlight_tree.heading("confidence", text="信頼度")
         self.highlight_tree.heading("text", text="テキスト")
         
         self.highlight_tree.column("type", width=80)
-        self.highlight_tree.column("confidence", width=60)
         self.highlight_tree.column("text", width=150)
         
         list_scrollbar = ttk.Scrollbar(list_container, orient=tk.VERTICAL, command=self.highlight_tree.yview)
@@ -317,7 +315,6 @@ class PDFInteractiveGUI:
         
         highlight = self.editor.selected_highlight
         info_text = f"""エンティティタイプ: {highlight.entity_type}
-信頼度: {highlight.confidence:.2%}
 ページ: {highlight.page_num + 1}
 テキスト: {highlight.text}
 
@@ -348,7 +345,6 @@ class PDFInteractiveGUI:
         for i, highlight in enumerate(self.editor.highlights):
             self.highlight_tree.insert("", tk.END, values=(
                 highlight.entity_type,
-                f"{highlight.confidence:.1%}",
                 highlight.text[:30] + "..." if len(highlight.text) > 30 else highlight.text
             ), tags=(str(i),))
     
