@@ -20,7 +20,6 @@ from PIL import Image
 import fitz  # PyMuPDF
 
 # 自プロジェクトのモジュールをインポート
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 try:
     from pdf_presidio_processor import PDFPresidioProcessor
     from config_manager import ConfigManager
@@ -79,7 +78,7 @@ class PresidioPDFWebApp:
         self.config_file_path = None
         if PRESIDIO_AVAILABLE:
             try:
-                default_config_path = os.path.join(os.path.dirname(__file__), "config", "low_threshold.yaml")
+                default_config_path = os.path.join(os.path.dirname(__file__), "..", "config", "low_threshold.yaml")
                 if os.path.exists(default_config_path):
                     config_manager = ConfigManager(config_file=default_config_path)
                     self.config_file_path = default_config_path
