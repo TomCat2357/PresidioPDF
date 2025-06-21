@@ -3,578 +3,467 @@
  * JavaScript フロントエンド（PDF.js統合版）
  */
 
-// PDF.js設定
-console.log('Checking PDF.js availability:', typeof pdfjsLib);
-if (typeof pdfjsLib !== 'undefined') {
+document.addEventListener('DOMContentLoaded', () => {
+    // PDF.jsのグローバルワーカーを設定
+    if (typeof pdfjsLib === 'undefined') {
+        console.error('PDF.js library not found!');
+        return;
+    }
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    console.log('PDF.js worker configured');
-} else {
-    console.error('PDF.js library not found!');
-}
 
-class PresidioPDFWebApp {
-    constructor() {
-        this.currentPdfDocument = null; // PDF.js document
-        this.currentPdf = null;
-        this.currentPage = 0;
-        this.totalPages = 0;
-        this.zoomLevel = 100;
-        this.detectionResults = [];
-        this.selectedEntityIndex = -1;
-        this.selectedHighlight = null;
-        this.editMode = false;
-        this.settings = {
-            entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-            threshold: 0.5,
-            masking_method: "highlight"
-        };
-        
-        // 手動追加関連の状態
-        this.manualAddMode = '';  // 選択中のエンティティタイプ
-        this.currentSelection = null;
-        
-        // PDF.js関連
-        this.pdfCanvas = null;
-        this.pdfContext = null;
-        this.textLayer = null;
-        this.highlightOverlay = null;
-        this.viewport = null; // ビューポートを保持
-        
-        this.initializeElements();
-        this.bindEvents();
-        this.loadSettings();
-        this.setupZoomSlider();
-        this.initializePdfViewer();
-    }
-    
-    initializeElements() {
-        this.elements = {
-            uploadArea: document.getElementById('uploadArea'),
-            pdfFileInput: document.getElementById('pdfFileInput'),
-            selectedFileName: document.getElementById('selectedFileName'),
-            detectBtn: document.getElementById('detectBtn'),
-            settingsBtn: document.getElementById('settingsBtn'),
-            prevPageBtn: document.getElementById('prevPageBtn'),
-            nextPageBtn: document.getElementById('nextPageBtn'),
-            pageInfo: document.getElementById('pageInfo'),
-            zoomSlider: document.getElementById('zoomSlider'),
-            zoomValue: document.getElementById('zoomValue'),
-            showHighlights: document.getElementById('showHighlights'),
-            zoomDisplay: document.getElementById('zoomDisplay'),
-            entityList: document.getElementById('entityList'),
-            resultCount: document.getElementById('resultCount'),
-            saveBtn: document.getElementById('saveBtn'),
-            statusMessage: document.getElementById('statusMessage'),
-            loadingOverlay: document.getElementById('loadingOverlay'),
-            pdfViewer: document.getElementById('pdfViewer'),
-            pdfPlaceholder: document.getElementById('pdfPlaceholder'),
-            pdfCanvasContainer: document.getElementById('pdfCanvasContainer'),
-            pdfCanvas: document.getElementById('pdfCanvas'),
-            textLayer: document.getElementById('textLayer'),
-            highlightOverlay: document.getElementById('highlightOverlay'),
-            thresholdSlider: document.getElementById('thresholdSlider'),
-            thresholdValue: document.getElementById('thresholdValue'),
-            saveSettingsBtn: document.getElementById('saveSettingsBtn'),
-            clearSelectionBtn: document.getElementById('clearSelectionBtn'),
-            deleteHighlightBtn: document.getElementById('deleteHighlightBtn'),
-            contextMenu: document.getElementById('contextMenu'),
-            cancelSelection: document.getElementById('cancelSelection')
-        };
-    }
-    
-    initializePdfViewer() {
-        this.pdfCanvas = this.elements.pdfCanvas;
-        if (this.pdfCanvas) {
-            this.pdfContext = this.pdfCanvas.getContext('2d');
+    class PresidioPDFWebApp {
+        constructor() {
+            this.currentPdfDocument = null;
+            this.currentPdfPath = null;
+            this.currentPage = 1;
+            this.totalPages = 0;
+            this.zoomLevel = 100;
+            this.detectionResults = [];
+            this.selectedEntityIndex = -1;
+            this.currentSelection = null;
+            this.viewport = null;
+
+            this.settings = {
+                entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
+                threshold: 0.5,
+                masking_method: "highlight"
+            };
+
+            this.initializeElements();
+            this.bindEvents();
+            this.loadSettings();
         }
-        this.textLayer = this.elements.textLayer;
-        this.highlightOverlay = this.elements.highlightOverlay;
-    }
-    
-    bindEvents() {
-        this.elements.uploadArea.addEventListener('click', () => this.elements.pdfFileInput.click());
-        this.elements.pdfFileInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
-        this.elements.uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            this.elements.uploadArea.classList.add('dragover');
-        });
-        this.elements.uploadArea.addEventListener('dragleave', () => this.elements.uploadArea.classList.remove('dragover'));
-        this.elements.uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            this.elements.uploadArea.classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0) this.handleFileSelect(files[0]);
-        });
 
-        this.elements.detectBtn.addEventListener('click', () => this.detectEntities());
-        this.elements.prevPageBtn.addEventListener('click', () => this.previousPage());
-        this.elements.nextPageBtn.addEventListener('click', () => this.nextPage());
-        this.elements.zoomSlider.addEventListener('input', (e) => this.updateZoom(parseInt(e.target.value)));
-        this.elements.showHighlights.addEventListener('change', () => this.renderHighlights());
-        this.elements.saveBtn.addEventListener('click', () => this.savePdf());
-        this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });
-        this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
-        this.elements.clearSelectionBtn?.addEventListener('click', () => this.clearSelection());
-        this.elements.deleteHighlightBtn?.addEventListener('click', () => this.deleteHighlight());
-        document.addEventListener('keydown', (e) => this.handleKeyDown(e));
+        initializeElements() {
+            this.elements = {
+                uploadArea: document.getElementById('uploadArea'),
+                pdfFileInput: document.getElementById('pdfFileInput'),
+                selectedFileName: document.getElementById('selectedFileName'),
+                detectBtn: document.getElementById('detectBtn'),
+                settingsBtn: document.getElementById('settingsBtn'),
+                prevPageBtn: document.getElementById('prevPageBtn'),
+                nextPageBtn: document.getElementById('nextPageBtn'),
+                pageInfo: document.getElementById('pageInfo'),
+                zoomSlider: document.getElementById('zoomSlider'),
+                zoomValue: document.getElementById('zoomValue'),
+                showHighlights: document.getElementById('showHighlights'),
+                zoomDisplay: document.getElementById('zoomDisplay'),
+                entityList: document.getElementById('entityList'),
+                resultCount: document.getElementById('resultCount'),
+                saveBtn: document.getElementById('saveBtn'),
+                statusMessage: document.getElementById('statusMessage'),
+                loadingOverlay: document.getElementById('loadingOverlay'),
+                pdfViewer: document.getElementById('pdfViewer'),
+                pdfPlaceholder: document.getElementById('pdfPlaceholder'),
+                pdfCanvasContainer: document.getElementById('pdfCanvasContainer'),
+                pdfCanvas: document.getElementById('pdfCanvas'),
+                textLayer: document.getElementById('textLayer'),
+                highlightOverlay: document.getElementById('highlightOverlay'),
+                thresholdSlider: document.getElementById('thresholdSlider'),
+                thresholdValue: document.getElementById('thresholdValue'),
+                saveSettingsBtn: document.getElementById('saveSettingsBtn'),
+                contextMenu: document.getElementById('contextMenu'),
+                cancelSelection: document.getElementById('cancelSelection')
+            };
+            this.pdfContext = this.elements.pdfCanvas.getContext('2d');
+        }
+
+        bindEvents() {
+            this.elements.uploadArea.addEventListener('click', () => this.elements.pdfFileInput.click());
+            this.elements.pdfFileInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
+            ['dragover', 'dragleave', 'drop'].forEach(eventName => {
+                this.elements.uploadArea.addEventListener(eventName, this.preventDefaults, false);
+            });
+            ['dragenter', 'dragover'].forEach(eventName => {
+                this.elements.uploadArea.addEventListener(eventName, () => this.elements.uploadArea.classList.add('dragover'), false);
+            });
+            ['dragleave', 'drop'].forEach(eventName => {
+                this.elements.uploadArea.addEventListener(eventName, () => this.elements.uploadArea.classList.remove('dragover'), false);
+            });
+            this.elements.uploadArea.addEventListener('drop', (e) => this.handleFileDrop(e), false);
+
+            this.elements.detectBtn.addEventListener('click', () => this.detectEntities());
+            this.elements.prevPageBtn.addEventListener('click', () => this.changePage(this.currentPage - 1));
+            this.elements.nextPageBtn.addEventListener('click', () => this.changePage(this.currentPage + 1));
+            this.elements.zoomSlider.addEventListener('input', (e) => this.updateZoom(parseInt(e.target.value, 10)));
+            this.elements.showHighlights.addEventListener('change', () => this.renderHighlights());
+            this.elements.saveBtn.addEventListener('click', () => this.generateAndDownloadPdf());
+            this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });
+            this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
+
+            this.elements.pdfViewer.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                this.handleSelection(e, true);
+            });
+            document.addEventListener('click', (e) => {
+                if (!this.elements.contextMenu.contains(e.target)) {
+                    this.hideContextMenu();
+                }
+            });
+             this.elements.pdfViewer.addEventListener('mouseup', (e) => {
+                if (e.button !== 2 && !this.elements.contextMenu.contains(e.target)) {
+                     setTimeout(() => this.handleSelection(e), 50);
+                }
+            });
+        }
         
-        this.setupPdfCanvasEvents();
-        this.setupManualAddEvents();
-    }
-
-    setupPdfCanvasEvents() {
-        this.elements.pdfViewer.addEventListener('mouseup', (e) => {
-            if (e.target.closest('.context-menu')) return;
-            // 右クリックでなければ、少し待ってから選択処理を実行
-            if (e.button !== 2) {
-                setTimeout(() => this.handleSelection(e), 50);
-            }
-        });
-
-        this.elements.pdfViewer.addEventListener('contextmenu', (e) => {
+        preventDefaults(e) {
             e.preventDefault();
-            this.handleSelection(e, true);
-        });
-    }
-    
-    handleSelection(event, isContextMenu = false) {
-        const selection = window.getSelection();
-        const selectedText = selection.toString();
+            e.stopPropagation();
+        }
 
-        if (selectedText.trim()) {
-            const range = selection.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            const canvasRect = this.elements.pdfCanvas.getBoundingClientRect();
-            
-            if (rect.top > canvasRect.bottom || rect.bottom < canvasRect.top ||
-                rect.left > canvasRect.right || rect.right < canvasRect.left) {
+        handleFileDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length > 0) {
+                this.handleFileSelect(files[0]);
+            }
+        }
+
+        async handleFileSelect(file) {
+            if (!file || file.type !== 'application/pdf') {
+                this.showError('PDFファイルを選択してください');
                 return;
             }
+            this.showLoading(true, 'PDFをアップロード中...');
+            
+            try {
+                const formData = new FormData();
+                formData.append('pdf_file', file);
+                const response = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await response.json();
 
-            this.currentSelection = {
-                text: selectedText,
-                rect: {
-                    left: rect.left - canvasRect.left,
-                    top: rect.top - canvasRect.top,
-                    width: rect.width,
-                    height: rect.height,
-                }
-            };
+                if (!data.success) throw new Error(data.message);
 
-            if (this.manualAddMode && !isContextMenu) {
-                this.addEntityFromSelection(this.manualAddMode);
-            } else {
-                this.showContextMenu(event.pageX, event.pageY);
+                this.currentPdfPath = data.filename;
+                this.elements.selectedFileName.textContent = file.name;
+                this.updateStatus('PDFを読み込み中...');
+                
+                const arrayBuffer = await file.arrayBuffer();
+                this.currentPdfDocument = await pdfjsLib.getDocument(arrayBuffer).promise;
+                this.totalPages = this.currentPdfDocument.numPages;
+                this.currentPage = 1;
+                this.elements.detectBtn.disabled = false;
+                
+                await this.renderPage(this.currentPage);
+                this.updateStatus(`PDF読み込み完了: ${file.name}`);
+
+            } catch (error) {
+                console.error('File handling error:', error);
+                this.showError(error.message || 'ファイルの処理中にエラーが発生しました');
+            } finally {
+                this.showLoading(false);
             }
-        } else if (!isContextMenu) {
-            this.clearSelection();
-            this.hideContextMenu();
         }
-    }
 
-    setupManualAddEvents() {
-        document.querySelectorAll('input[name="entityMode"]').forEach(input => {
-            input.addEventListener('change', (e) => {
-                this.manualAddMode = e.target.value;
-                this.updateCanvasCursor();
+        async renderPage(pageNum) {
+            if (!this.currentPdfDocument || pageNum < 1 || pageNum > this.totalPages) return;
+            this.showLoading(true, 'ページを描画中...');
+            try {
+                const page = await this.currentPdfDocument.getPage(pageNum);
+                const scale = this.zoomLevel / 100;
+                this.viewport = page.getViewport({ scale });
+
+                const canvas = this.elements.pdfCanvas;
+                const container = this.elements.pdfCanvasContainer; // コンテナ要素を取得
+
+                // CSS変数を更新
+                container.style.setProperty('--scale-factor', this.viewport.scale);
+
+                canvas.width = this.viewport.width;
+                canvas.height = this.viewport.height;
+
+                const renderContext = {
+                    canvasContext: this.pdfContext,
+                    viewport: this.viewport
+                };
+                await page.render(renderContext).promise;
+
+                await this.renderTextLayer(page);
+                this.renderHighlights();
+
+                this.updatePageInfo();
+                this.elements.pdfPlaceholder.style.display = 'none';
+                this.elements.pdfCanvasContainer.style.display = 'block';
+
+            } catch (error) {
+                console.error(`Error rendering page ${pageNum}:`, error);
+                this.showError('ページの描画に失敗しました');
+            } finally {
+                this.showLoading(false);
+            }
+        }
+
+        async renderTextLayer(page) {
+            const container = this.elements.textLayer;
+            container.innerHTML = '';
+            container.style.width = `${this.viewport.width}px`;
+            container.style.height = `${this.viewport.height}px`;
+            
+            try {
+                const textContent = await page.getTextContent();
+                pdfjsLib.renderTextLayer({
+                    textContentSource: textContent,
+                    container: container,
+                    viewport: this.viewport,
+                    textDivs: []
+                });
+            } catch (error) {
+                console.error('Failed to render text layer:', error);
+            }
+        }
+
+        renderHighlights() {
+            const container = this.elements.highlightOverlay;
+            container.innerHTML = '';
+            container.style.width = `${this.viewport.width}px`;
+            container.style.height = `${this.viewport.height}px`;
+
+            if (!this.elements.showHighlights.checked || !this.viewport) return;
+
+            const pageEntities = this.detectionResults.filter(e => e.page === this.currentPage);
+            pageEntities.forEach((entity, localIndex) => {
+                const globalIndex = this.detectionResults.indexOf(entity);
+                const el = this.createHighlightElement(entity, globalIndex);
+                if (el) container.appendChild(el);
             });
-        });
+        }
+        
+        createHighlightElement(entity, index) {
+            if (!entity.coordinates) return null;
 
-        this.elements.contextMenu.querySelectorAll('.context-menu-item[data-entity-type]').forEach(item => {
-            item.addEventListener('click', (e) => {
-                const entityType = e.currentTarget.getAttribute('data-entity-type');
-                this.addEntityFromSelection(entityType);
+            const highlightEl = document.createElement('div');
+            highlightEl.className = 'highlight-rect';
+            highlightEl.classList.add(entity.entity_type.toLowerCase().replace(/_/g, '-'));
+
+            if (index === this.selectedEntityIndex) {
+                highlightEl.classList.add('selected');
+            }
+
+            // ### 蛍光ペン風ハイライト座標計算 START ###
+            // 修正箇所：PyMuPDFのY座標（上から下）をPDF.jsのY座標（下から上）に変換します。
+            const pageHeight = this.viewport.viewBox[3]; // PDFページの元の高さを取得
+            const pdfRect = [
+                entity.coordinates.x0,
+                pageHeight - entity.coordinates.y1, // y0（下端）を計算
+                entity.coordinates.x1,
+                pageHeight - entity.coordinates.y0  // y1（上端）を計算
+            ];
+
+            // ビューポート座標に変換
+            const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
+            
+            // 座標の順序を確認して正規化
+            const left = Math.min(viewportRect[0], viewportRect[2]);
+            const top = Math.min(viewportRect[1], viewportRect[3]);
+            const right = Math.max(viewportRect[0], viewportRect[2]);
+            const bottom = Math.max(viewportRect[1], viewportRect[3]);
+            
+            const width = right - left;
+            const height = bottom - top;
+            
+            // 最小サイズを保証（蛍光ペン効果のため）
+            const minHeight = 12; // 最小高さ
+            const adjustedHeight = Math.max(height, minHeight);
+            // ### 蛍光ペン風ハイライト座標計算 END ###
+
+            highlightEl.style.left = `${left}px`;
+            highlightEl.style.top = `${top}px`;
+            highlightEl.style.width = `${width}px`;
+            highlightEl.style.height = `${adjustedHeight}px`;
+            highlightEl.dataset.index = index;
+            
+            highlightEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.selectEntity(index);
             });
-        });
 
-        this.elements.cancelSelection?.addEventListener('click', () => this.cancelCurrentSelection());
-        document.addEventListener('click', (e) => {
-            if (!this.elements.contextMenu.contains(e.target)) this.hideContextMenu();
-        });
-    }
-
-    async handleFileSelect(file) {
-        if (!file || file.type !== 'application/pdf') {
-            this.showError('PDFファイルを選択してください');
-            return;
+            return highlightEl;
         }
-        
-        try {
-            this.showLoading(true);
-            this.updateStatus('PDFファイルを読み込み中...');
-            
-            const arrayBuffer = await file.arrayBuffer();
-            this.currentPdfDocument = await pdfjsLib.getDocument(arrayBuffer).promise;
-            this.totalPages = this.currentPdfDocument.numPages;
-            this.currentPage = 0;
-            
-            this.elements.selectedFileName.textContent = file.name;
-            this.elements.detectBtn.disabled = false;
-            this.updatePageInfo();
-            
-            this.elements.pdfPlaceholder.style.display = 'none';
-            this.elements.pdfCanvasContainer.style.display = 'block';
-            
-            await this.renderPdfPage();
-            await this.uploadToFlask(file);
-            
-            this.updateStatus('PDFファイルの読み込みが完了しました');
-        } catch (error) {
-            console.error('PDFファイル読み込みエラー:', error);
-            this.showError('PDFファイルの読み込みに失敗しました');
-        } finally {
-            this.showLoading(false);
-        }
-    }
 
-    async uploadToFlask(file) {
-        const formData = new FormData();
-        formData.append('pdf_file', file);
-        
-        const response = await fetch('/api/upload', { method: 'POST', body: formData });
-        const data = await response.json();
-        if (!data.success) throw new Error(data.message);
-        this.currentPdf = data.filename;
-    }
+        async detectEntities() {
+            if (!this.currentPdfPath) return this.showError('PDFファイルを選択してください');
+            this.showLoading(true, '個人情報を検出中...');
 
-    async renderPdfPage() {
-        if (!this.currentPdfDocument) return;
-        this.showLoading(true);
+            try {
+                const response = await fetch('/api/detect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.settings)
+                });
+                const data = await response.json();
+                if (!data.success) throw new Error(data.message);
 
-        try {
-            const page = await this.currentPdfDocument.getPage(this.currentPage + 1);
-            const scale = this.zoomLevel / 100;
-            this.viewport = page.getViewport({ scale });
-
-            const canvas = this.pdfCanvas;
-            const context = this.pdfContext;
-            
-            canvas.width = this.viewport.width;
-            canvas.height = this.viewport.height;
-            canvas.style.width = this.viewport.width + 'px';
-            canvas.style.height = this.viewport.height + 'px';
-            
-            const container = this.elements.pdfCanvasContainer;
-            container.style.width = this.viewport.width + 'px';
-            container.style.height = this.viewport.height + 'px';
-
-            // ハイライトオーバーレイのサイズも同期
-            this.highlightOverlay.style.width = this.viewport.width + 'px';
-            this.highlightOverlay.style.height = this.viewport.height + 'px';
-            this.highlightOverlay.style.left = '0px';
-            this.highlightOverlay.style.top = '0px';
-
-            const renderContext = { canvasContext: context, viewport: this.viewport };
-            await page.render(renderContext).promise;
-            await this.renderTextLayer(page, this.viewport);
-            
-            this.renderHighlights();
-        } catch (error) {
-            console.error('PDFページレンダリングエラー:', error);
-            this.showError('PDFページの表示に失敗しました');
-        } finally {
-            this.showLoading(false);
-        }
-    }
-
-    async renderTextLayer(page, viewport) {
-        this.textLayer.innerHTML = '';
-        try {
-            const textContent = await page.getTextContent();
-            this.textLayer.style.setProperty('--scale-factor', viewport.scale);
-            
-            // テキストレイヤーのサイズと位置をcanvasと完全に同期
-            this.textLayer.style.width = viewport.width + 'px';
-            this.textLayer.style.height = viewport.height + 'px';
-            this.textLayer.style.left = '0px';
-            this.textLayer.style.top = '0px';
-            
-            pdfjsLib.renderTextLayer({
-                textContentSource: textContent,
-                container: this.textLayer,
-                viewport: viewport,
-                textDivs: []
-            });
-        } catch (error) {
-            console.error('テキストレイヤーレンダリングエラー:', error);
-        }
-    }
-
-    renderHighlights() {
-        console.log('renderHighlights called');
-        console.log('showHighlights checked:', this.elements.showHighlights.checked);
-        console.log('detectionResults:', this.detectionResults);
-        console.log('currentPage:', this.currentPage);
-        
-        this.highlightOverlay.innerHTML = '';
-        if (!this.detectionResults || !this.elements.showHighlights.checked) return;
-
-        const pageHighlights = this.detectionResults.filter(entity => entity.page === this.currentPage + 1);
-        console.log('pageHighlights:', pageHighlights);
-        
-        pageHighlights.forEach((entity) => {
-            const globalIndex = this.detectionResults.indexOf(entity);
-            const highlight = this.createHighlightElement(entity, globalIndex);
-            console.log('created highlight:', highlight);
-            if (highlight) this.highlightOverlay.appendChild(highlight);
-        });
-        
-        console.log('highlightOverlay children count:', this.highlightOverlay.children.length);
-    }
-
-    createHighlightElement(entity, index) {
-        const coords = entity.coordinates;
-        if (!coords || !this.viewport) return null;
-
-        const highlight = document.createElement('div');
-        highlight.className = 'highlight-rect';
-        highlight.classList.add(entity.entity_type.toLowerCase().replace('_','-'));
-        if (this.selectedEntityIndex === index) {
-            highlight.classList.add('selected');
-        }
-        
-        // PDF座標系 (yは上向き) からViewport座標系 (yは下向き) へ変換
-        const pdfRect = [coords.x0, coords.y0, coords.x1, coords.y1];
-        const viewportRect = this.viewport.convertToViewportRect(pdfRect);
-        
-        highlight.style.left = viewportRect[0] + 'px';
-        highlight.style.top = viewportRect[1] + 'px';
-        highlight.style.width = (viewportRect[2] - viewportRect[0]) + 'px';
-        highlight.style.height = (viewportRect[3] - viewportRect[1]) + 'px';
-
-        highlight.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.selectEntity(index);
-        });
-
-        highlight.title = `${this.getEntityTypeJapanese(entity.entity_type)}: ${entity.text}`;
-        return highlight;
-    }
-
-    addEntityFromSelection(entityType) {
-        if (!this.currentSelection) return;
-        try {
-            const canvasRect = this.currentSelection.rect;
-            const viewport = this.viewport;
-            
-            const topLeft = viewport.convertToPdfPoint(canvasRect.left, canvasRect.top);
-            const bottomRight = viewport.convertToPdfPoint(canvasRect.left + canvasRect.width, canvasRect.top + canvasRect.height);
-            
-            const newEntity = {
-                entity_type: entityType,
-                text: this.currentSelection.text,
-                confidence: 1.0,
-                page: this.currentPage + 1,
-                coordinates: {
-                    x0: Math.min(topLeft[0], bottomRight[0]),
-                    y0: Math.min(topLeft[1], bottomRight[1]),
-                    x1: Math.max(topLeft[0], bottomRight[0]),
-                    y1: Math.max(topLeft[1], bottomRight[1]),
-                }
-            };
-            
-            this.detectionResults.push(newEntity);
-            this.renderEntityList();
-            this.renderHighlights();
-            this.updateStatus(`${this.getEntityTypeJapanese(entityType)}を追加: ${this.currentSelection.text}`);
-        } catch (error) {
-            console.error('エンティティ追加エラー:', error);
-        } finally {
-            this.cancelCurrentSelection();
-        }
-    }
-
-    cancelCurrentSelection() {
-        window.getSelection().removeAllRanges();
-        this.currentSelection = null;
-        this.hideContextMenu();
-    }
-    
-    updateCanvasCursor() {
-        this.pdfCanvas.className = 'pdf-canvas';
-        if (this.manualAddMode) {
-            this.pdfCanvas.classList.add('selection-mode', this.manualAddMode.toLowerCase().replace('_', '-'));
-        }
-    }
-
-    showContextMenu(x, y) {
-        const menu = this.elements.contextMenu;
-        if (!menu) return;
-        
-        menu.style.display = 'block';
-        const menuRect = menu.getBoundingClientRect();
-        const posX = (x + menuRect.width > window.innerWidth) ? (window.innerWidth - menuRect.width - 10) : x;
-        const posY = (y + menuRect.height > window.innerHeight) ? (window.innerHeight - menuRect.height - 10) : y;
-        menu.style.left = posX + 'px';
-        menu.style.top = posY + 'px';
-    }
-
-    hideContextMenu() {
-        if (this.elements.contextMenu) this.elements.contextMenu.style.display = 'none';
-    }
-    
-    async detectEntities() {
-        if (!this.currentPdf) return this.showError('PDFファイルを選択してください');
-        this.showLoading(true);
-        this.updateStatus('個人情報を検出中...');
-        
-        try {
-            const response = await fetch('/api/detect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(this.settings)
-            });
-            const data = await response.json();
-            if (data.success) {
-                this.detectionResults = data.results;
+                this.detectionResults = data.results || [];
                 this.renderEntityList();
                 this.renderHighlights();
                 this.elements.saveBtn.disabled = false;
-                this.updateStatus(`検出完了: ${data.results.length}件の個人情報が見つかりました`);
-            } else {
-                this.showError(data.message);
+                this.updateStatus(`検出完了: ${this.detectionResults.length}件の個人情報が見つかりました`);
+
+            } catch (error) {
+                console.error('Detection error:', error);
+                this.showError(error.message || '個人情報の検出に失敗しました');
+            } finally {
+                this.showLoading(false);
             }
-        } catch (error) {
-            this.showError('個人情報の検出に失敗しました');
-        } finally {
-            this.showLoading(false);
         }
-    }
-    
-    renderEntityList() {
-        this.elements.entityList.innerHTML = '';
-        this.elements.resultCount.textContent = this.detectionResults.length;
-        
-        this.detectionResults.forEach((entity, index) => {
-            const listItem = document.createElement('div');
-            listItem.className = `list-group-item list-group-item-action ${index === this.selectedEntityIndex ? 'active' : ''}`;
-            listItem.style.cursor = 'pointer';
-            const entityTypeJa = this.getEntityTypeJapanese(entity.entity_type);
-            const confidencePercent = Math.round(entity.confidence * 100);
-            
-            listItem.innerHTML = `
-                <div class="d-flex justify-content-between align-items-start">
-                    <div class="flex-grow-1">
-                        <h6 class="mb-1">${entityTypeJa}</h6>
-                        <p class="mb-1 text-truncate">${entity.text}</p>
-                        <small class="text-muted">信頼度: ${confidencePercent}% | ページ: ${entity.page}</small>
+
+        renderEntityList() {
+            const listEl = this.elements.entityList;
+            listEl.innerHTML = '';
+            this.elements.resultCount.textContent = this.detectionResults.length;
+
+            if (this.detectionResults.length === 0) {
+                listEl.innerHTML = `<div class="list-group-item text-muted">検出結果がここに表示されます</div>`;
+                return;
+            }
+
+            this.detectionResults.forEach((entity, index) => {
+                const item = document.createElement('a');
+                item.href = '#';
+                item.className = `list-group-item list-group-item-action`;
+                if (index === this.selectedEntityIndex) {
+                    item.classList.add('active');
+                }
+                const confidence = (entity.confidence * 100).toFixed(0);
+                item.innerHTML = `
+                    <div class="d-flex w-100 justify-content-between">
+                        <h6 class="mb-1">${this.getEntityTypeJapanese(entity.entity_type)}</h6>
+                        <small>信頼度: ${confidence}%</small>
                     </div>
-                    <div class="ms-2"><span class="badge bg-primary">${confidencePercent}%</span></div>
-                </div>`;
-            
-            listItem.addEventListener('click', () => this.selectEntity(index));
-            this.elements.entityList.appendChild(listItem);
-        });
-    }
-
-    selectEntity(index) {
-        this.selectedEntityIndex = index;
-        this.selectedHighlight = this.detectionResults[index];
-        this.renderEntityList();
-        
-        const entity = this.detectionResults[index];
-        const targetPage = entity.page - 1;
-        if (targetPage !== this.currentPage) {
-            this.currentPage = targetPage;
-            this.updatePageInfo();
-            this.renderPdfPage();
-        } else {
-            this.renderHighlights();
-        }
-    }
-
-    clearSelection() {
-        this.selectedEntityIndex = -1;
-        this.selectedHighlight = null;
-        this.renderEntityList();
-        this.renderHighlights();
-    }
-
-    deleteHighlight() {
-        if (this.selectedEntityIndex < 0) return this.showError('削除するハイライトが選択されていません');
-        this.detectionResults.splice(this.selectedEntityIndex, 1);
-        this.clearSelection();
-    }
-    
-    previousPage() {
-        if (this.currentPage > 0) {
-            this.currentPage--;
-            this.updatePageInfo();
-            this.renderPdfPage();
-        }
-    }
-    
-    nextPage() {
-        if (this.currentPage < this.totalPages - 1) {
-            this.currentPage++;
-            this.updatePageInfo();
-            this.renderPdfPage();
-        }
-    }
-    
-    updatePageInfo() {
-        this.elements.pageInfo.textContent = `${this.currentPage + 1} / ${this.totalPages}`;
-        this.elements.prevPageBtn.disabled = this.currentPage === 0;
-        this.elements.nextPageBtn.disabled = this.currentPage >= this.totalPages - 1;
-    }
-
-    updateZoom(value) {
-        this.zoomLevel = parseInt(value);
-        this.elements.zoomValue.textContent = this.zoomLevel + '%';
-        this.elements.zoomDisplay.textContent = this.zoomLevel + '%';
-        if (this.currentPdfDocument) this.renderPdfPage();
-    }
-
-    async savePdf() {
-        if (!this.currentPdf) return this.showError('PDFファイルが選択されていません');
-        this.showLoading(true);
-        this.updateStatus('PDFを保存中...');
-        
-        try {
-            const response = await fetch('/api/generate_pdf', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ entities: this.detectionResults })
+                    <p class="mb-1 text-truncate">${entity.text}</p>
+                    <small>ページ: ${entity.page}</small>`;
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.selectEntity(index);
+                });
+                listEl.appendChild(item);
             });
-            const data = await response.json();
-            if (data.success) {
-                this.updateStatus('PDFの保存が完了しました');
+        }
+        
+        selectEntity(index) {
+            this.selectedEntityIndex = index;
+            const entity = this.detectionResults[index];
+            if (entity.page !== this.currentPage) {
+                this.changePage(entity.page);
+            } else {
+                this.renderEntityList();
+                this.renderHighlights();
+            }
+        }
+
+        changePage(newPage) {
+            if (this.currentPdfDocument && newPage > 0 && newPage <= this.totalPages) {
+                this.currentPage = newPage;
+                this.renderPage(this.currentPage);
+            }
+        }
+
+        
+        previousPage() { this.changePage(this.currentPage - 1); }
+        nextPage() { this.changePage(this.currentPage + 1); }
+
+        updatePageInfo() {
+            this.elements.pageInfo.textContent = `${this.currentPage} / ${this.totalPages}`;
+            this.elements.prevPageBtn.disabled = this.currentPage <= 1;
+            this.elements.nextPageBtn.disabled = this.currentPage >= this.totalPages;
+        }
+
+        updateZoom(value) {
+            this.zoomLevel = value;
+            this.elements.zoomValue.textContent = `${value}%`;
+            this.elements.zoomDisplay.textContent = `${value}%`;
+            if (this.currentPdfDocument) {
+                this.renderPage(this.currentPage);
+            }
+        }
+
+        async generateAndDownloadPdf() {
+            if (!this.currentPdfPath) return this.showError('PDFファイルが選択されていません');
+            this.showLoading(true, 'マスキング適用中...');
+            
+            try {
+                const response = await fetch('/api/generate_pdf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entities: this.detectionResults })
+                });
+                const data = await response.json();
+                if (!data.success) throw new Error(data.message);
+
+                this.updateStatus('ダウンロード準備完了');
                 const link = document.createElement('a');
                 link.href = `/api/download_pdf/${data.filename}`;
-                link.download = data.download_filename || data.filename;
+                link.download = data.download_filename || 'masked_document.pdf';
+                document.body.appendChild(link);
                 link.click();
-            } else {
-                this.showError(data.message);
+                document.body.removeChild(link);
+
+            } catch (error) {
+                console.error('PDF generation/download error:', error);
+                this.showError(error.message || 'PDFの保存に失敗しました');
+            } finally {
+                this.showLoading(false);
             }
-        } catch (error) {
-            this.showError('PDFの保存に失敗しました');
-        } finally {
-            this.showLoading(false);
         }
-    }
-    
-    saveSettings() {
-        this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
-        this.settings.threshold = parseFloat(this.elements.thresholdSlider.value);
-        this.settings.masking_method = document.getElementById('maskingMethod').value;
-        this.updateStatus('設定を保存しました');
-        bootstrap.Modal.getInstance(document.getElementById('settingsModal')).hide();
-    }
-    
-    loadSettings() { /* Logic to load settings from server/local storage can be added here */ }
 
-    getEntityTypeJapanese(entityType) {
-        const mapping = { "PERSON": "人名", "LOCATION": "場所", "PHONE_NUMBER": "電話番号", "DATE_TIME": "日時", "CUSTOM": "カスタム" };
-        return mapping[entityType] || entityType;
-    }
-    
-    updateStatus(message) { this.elements.statusMessage.textContent = message; }
-    showError(message) { this.updateStatus('エラー: ' + message); console.error(message); }
-    showLoading(show) { this.elements.loadingOverlay.style.display = show ? 'flex' : 'none'; }
-    setupZoomSlider() { /* Unchanged */ }
-    handleKeyDown(event) { /* Unchanged */ }
-}
+        saveSettings() {
+            this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
+            this.settings.threshold = parseFloat(this.elements.thresholdSlider.value);
+            this.settings.masking_method = document.getElementById('maskingMethod').value;
+            this.updateStatus('設定を保存しました');
+            const modal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
+            if(modal) modal.hide();
+        }
 
-document.addEventListener('DOMContentLoaded', () => {
+        loadSettings() {
+            // 初期値をフォームに反映
+            this.settings.entities.forEach(entityValue => {
+                const checkbox = document.querySelector(`#settingsModal input[value="${entityValue}"]`);
+                if (checkbox) checkbox.checked = true;
+            });
+            this.elements.thresholdSlider.value = this.settings.threshold;
+            this.elements.thresholdValue.textContent = this.settings.threshold;
+            document.getElementById('maskingMethod').value = this.settings.masking_method;
+        }
+
+        getEntityTypeJapanese(entityType) {
+            const mapping = { "PERSON": "人名", "LOCATION": "場所", "PHONE_NUMBER": "電話番号", "DATE_TIME": "日時", "CUSTOM": "カスタム" };
+            return mapping[entityType] || entityType;
+        }
+
+        updateStatus(message, isError = false) {
+            this.elements.statusMessage.textContent = message;
+            this.elements.statusMessage.style.color = isError ? '#dc3545' : '#212529';
+            this.elements.statusMessage.style.borderColor = isError ? '#dc3545' : '#17a2b8';
+        }
+        
+        showError(message) {
+            this.updateStatus(`エラー: ${message}`, true);
+        }
+
+        showLoading(show, message = '処理中...') {
+            if (show) {
+                this.elements.loadingOverlay.querySelector('p').textContent = message;
+                this.elements.loadingOverlay.style.display = 'flex';
+            } else {
+                this.elements.loadingOverlay.style.display = 'none';
+            }
+        }
+
+        // This is a placeholder for a potential future implementation
+        hideContextMenu() {
+            if (this.elements.contextMenu) {
+                this.elements.contextMenu.style.display = 'none';
+            }
+        }
+        
+        // This is a placeholder for a potential future implementation
+        handleSelection(e, isContextMenu = false) {
+            // Placeholder for selection handling logic
+        }
+
+    }
+
     new PresidioPDFWebApp();
 });

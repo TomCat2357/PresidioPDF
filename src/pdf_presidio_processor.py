@@ -1013,12 +1013,13 @@ class PDFPresidioProcessor:
                         continue
                     
                     try:
-                        # ハイライトの色を決定
-                        color = self._get_highlight_color_pymupdf(entity['entity_type'])
+                        # 塗りつぶし用の色を決定 (annotationの色設定を使用)
+                        color = self._get_annotation_color_pymupdf(entity['entity_type'])
                         
-                        # ハイライト注釈を追加
-                        highlight = page.add_highlight_annot(rect)
-                        highlight.set_colors(stroke=color)
+                        # 四角形注釈（塗りつぶし）を追加
+                        highlight = page.add_rect_annot(rect)
+                        highlight.set_colors(stroke=color, fill=color)
+                        highlight.set_opacity(1.0)  # 不透明に設定
                         
                         # 文字表示モードに応じてタイトルと内容を設定
                         text_display_mode = self.config_manager.get_masking_text_display_mode()
@@ -1097,12 +1098,13 @@ class PDFPresidioProcessor:
                         continue
                     
                     try:
-                        # ハイライトの色を決定
-                        color = self._get_highlight_color_pymupdf(entity['entity_type'])
+                        # 塗りつぶし用の色を決定 (annotationの色設定を使用)
+                        color = self._get_annotation_color_pymupdf(entity['entity_type'])
                         
-                        # ハイライト注釈を追加
-                        highlight = page.add_highlight_annot(rect)
-                        highlight.set_colors(stroke=color)
+                        # 四角形注釈（塗りつぶし）を追加
+                        highlight = page.add_rect_annot(rect)
+                        highlight.set_colors(stroke=color, fill=color)
+                        highlight.set_opacity(1.0)  # 不透明に設定
                         
                         # 文字表示モードに応じてタイトルと内容を設定
                         text_display_mode = self.config_manager.get_masking_text_display_mode()

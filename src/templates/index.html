@@ -49,12 +49,13 @@
             padding: 20px;
             box-sizing: border-box;
             position: relative;
+            text-align: center;
         }
         
         .pdf-canvas-container {
             position: relative;
             display: inline-block;
-            margin: 0 auto;
+            /* margin: 0 auto; -- removed as .pdf-viewer has text-align: center */
             /* The border and background are for debugging, can be removed */
             border: 2px solid red;
             background-color: yellow;
@@ -66,7 +67,6 @@
             border: 1px solid #ccc;
             border-radius: 5px;
             display: block;
-            margin: 0 auto;
             cursor: text;
             background-color: white;
         }
@@ -108,38 +108,36 @@
   
         .highlight-rect {
             position: absolute;
-            background-color: rgba(255, 255, 0, 0.3);
-            border: 1px solid rgba(255, 255, 0, 0.8);
+            background-color: rgba(255, 255, 0, 0.7);
+            opacity: 1.0;
             pointer-events: auto;
             cursor: pointer;
+            border-radius: 2px;
+            mix-blend-mode: multiply;
+            z-index: 10;
         }
         
         .highlight-rect.person {
-       
-            background-color: rgba(255, 128, 128, 0.3);
-            border-color: rgba(255, 128, 128, 0.8);
+            background-color: rgba(255, 180, 180, 0.8);
         }
         
         .highlight-rect.location {
-            background-color: rgba(128, 255, 128, 0.3);
-            border-color: rgba(128, 255, 128, 0.8);
+            background-color: rgba(180, 255, 180, 0.8);
         }
        
         .highlight-rect.phone_number, .highlight-rect.phone {
-            background-color: rgba(128, 128, 255, 0.3);
-            border-color: rgba(128, 128, 255, 0.8);
+            background-color: rgba(180, 180, 255, 0.8);
         }
         
         .highlight-rect.date_time, .highlight-rect.date {
-            
-            background-color: rgba(255, 255, 128, 0.3);
-            border-color: rgba(255, 255, 128, 0.8);
+            background-color: rgba(255, 255, 180, 0.8);
         }
         
         .highlight-rect.selected {
-            background-color: rgba(0, 123, 255, 0.4);
-            border: 2px solid #007bff;
+            outline: 2px solid #0056b3;
+            outline-offset: 1px;
             z-index: 100;
+            box-shadow: 0 0 0 2px rgba(0, 86, 179, 0.3);
         }
         
    
@@ -503,7 +501,7 @@
                             <i class="fas fa-file-pdf fa-4x mb-3"></i>
                             <p>PDFファイルを選択すると、ここに表示されます</p>
                         </div>
-                        <div class="pdf-canvas-container" id="pdfCanvasContainer" style="display: none;">
+                        <div class="pdf-canvas-container" id="pdfCanvasContainer" style="display: none; --scale-factor: 1;">
                             <canvas id="pdfCanvas" class="pdf-canvas"></canvas>
                             <div class="text-layer" id="textLayer"></div>
                             <div class="highlight-overlay" id="highlightOverlay"></div>

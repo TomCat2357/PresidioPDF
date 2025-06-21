@@ -1,35 +1,16 @@
 # CLAUDE.md
 
-**🔴 MANDATORY DEVELOPMENT PROTOCOL 🔴**
-**THIS PROJECT REQUIRES EXCLUSIVE USE OF MCP DESKTOP-COMMANDER**
-- All file operations MUST use desktop-commander
-- All command execution MUST use desktop-commander  
-- Direct file system access is PROHIBITED
-- Claude MUST use desktop-commander for every operation
-
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
 This is a Japanese personal information detection and masking tool for PDF documents. The main component is `pdf_presidio_processor.py` which uses Microsoft Presidio for NLP analysis and PyMuPDF for PDF processing.
 
-**⚠️ MANDATORY DEVELOPMENT REQUIREMENT ⚠️**
-This project MUST be developed and maintained exclusively using MCP desktop-commander. Direct file system access or shell command execution outside of desktop-commander is strictly prohibited. All Claude interactions with this project require desktop-commander usage.
-
 ## Development Environment
 
 This project is configured to work with:
 - **uv package manager**: For fast, reliable Python dependency management
 - **Virtual environment**: Isolated development environment using `.venv`
-- **MCP desktop-commander**: For enhanced file operations through Claude Code interface
-
-**🔴 CRITICAL: Desktop Commander Usage Requirements 🔴**
-- **MANDATORY: Always use MCP desktop-commander** for ALL file operations, command execution, and development tasks
-- **NEVER bypass desktop-commander** - Direct file operations or shell commands are strictly prohibited
-- **ALWAYS use uv virtual environment** (`.venv`) for all Python operations and dependency management
-- **NEVER use direct Python/pip commands** without uv virtual environment activation through desktop-commander
-- All testing, development, deployment, and debugging must be performed exclusively through desktop-commander with uv
-- When Claude assists with this project, desktop-commander usage is absolutely required for every operation
 
 The project follows modern Python development practices with uv for dependency management and virtual environment isolation.
 
@@ -53,56 +34,9 @@ The project follows modern Python development practices with uv for dependency m
 - Dependencies managed through `pyproject.toml`
 
 
-## MCP Server Configuration
 
-This project is configured to work with Claude through MCP (Model Context Protocol) using desktop-commander for enhanced file operations.
-
-```json
-{
-  "mcpServers": {
-    "desktop-commander": {
-      "command": "npx",
-      "args": ["-y", "@wonderwhy-er/desktop-commander@latest"],
-      "env": {
-        "BLOCKED_COMMANDS": "rm,del,rmdir,format,shutdown,restart,reg,regedit",
-        "DEFAULT_SHELL": "powershell",
-        "ALLOWED_DIRECTORIES": "C:\\Users\\gk3t-\\OneDrive - 又村 友幸\\working\\Presidio",
-        "FILE_READ_LINE_LIMIT": "1000",
-        "FILE_WRITE_LINE_LIMIT": "50",
-        "TELEMETRY_ENABLED": "false"
-      }
-    }
-  }
-}
-```
-
-**Note**: The ALLOWED_DIRECTORIES path should be corrected to match your actual project path (removed typo "Presidios" → "Presidio").
-
-### Desktop Commander Project Root Directory
-
-When using the MCP server desktop-commander with Claude, the **Project root directory** should be set to:
-
-```
-C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF
-```
-
-This path serves as the base directory for all relative path operations and ensures proper file access permissions within the desktop-commander environment.
-
-**🔴 IMPORTANT: Desktop Commander Project Root 🔴**
-- **ALWAYS use the correct project root**: `C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF`
-- **This is the base directory** for all desktop-commander operations
-- **All relative paths** are resolved from this root directory
-- **File access permissions** are based on this path configuration
 
 ## Common Commands
-
-**🚨 CRITICAL NOTICE: Desktop Commander ONLY 🚨**
-ALL commands below MUST be executed through MCP desktop-commander. Direct execution in any other environment is strictly forbidden.
-
-**NOTE: All commands below should be executed through MCP desktop-commander with proper Windows path format:**
-```
-cd "C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF"
-```
 
 ### Virtual Environment Setup
 ```bash
@@ -131,7 +65,7 @@ uv run python -m pip install 'ginza[ja]'
 
 ### Running the processor
 ```bash
-# Single file (using uv run through desktop-commander)
+# Single file (using uv run)
 uv run python src/pdf_presidio_processor.py document.pdf
 
 # Folder processing
