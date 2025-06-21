@@ -69,7 +69,7 @@ uv run python -m pip install 'ginza[ja]'
 uv run python src/pdf_presidio_processor.py document.pdf
 
 # Folder processing
-uv run python src/pdf_presidio_processor.py "C:\path\to\folder\"
+uv run python src/pdf_presidio_processor.py "path\to\folder\"
 
 # Custom suffix
 uv run python src/pdf_presidio_processor.py document.pdf --suffix "_masked"
