@@ -6,7 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Japanese personal information detection and masking tool for PDF documents. The main component is `pdf_presidio_processor.py` which uses Microsoft Presidio for NLP analysis and PyMuPDF for PDF processing.
 
-## Development Environment
+## Development Environment and Tools
+
+### Desktop Commander Usage
+When working with this project, use the desktop-commander MCP server for file operations and command execution.
+
+**Project Root Directory:**
+```
+C:\Users\gk3t-\OneDrive - 又村 友幸\working\PresidioPDF
+```
+
+**Important Notes:**
+- Always start desktop-commander operations by running `pwd` to confirm the current working directory
+- Use absolute paths when working with desktop-commander tools
+- The project root should be set to the path above for consistent file operations
+
+### Desktop Commander Commands Reference
+- `mcp__desktop-commander__execute_command`: Execute terminal commands
+- `mcp__desktop-commander__read_file`: Read file contents with offset/length support
+- `mcp__desktop-commander__write_file`: Write files in chunks (recommended: 25-30 lines max)
+- `mcp__desktop-commander__edit_block`: Make surgical text replacements
+- `mcp__desktop-commander__search_code`: Search for text patterns in code
+- `mcp__desktop-commander__search_files`: Find files by name patterns
+- `mcp__desktop-commander__list_directory`: List directory contents
+
+### Development Environment
 
 This project is configured to work with:
 - **uv package manager**: For fast, reliable Python dependency management
@@ -32,7 +56,6 @@ The project follows modern Python development practices with uv for dependency m
 - **uv virtual environment** - use `.venv` for dependency isolation
 - Japanese spaCy model: `ja_core_news_sm`, `ja_core_news_md`, または `ja_ginza`/`ja_ginza_electra` (GINZA)
 - Dependencies managed through `pyproject.toml`
-
 
 
 
@@ -135,8 +158,8 @@ uv run python src/pdf_presidio_processor.py document.pdf --cpu --spacy_model ja_
 
 #### 共通オプション
 ```bash
-# エンティティ選択と閾値設定
-uv run python src/pdf_presidio_processor.py document.pdf --entities PERSON PHONE_NUMBER --threshold 0.8
+# エンティティ選択
+uv run python src/pdf_presidio_processor.py document.pdf --entities PERSON PHONE_NUMBER
 
 # カスタム設定ファイル
 uv run python src/pdf_presidio_processor.py document.pdf --config my_config.yaml
@@ -145,16 +168,12 @@ uv run python src/pdf_presidio_processor.py document.pdf --config my_config.yaml
 uv run python src/pdf_presidio_processor.py document.pdf --suffix "_masked"
 
 # Deduplication with priority modes
-uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode score
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode wider_range
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode entity_type
 
 # Deduplication with overlap modes
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-overlap-mode contain_only
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-overlap-mode partial_overlap
-
-# Combined deduplication settings
-uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode score --deduplication-overlap-mode contain_only
 
 # マスキング方式と文字表示モードの指定
 uv run python src/pdf_presidio_processor.py document.pdf --masking-method annotation --masking-text-mode verbose
@@ -217,9 +236,8 @@ Processed files are saved with configurable suffixes (default: `_masked`) in the
 
 ### Enhanced Processing Features
 - **Selective entity detection**: Choose specific personal information types to detect
-- **Configurable thresholds**: Adjust confidence levels per entity type
 - **Advanced deduplication**: Remove overlapping entities with configurable priority and overlap modes
-  - **Priority modes**: score, wider_range, narrower_range, entity_type
+  - **Priority modes**: wider_range, narrower_range, entity_type
   - **Overlap modes**: contain_only (containment only), partial_overlap (any overlap)
 - **Backup system**: Automatic backup creation before processing
 - **Detailed reporting**: JSON/text reports with processing statistics
@@ -227,7 +245,7 @@ Processed files are saved with configurable suffixes (default: `_masked`) in the
 - **Text display modes**: Control text display in masking annotations
   - **silent**: No text, color-only masking
   - **minimal**: Entity type only (e.g., "人名", "電話番号")  
-  - **verbose**: Detailed information with confidence scores
+  - **verbose**: Detailed information with entity type and position
 - **Operation modes**: Control how annotations are handled
   - **clear_all**: Remove all existing annotations/highlights only
   - **append**: Add new annotations while preserving existing ones
@@ -236,8 +254,19 @@ Processed files are saved with configurable suffixes (default: `_masked`) in the
   - **Text position-based**: Highlights restored using line/character positions
   - **Coordinate-based**: Annotations restored using precise coordinates
   - **Identical duplicate removal**: Automatic removal of duplicate annotations
+- **Enhanced Position Information**: Detailed location tracking with page, line, and character positions
+  - **Page-level positioning**: Track which page contains each entity
+  - **Line-level positioning**: Track line numbers within pages
+  - **Character-level positioning**: Track character positions within lines
+  - **Multi-page/multi-line support**: Handle entities spanning multiple pages or lines
 
 ### Testing Infrastructure
 - **Comprehensive test suite**: Mock-based testing for PDF processing dependencies
 - **Multiple test scenarios**: Basic functionality, configuration, and edge cases
 - **CI/CD ready**: All tests run through uv for consistency
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
