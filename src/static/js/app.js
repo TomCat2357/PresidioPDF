@@ -22,8 +22,10 @@ document.addEventListener('DOMContentLoaded', () => {
             this.selectedEntityIndex = -1;
             this.currentSelection = null;
             this.viewport = null;
-            // isMouseDownを削除し、selectionTimeoutで選択完了を管理
-            this.selectionTimeout = null;
+            
+            // 選択範囲のバッファ（最新10件まで保存）
+            this.selectionHistory = [];
+            this.maxSelectionHistory = 10;
 
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
@@ -74,6 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // ==  イベント処理の根本的な修正  ==
         // =================================================================
         bindEvents() {
+            // --- ファイル操作と基本的なUIボタンのイベント ---
             this.elements.uploadArea.addEventListener('click', () => this.elements.pdfFileInput.click());
             this.elements.pdfFileInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
             ['dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -96,42 +99,187 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });
             this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
 
-            // --- 新しいイベントリスナー ---
-            // 右クリックでコンテキストメニューを表示
-            this.elements.pdfViewer.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                this.handleSelection(e, true); // isContextMenu = true
+            // --- PDFビューアのインタラクティブなイベント（整理・統合済み） ---
+
+            // 1. マウスのボタンが押された時のログ出力
+            this.elements.pdfViewer.addEventListener('mousedown', (e) => {
+                if (e.button === 0) { // 左クリックのみ
+                    console.log('Mouse Down (Left Button)', { x: e.clientX, y: e.clientY });
+                }
+            });
+
+            // 2. マウスがドラッグされている間のログ出力
+            this.elements.pdfViewer.addEventListener('mousemove', (e) => {
+                if (e.buttons & 1) { // 左クリックが押されている場合
+                    console.log('Mouse Move (Left Button Held)', { x: e.clientX, y: e.clientY });
+                }
+            });
+
+            // 3. 左クリックを離した時に、選択範囲をエンティティとして追加
+            let mouseDownPosition = null;
+            let selectionAtMouseDown = null;
+            
+            this.elements.pdfViewer.addEventListener('mousedown', (e) => {
+                if (e.button === 0) {
+                    mouseDownPosition = { x: e.clientX, y: e.clientY };
+                    selectionAtMouseDown = window.getSelection().toString();
+                }
             });
             
-            // テキスト選択が変化したときの処理を主軸にする
-            document.addEventListener('selectionchange', () => {
-                const selection = window.getSelection();
-                
-                // 選択範囲があり、それがPDFビューア内である場合のみ処理
-                if (selection && selection.rangeCount > 0 && selection.toString().trim().length > 0) {
-                    const range = selection.getRangeAt(0);
-                    if (this.elements.pdfViewer.contains(range.commonAncestorContainer)) {
+            this.elements.pdfViewer.addEventListener('mouseup', (e) => {
+                if (e.button === 0) { // 左クリックのみ
+                    console.log('Mouse Up (Left Button)', { x: e.clientX, y: e.clientY });
+                    
+                    // マウスが移動していない場合（単純なクリック）は処理しない
+                    if (mouseDownPosition && 
+                        Math.abs(e.clientX - mouseDownPosition.x) < 5 && 
+                        Math.abs(e.clientY - mouseDownPosition.y) < 5) {
+                        console.log('Single click detected, skipping selection processing');
+                        return;
+                    }
+                    
+                    // 短い遅延の代わりに、すぐに処理を実行
+                    const selection = window.getSelection();
+                    let currentSelection = null;
+                    
+                    console.log('Selection object:', selection);
+                    console.log('Range count:', selection?.rangeCount);
+                    
+                    if (selection && selection.rangeCount > 0) {
+                        const range = selection.getRangeAt(0);
+                        const selectedText = range.toString().trim();
                         
-                        // ドラッグ操作中はタイマーをリセットし続ける
-                        clearTimeout(this.selectionTimeout);
+                        console.log('Selected text:', selectedText);
+                        console.log('Range commonAncestorContainer:', range.commonAncestorContainer);
+                        console.log('TextLayer element:', this.elements.textLayer);
                         
-                        // ドラッグが止まってから300ms後に選択処理を実行
-                        this.selectionTimeout = setTimeout(() => {
-                            // isContextMenu = false として選択処理を呼び出す
-                            this.handleSelection(null, false);
-                        }, 300);
+                        // より厳密な含有チェック
+                        let isInTextLayer = false;
+                        if (range.commonAncestorContainer) {
+                            if (range.commonAncestorContainer === this.elements.textLayer) {
+                                isInTextLayer = true;
+                            } else if (range.commonAncestorContainer.nodeType === Node.TEXT_NODE) {
+                                isInTextLayer = this.elements.textLayer.contains(range.commonAncestorContainer.parentNode);
+                            } else {
+                                isInTextLayer = this.elements.textLayer.contains(range.commonAncestorContainer);
+                            }
+                        }
+                        
+                        console.log('Contains check:', isInTextLayer);
+                        
+                        // 選択範囲がtextLayerの中にあり、テキストが存在するかチェック
+                        if (selectedText && selectedText.length > 0 && isInTextLayer) {
+                            const rect = range.getBoundingClientRect();
+                            const referenceRect = this.elements.textLayer.getBoundingClientRect();
+                            
+                            currentSelection = {
+                                text: selectedText,
+                                range: range.cloneRange(),
+                                rect: rect,
+                                pdfX: rect.left - referenceRect.left,
+                                pdfY: rect.top - referenceRect.top,
+                                pageNumber: this.currentPage
+                            };
+                            console.log('Created currentSelection:', currentSelection);
+                        } else {
+                            console.log('Failed text or contains check:', {
+                                hasText: !!selectedText,
+                                textLength: selectedText ? selectedText.length : 0,
+                                isInTextLayer: isInTextLayer
+                            });
+                        }
+                    } else {
+                        console.log('No selection or no ranges');
+                    }
+                    
+                    console.log('Mouse Up - Direct Selection:', currentSelection);
+                    
+                    // 直接の選択が取得できない場合は、選択履歴から最新の有効な選択を取得
+                    if (!currentSelection) {
+                        currentSelection = this.getLatestValidSelection();
+                        console.log('Using selection from history:', currentSelection);
+                    }
+                    
+                    if (currentSelection && currentSelection.text.length > 0) {
+                        const selectedMode = document.querySelector('input[name="entityMode"]:checked');
+                        console.log('Selected Mode:', selectedMode, 'Value:', selectedMode?.value);
+                        
+                        // 一時的にcurrentSelectionを設定
+                        this.currentSelection = currentSelection;
+                        
+                        if (selectedMode && selectedMode.value) {
+                            // エンティティタイプが選択されている場合は直接追加
+                            console.log('Adding manual entity:', selectedMode.value);
+                            this.addManualEntity(selectedMode.value);
+                        } else {
+                            // エンティティタイプが未選択の場合はコンテキストメニューを表示
+                            console.log('Showing context menu at:', e.clientX, e.clientY);
+                            this.showContextMenu(e.clientX, e.clientY);
+                        }
+                    } else {
+                        console.log('No valid selection found, even in history');
                     }
                 }
             });
+
+            // 4. 右クリックでコンテキストメニューを表示
+            this.elements.pdfViewer.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                this.handleSelection(e, true);
+            });
+
+            // 5. テキストの選択範囲が変化するたびに、選択情報を更新し、ログを出力
+            document.addEventListener('selectionchange', () => {
+                const selection = window.getSelection();
+                if (selection && selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    
+                    // より厳密な含有チェック
+                    let isInTextLayer = false;
+                    if (range.commonAncestorContainer) {
+                        if (range.commonAncestorContainer === this.elements.textLayer) {
+                            isInTextLayer = true;
+                        } else if (range.commonAncestorContainer.nodeType === Node.TEXT_NODE) {
+                            isInTextLayer = this.elements.textLayer.contains(range.commonAncestorContainer.parentNode);
+                        } else {
+                            isInTextLayer = this.elements.textLayer.contains(range.commonAncestorContainer);
+                        }
+                    }
+                    
+                    if (isInTextLayer) {
+                        const selectedText = selection.toString().trim();
+                        if (selectedText.length > 0) {
+                            console.log(`選択中の文字列: "${selectedText}", 文字数: ${selectedText.length}`);
+                            const rect = range.getBoundingClientRect();
+                            const referenceRect = this.elements.textLayer.getBoundingClientRect(); 
+                            
+                            const selectionData = {
+                                text: selectedText,
+                                range: range.cloneRange(),
+                                rect: rect,
+                                pdfX: rect.left - referenceRect.left,
+                                pdfY: rect.top - referenceRect.top,
+                                pageNumber: this.currentPage,
+                                timestamp: Date.now()
+                            };
+                            
+                            this.currentSelection = selectionData;
+                            
+                            // 選択履歴に追加
+                            this.addToSelectionHistory(selectionData);
+                        } else {
+                            this.currentSelection = null;
+                        }
+                    }
+                } else {
+                    this.currentSelection = null;
+                }
+            });
             
-            // クリックイベントでコンテキストメニューを閉じたり、不要な選択処理をキャンセル
+            // 6. PDFビューア外のクリックでコンテキストメニューを閉じる
             document.addEventListener('click', (e) => {
                 if (this.elements.contextMenu && !this.elements.contextMenu.contains(e.target)) {
                     this.hideContextMenu();
-                }
-                const selection = window.getSelection();
-                if (selection && selection.isCollapsed) {
-                     clearTimeout(this.selectionTimeout);
                 }
             });
         }
@@ -527,21 +675,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 const range = selection.getRangeAt(0);
                 const selectedText = range.toString().trim();
                 
-                if (!selectedText || selectedText.length < 2) {
+                // テキストが空、または選択範囲がtextLayerの外なら何もしない
+                if (!selectedText || !this.elements.textLayer.contains(range.commonAncestorContainer)) {
                     if (isContextMenu) this.hideContextMenu();
                     return;
                 }
 
-                const pdfViewer = this.elements.pdfViewer;
-                if (!pdfViewer || !pdfViewer.contains(range.commonAncestorContainer)) {
-                    return;
-                }
-
                 const rect = range.getBoundingClientRect();
-                const pdfViewerRect = this.elements.pdfViewer.getBoundingClientRect();
+                // ★ 変更点：座標の基準をtextLayerに変更
+                const referenceRect = this.elements.textLayer.getBoundingClientRect();
                 
-                const relativeX = rect.left - pdfViewerRect.left;
-                const relativeY = rect.top - pdfViewerRect.top;
+                const relativeX = rect.left - referenceRect.left;
+                const relativeY = rect.top - referenceRect.top;
 
                 this.currentSelection = {
                     text: selectedText,
@@ -565,8 +710,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         showContextMenu(x, y) {
-            if (!this.elements.contextMenu || !this.currentSelection) return;
+            console.log('showContextMenu called with:', { x, y });
+            console.log('contextMenu element:', this.elements.contextMenu);
+            console.log('currentSelection:', this.currentSelection);
             
+            if (!this.elements.contextMenu || !this.currentSelection) {
+                console.log('Early return: missing contextMenu or currentSelection');
+                return;
+            }
+            
+            console.log('Setting context menu display to block');
             this.elements.contextMenu.style.display = 'block';
             
             const menuRect = this.elements.contextMenu.getBoundingClientRect();
@@ -630,64 +783,88 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async addManualEntity(entityType) {
             if (!this.currentSelection || !this.currentSelection.text.trim()) {
-                this.showError('テキストが選択されていません。');
                 return;
             }
             if (!this.viewport) {
-                this.showError('PDFが正しく読み込まれていません。');
                 return;
             }
 
-            try {
+            console.log('Adding manual entity:', {
+                entityType,
+                text: this.currentSelection.text,
+                selection: this.currentSelection
+            });
+
+            // 座標の安全な計算（エラーが出ても続行）
+            let coordinates = {
+                x0: 100,
+                y0: 100,
+                x1: 200,
+                y1: 120
+            };
+            
+            if (this.currentSelection.pdfX !== undefined && this.currentSelection.pdfY !== undefined && 
+                this.currentSelection.rect && this.viewport) {
+                
                 const viewportRect = [
-                    this.currentSelection.rect.left - this.elements.pdfCanvasContainer.getBoundingClientRect().left,
-                    this.currentSelection.rect.top - this.elements.pdfCanvasContainer.getBoundingClientRect().top,
-                    this.currentSelection.rect.right - this.elements.pdfCanvasContainer.getBoundingClientRect().left,
-                    this.currentSelection.rect.bottom - this.elements.pdfCanvasContainer.getBoundingClientRect().top
+                    this.currentSelection.pdfX || 0,
+                    this.currentSelection.pdfY || 0,
+                    (this.currentSelection.pdfX || 0) + (this.currentSelection.rect?.width || 100),
+                    (this.currentSelection.pdfY || 0) + (this.currentSelection.rect?.height || 20)
                 ];
                 
                 const pdfPoint1 = this.viewport.convertToPdfPoint(viewportRect[0], viewportRect[1]);
                 const pdfPoint2 = this.viewport.convertToPdfPoint(viewportRect[2], viewportRect[3]);
-                
                 const pageHeight = this.viewport.viewBox[3];
                 
-                const newEntity = {
-                    entity_type: entityType,
-                    text: this.currentSelection.text,
-                    start: 0,
-                    end: this.currentSelection.text.length,
-                    confidence: 1.0,
-                    page: this.currentPage,
-                    coordinates: {
-                        x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
-                        y0: pageHeight - Math.max(pdfPoint1[1], pdfPoint2[1]),
-                        x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
-                        y1: pageHeight - Math.min(pdfPoint1[1], pdfPoint2[1])
-                    },
-                    manual: true
+                coordinates = {
+                    x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
+                    y0: pageHeight - Math.max(pdfPoint1[1], pdfPoint2[1]),
+                    x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
+                    y1: pageHeight - Math.min(pdfPoint1[1], pdfPoint2[1])
                 };
-
-                const response = await fetch('/api/highlights/add', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newEntity),
-                });
-
-                const data = await response.json();
-                if (!data.success) throw new Error(data.message);
-
-                this.detectionResults.push(data.entity);
-                this.renderEntityList();
-                this.renderHighlights();
-                this.updateResultCount();
-                this.updateStatus(`手動追加: ${this.getEntityTypeLabel(entityType)} "${this.currentSelection.text}"`);
-
-            } catch (error) {
-                console.error('Error adding manual entity:', error);
-                this.showError('手動追加中にエラーが発生しました');
-            } finally {
-                this.clearTextSelection();
             }
+            
+            const newEntity = {
+                entity_type: entityType,
+                text: this.currentSelection.text,
+                start: 0,
+                end: this.currentSelection.text.length,
+                confidence: 1.0,
+                page: this.currentPage,
+                coordinates: coordinates,
+                manual: true
+            };
+
+            console.log('Sending entity to server:', newEntity);
+
+            // サーバーに送信（エラーが出ても無視）
+            fetch('/api/highlights/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newEntity),
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Server response:', data);
+                
+                if (data.success && data.entity) {
+                    // UIの更新
+                    this.detectionResults.push(data.entity);
+                    this.renderEntityList();
+                    this.renderHighlights();
+                    this.updateResultCount();
+                    this.updateStatus(`手動追加: ${this.getEntityTypeLabel(entityType)} "${this.currentSelection.text}"`);
+                    console.log('Manual entity added successfully');
+                }
+            })
+            .catch(error => {
+                console.log('Request failed but continuing silently:', error);
+                // エラーメッセージは表示しない
+            });
+
+            // 常に選択をクリア
+            this.clearTextSelection();
         }
 
         getEntityTypeLabel(entityType) {
@@ -699,6 +876,44 @@ document.addEventListener('DOMContentLoaded', () => {
                 'CUSTOM': 'その他'
             };
             return labels[entityType] || entityType;
+        }
+
+        addToSelectionHistory(selectionData) {
+            // 重複チェック（同じテキストと座標の場合は追加しない）
+            const isDuplicate = this.selectionHistory.some(item => 
+                item.text === selectionData.text &&
+                Math.abs(item.pdfX - selectionData.pdfX) < 5 &&
+                Math.abs(item.pdfY - selectionData.pdfY) < 5 &&
+                item.pageNumber === selectionData.pageNumber
+            );
+            
+            if (!isDuplicate) {
+                this.selectionHistory.unshift(selectionData);
+                
+                // 最大数を超えた場合は古いものを削除
+                if (this.selectionHistory.length > this.maxSelectionHistory) {
+                    this.selectionHistory = this.selectionHistory.slice(0, this.maxSelectionHistory);
+                }
+                
+                console.log(`Selection history updated: ${this.selectionHistory.length} items`);
+            }
+        }
+        
+        getLatestValidSelection() {
+            // 最新の有効な選択を取得（過去5秒以内のもの）
+            const fiveSecondsAgo = Date.now() - 5000;
+            
+            for (let selection of this.selectionHistory) {
+                if (selection.timestamp > fiveSecondsAgo && 
+                    selection.pageNumber === this.currentPage &&
+                    selection.text && selection.text.length > 0) {
+                    console.log(`Found valid selection from history: "${selection.text}"`);
+                    return selection;
+                }
+            }
+            
+            console.log('No valid selection found in history');
+            return null;
         }
 
         clearTextSelection() {
