@@ -395,6 +395,19 @@ class PDFPresidioProcessor:
             result['coordinates'] = self._calculate_text_coordinates(
                 result['start'], result['end'], pdf_data['pages']
             )
+            # 詳細な位置情報を追加
+            detailed_position = self._calculate_detailed_position_info(
+                result['start'], result['end'], pdf_data['pages']
+            )
+            result['position_details'] = detailed_position
+            
+            # 基本位置情報も更新
+            result['start_page'] = detailed_position['start_page']
+            result['start_line'] = detailed_position['start_line']
+            result['start_char'] = detailed_position['start_char']
+            result['end_page'] = detailed_position['end_page']
+            result['end_line'] = detailed_position['end_line']
+            result['end_char'] = detailed_position['end_char']
         
         logger.info(f"PDF解析完了: {len(results)}件の個人情報を検出")
         return results
@@ -403,11 +416,15 @@ class PDFPresidioProcessor:
         """テキスト位置に対応するページ情報を取得"""
         for page_data in pages:
             if page_data['text_start_offset'] <= text_position <= page_data['text_end_offset']:
+                relative_position = text_position - page_data['text_start_offset']
+                line_info = self._calculate_line_position(relative_position, page_data['text'])
                 return {
                     'page_number': page_data['page_number'],
-                    'relative_position': text_position - page_data['text_start_offset']
+                    'relative_position': relative_position,
+                    'line_number': line_info['line_number'],
+                    'char_in_line': line_info['char_in_line']
                 }
-        return {'page_number': 1, 'relative_position': text_position}
+        return {'page_number': 1, 'relative_position': text_position, 'line_number': 1, 'char_in_line': text_position}
     
     def _calculate_text_coordinates(self, start_pos: int, end_pos: int, pages: List[Dict]) -> Dict:
         """テキスト位置から座標を計算"""
@@ -469,6 +486,53 @@ class PDFPresidioProcessor:
             'y1': 720.0
         }
     
+    def _calculate_line_position(self, relative_position: int, page_text: str) -> Dict:
+        """ページ内での行番号と行内文字位置を計算"""
+        if not page_text:
+            return {'line_number': 1, 'char_in_line': 0}
+        
+        lines = page_text.split('\n')
+        current_pos = 0
+        
+        for line_num, line in enumerate(lines, 1):
+            line_end = current_pos + len(line)
+            
+            if current_pos <= relative_position <= line_end:
+                char_in_line = relative_position - current_pos
+                return {
+                    'line_number': line_num,
+                    'char_in_line': char_in_line,
+                    'total_lines': len(lines),
+                    'line_content': line
+                }
+            
+            current_pos = line_end + 1  # +1 for newline character
+        
+        # テキストの最後の場合
+        return {
+            'line_number': len(lines),
+            'char_in_line': len(lines[-1]) if lines else 0,
+            'total_lines': len(lines),
+            'line_content': lines[-1] if lines else ''
+        }
+    
+    def _calculate_detailed_position_info(self, start_pos: int, end_pos: int, pages: List[Dict]) -> Dict:
+        """エンティティの詳細な位置情報を計算"""
+        start_info = self._find_page_for_position(start_pos, pages)
+        end_info = self._find_page_for_position(end_pos, pages)
+        
+        return {
+            'start_page': start_info['page_number'],
+            'start_line': start_info['line_number'],
+            'start_char': start_info['char_in_line'],
+            'end_page': end_info['page_number'],
+            'end_line': end_info['line_number'],
+            'end_char': end_info['char_in_line'],
+            'spans_multiple_pages': start_info['page_number'] != end_info['page_number'],
+            'spans_multiple_lines': (start_info['page_number'] != end_info['page_number'] or 
+                                   start_info['line_number'] != end_info['line_number'])
+        }
+    
     def _chunk_text(self, text: str, max_bytes: int = 45000) -> List[Dict]:
         """テキストをチャンクに分割（spaCyの制限対応）"""
         chunks = []
@@ -524,39 +588,39 @@ class PDFPresidioProcessor:
         analyzer_results = self.analyzer.analyze(text=text, language="ja", entities=entities)
         
         if "PROPER_NOUN" in entities:
-            proper_noun_results = self._detect_proper_nouns(text)
+            # PROPER_NOUNのスコアは設定に依存せず固定値とします
+            proper_noun_results = self._detect_proper_nouns(text, score=0.85)
             analyzer_results.extend(proper_noun_results)
         
         results = []
         for result in analyzer_results:
             if result.entity_type in entities:
-                # 閾値チェック
-                min_score = self.config_manager.get_threshold(result.entity_type)
-                if result.score >= min_score:
-                    # エンティティ除外チェック
-                    entity_text = text[result.start:result.end]
+                # 信頼度チェックを削除
+                # エンティティ除外チェック
+                entity_text = text[result.start:result.end]
+                
+                # エンティティタイプに応じてテキスト境界を調整
+                refined_text = self._refine_entity_text(entity_text, result.entity_type, text, result.start, result.end)
+                
+                if not self.config_manager.is_entity_excluded(result.entity_type, refined_text):
+                    # 調整されたテキストの位置を計算
+                    refined_start, refined_end = self._calculate_refined_positions(
+                        text, result.start, result.end, refined_text
+                    )
                     
-                    # エンティティタイプに応じてテキスト境界を調整
-                    refined_text = self._refine_entity_text(entity_text, result.entity_type, text, result.start, result.end)
-                    
-                    if not self.config_manager.is_entity_excluded(result.entity_type, refined_text):
-                        # 調整されたテキストの位置を計算
-                        refined_start, refined_end = self._calculate_refined_positions(
-                            text, result.start, result.end, refined_text
-                        )
-                        
-                        results.append({
-                            'start': refined_start,
-                            'end': refined_end,
-                            'score': result.score,
-                            'entity_type': result.entity_type,
-                            'text': refined_text
-                        })
-                    else:
-                        logger.debug(f"エンティティ除外: '{refined_text}' ({result.entity_type})")
+                    # 'score' を結果から削除し、位置情報を常に含める
+                    results.append({
+                        'start': refined_start,
+                        'end': refined_end,
+                        'entity_type': result.entity_type,
+                        'text': refined_text
+                    })
+                else:
+                    logger.debug(f"エンティティ除外: '{refined_text}' ({result.entity_type})")
         
         # 重複除去処理（オプション）
         if self.config_manager.is_deduplication_enabled():
+            # スコアベースの重複除去は利用できなくなるため、他の基準を利用
             results = self._deduplicate_entities(results)
         
         return sorted(results, key=lambda x: x['start'])
@@ -624,13 +688,13 @@ class PDFPresidioProcessor:
             # 削除対象のエンティティを削除（逆順で削除してインデックスのずれを防ぐ）
             for i in sorted(entities_to_remove, reverse=True):
                 removed_entity = deduplicated.pop(i)
-                logger.debug(f"重複除去: '{removed_entity['text']}' ({removed_entity['entity_type']}, score={removed_entity['score']:.3f}) を除去")
+                logger.debug(f"重複除去: '{removed_entity['text']}' ({removed_entity['entity_type']}) を除去")
             
             # 現在のエンティティを追加
             if should_add:
                 deduplicated.append(current_entity)
             else:
-                logger.debug(f"重複除去: '{current_entity['text']}' ({current_entity['entity_type']}, score={current_entity['score']:.3f}) を除去")
+                logger.debug(f"重複除去: '{current_entity['text']}' ({current_entity['entity_type']}) を除去")
         
         original_count = len(entities)
         deduplicated_count = len(deduplicated)
@@ -641,50 +705,55 @@ class PDFPresidioProcessor:
     
     def _should_current_entity_win(self, current_entity: Dict, existing_entity: Dict, priority: str) -> bool:
         """2つのエンティティを比較して、現在のエンティティが優先されるべきかを判定"""
+        # score は廃止されたため、scoreに依存しないロジックに修正
         if priority == "score":
-            # スコア優先
-            return current_entity['score'] > existing_entity['score']
-        
-        elif priority == "wider_range":
+            # スコアが利用できないため、他の基準にフォールバック (例: wider_range)
+            priority = "wider_range"
+            logger.warning("優先順位基準 'score' は廃止されました。'wider_range' を使用します。")
+
+        if priority == "wider_range":
             # 広い範囲優先
             current_range = current_entity['end'] - current_entity['start']
             existing_range = existing_entity['end'] - existing_entity['start']
             if current_range != existing_range:
                 return current_range > existing_range
-            # 範囲が同じ場合はスコアで判定
-            return current_entity['score'] > existing_entity['score']
-        
+            # 範囲が同じ場合は位置で判定（早い位置優先）
+            return current_entity['start'] < existing_entity['start']
+
         elif priority == "narrower_range":
             # 狭い範囲優先
             current_range = current_entity['end'] - current_entity['start']
             existing_range = existing_entity['end'] - existing_entity['start']
             if current_range != existing_range:
                 return current_range < existing_range
-            # 範囲が同じ場合はスコアで判定
-            return current_entity['score'] > existing_entity['score']
-        
+            # 範囲が同じ場合は位置で判定（早い位置優先）
+            return current_entity['start'] < existing_entity['start']
+
         elif priority == "entity_type":
             # エンティティタイプ優先
             entity_order = self.config_manager.get_entity_priority_order()
             try:
                 current_priority = entity_order.index(current_entity['entity_type'])
             except ValueError:
-                current_priority = len(entity_order)  # 未知のタイプは最低優先度
+                current_priority = len(entity_order)
             
             try:
                 existing_priority = entity_order.index(existing_entity['entity_type'])
             except ValueError:
-                existing_priority = len(entity_order)  # 未知のタイプは最低優先度
+                existing_priority = len(entity_order)
             
             if current_priority != existing_priority:
-                return current_priority < existing_priority  # インデックスが小さい方が高優先度
-            # エンティティタイプが同じ場合はスコアで判定
-            return current_entity['score'] > existing_entity['score']
+                return current_priority < existing_priority
+            # エンティティタイプが同じ場合は位置で判定（早い位置優先）
+            return current_entity['start'] < existing_entity['start']
         
         else:
-            # 未知の優先順位基準、デフォルトでスコア判定
-            logger.warning(f"未サポートの優先順位基準: {priority}. スコア基準を使用します。")
-            return current_entity['score'] > existing_entity['score']
+            # デフォルトは wider_range
+            current_range = current_entity['end'] - current_entity['start']
+            existing_range = existing_entity['end'] - existing_entity['start']
+            if current_range != existing_range:
+                return current_range > existing_range
+            return current_entity['start'] < existing_entity['start']
 
     def _analyze_text_chunked(self, text: str, entities: List[str]) -> List[Dict]:
         """チャンク分割による大容量テキスト解析"""
@@ -1176,7 +1245,7 @@ class PDFPresidioProcessor:
             return ""
         
         entity_type = entity['entity_type']
-        confidence = entity.get('score', 0.0)
+        # confidence = entity.get('score', 0.0)  # 信頼度スコアは廃止
         text = entity.get('text', '')
         
         # エンティティタイプの日本語名
@@ -1196,11 +1265,8 @@ class PDFPresidioProcessor:
             # 最小限の情報：エンティティタイプのみ
             return type_name
         elif text_display_mode == "verbose":
-            # 詳細情報：エンティティタイプ + 信頼度
+            # 詳細情報：エンティティタイプ
             content = f"【個人情報】{type_name}"
-            
-            if confidence > 0:
-                content += f" (信頼度: {confidence:.1%})"
             
             # 設定によってはテキスト内容も含める
             annotation_settings = self.config_manager.get_pdf_annotation_settings()

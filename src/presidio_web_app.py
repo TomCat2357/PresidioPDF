@@ -104,7 +104,7 @@ class PresidioPDFWebApp:
         self.total_pages = 0
         self.settings = {
             "entities": ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-            "threshold": 0.5,
+            # "threshold": 0.5,  # 閾値設定を削除
             "masking_method": "highlight"  # highlight, annotation, both
         }
         
@@ -205,15 +205,21 @@ class PresidioPDFWebApp:
 
                 rect = text_instances[0]  # 最初の出現位置の座標を使用
 
-                # 閾値とエンティティタイプでフィルタリング
-                if (entity['score'] >= self.settings['threshold'] and 
-                    entity['entity_type'] in self.settings['entities']):
+                # エンティティタイプでフィルタリング（閾値チェックを削除）
+                if entity['entity_type'] in self.settings['entities']:
                     
                     result = {
                         "entity_type": str(entity.get("entity_type", "UNKNOWN")),
                         "text": str(entity.get("text", "")),
-                        "confidence": float(entity.get("score", 0.0)),
+                        # "confidence": float(entity.get("score", 0.0)),  # 信頼度を削除
                         "page": page_num,
+                        # 詳細な位置情報を追加
+                        "start_page": entity.get('position_details', {}).get('start_page'),
+                        "start_line": entity.get('position_details', {}).get('start_line'),
+                        "start_char": entity.get('position_details', {}).get('start_char'),
+                        "end_page": entity.get('position_details', {}).get('end_page'),
+                        "end_line": entity.get('position_details', {}).get('end_line'),
+                        "end_char": entity.get('position_details', {}).get('end_char'),
                         "start": int(entity.get("start", 0)),
                         "end": int(entity.get("end", 0)),
                         "coordinates": {

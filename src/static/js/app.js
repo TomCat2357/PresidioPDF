@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-                threshold: 0.5,
+                // threshold: 0.5,  // 閾値設定を削除
                 masking_method: "highlight"
             };
 
@@ -63,8 +63,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 pdfCanvas: document.getElementById('pdfCanvas'),
                 textLayer: document.getElementById('textLayer'),
                 highlightOverlay: document.getElementById('highlightOverlay'),
-                thresholdSlider: document.getElementById('thresholdSlider'),
-                thresholdValue: document.getElementById('thresholdValue'),
+                // thresholdSlider: document.getElementById('thresholdSlider'),  // 閾値スライダーを削除
+                // thresholdValue: document.getElementById('thresholdValue'),    // 閾値表示を削除
                 saveSettingsBtn: document.getElementById('saveSettingsBtn'),
                 contextMenu: document.getElementById('contextMenu'),
                 cancelSelection: document.getElementById('cancelSelection')
@@ -96,7 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.zoomSlider.addEventListener('input', (e) => this.updateZoom(parseInt(e.target.value, 10)));
             this.elements.showHighlights.addEventListener('change', () => this.renderHighlights());
             this.elements.saveBtn.addEventListener('click', () => this.generateAndDownloadPdf());
-            this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });
+            // this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });  // 閾値スライダーを削除
             this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
 
             // --- PDFビューアのインタラクティブなイベント（整理・統合済み） ---
@@ -514,20 +514,23 @@ document.addEventListener('DOMContentLoaded', () => {
                     item.classList.add('active');
                 }
                 
-                const confidence = (entity.confidence * 100).toFixed(0);
+                // const confidence = (entity.confidence * 100).toFixed(0);  // 信頼度を削除
                 const isManual = entity.manual || false;
                 const manualBadge = isManual ? '<span class="badge bg-success ms-1">手動</span>' : '<span class="badge bg-info ms-1">自動</span>';
                 
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'flex-grow-1';
                 contentDiv.style.cursor = 'pointer';
+                
+                // 詳細位置情報の表示
+                const positionText = this.formatPositionInfo(entity);
+                
                 contentDiv.innerHTML = `
                     <div class="d-flex w-100 justify-content-between">
                         <h6 class="mb-1">${this.getEntityTypeJapanese(entity.entity_type)}${manualBadge}</h6>
-                        <small>信頼度: ${confidence}%</small>
                     </div>
                     <p class="mb-1 text-truncate">${entity.text}</p>
-                    <small>ページ: ${entity.page}</small>`;
+                    <small class="position-info">${positionText}</small>`;
                 
                 contentDiv.addEventListener('click', (e) => {
                     e.preventDefault();
@@ -626,7 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         saveSettings() {
             this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
-            this.settings.threshold = parseFloat(this.elements.thresholdSlider.value);
+            // this.settings.threshold = parseFloat(this.elements.thresholdSlider.value);  // 閾値設定を削除
             this.settings.masking_method = document.getElementById('maskingMethod').value;
             this.updateStatus('設定を保存しました');
             const modal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
@@ -638,14 +641,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 const checkbox = document.querySelector(`#settingsModal input[value="${entityValue}"]`);
                 if (checkbox) checkbox.checked = true;
             });
-            this.elements.thresholdSlider.value = this.settings.threshold;
-            this.elements.thresholdValue.textContent = this.settings.threshold;
+            // this.elements.thresholdSlider.value = this.settings.threshold;    // 閾値スライダー設定を削除
+            // this.elements.thresholdValue.textContent = this.settings.threshold; // 閾値表示設定を削除
             document.getElementById('maskingMethod').value = this.settings.masking_method;
         }
 
         getEntityTypeJapanese(entityType) {
             const mapping = { "PERSON": "人名", "LOCATION": "場所", "PHONE_NUMBER": "電話番号", "DATE_TIME": "日時", "CUSTOM": "カスタム" };
             return mapping[entityType] || entityType;
+        }
+
+        formatPositionInfo(entity) {
+            // 詳細位置情報がある場合
+            if (entity.start_page !== undefined && entity.start_line !== undefined) {
+                if (entity.start_page === entity.end_page && entity.start_line === entity.end_line) {
+                    // 同一ページ、同一行の場合
+                    return `P${entity.start_page} L${entity.start_line} (${entity.start_char}-${entity.end_char}文字目)`;
+                } else if (entity.start_page === entity.end_page) {
+                    // 同一ページ、複数行にまたがる場合
+                    return `P${entity.start_page} L${entity.start_line}:${entity.start_char}-L${entity.end_line}:${entity.end_char}`;
+                } else {
+                    // 複数ページにまたがる場合
+                    return `P${entity.start_page}L${entity.start_line}:${entity.start_char}-P${entity.end_page}L${entity.end_line}:${entity.end_char}`;
+                }
+            }
+            
+            // フォールバック: 従来のページ情報
+            return `ページ: ${entity.page || 1}`;
         }
 
         updateStatus(message, isError = false) {
@@ -840,7 +862,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 text: this.currentSelection.text,
                 start: 0,
                 end: this.currentSelection.text.length,
-                confidence: 1.0,
+                // confidence: 1.0,  // 信頼度を削除
                 page: this.currentPage,
                 coordinates: coordinates,
                 manual: true
