@@ -22,6 +22,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.selectedEntityIndex = -1;
             this.currentSelection = null;
             this.viewport = null;
+            // isMouseDownを削除し、selectionTimeoutで選択完了を管理
+            this.selectionTimeout = null;
 
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
@@ -68,6 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
             this.pdfContext = this.elements.pdfCanvas.getContext('2d');
         }
 
+        // =================================================================
+        // ==  イベント処理の根本的な修正  ==
+        // =================================================================
         bindEvents() {
             this.elements.uploadArea.addEventListener('click', () => this.elements.pdfFileInput.click());
             this.elements.pdfFileInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
@@ -91,21 +96,48 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.thresholdSlider.addEventListener('input', (e) => { this.elements.thresholdValue.textContent = e.target.value; });
             this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
 
+            // --- 新しいイベントリスナー ---
+            // 右クリックでコンテキストメニューを表示
             this.elements.pdfViewer.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
-                this.handleSelection(e, true);
+                this.handleSelection(e, true); // isContextMenu = true
             });
-            document.addEventListener('click', (e) => {
-                if (!this.elements.contextMenu.contains(e.target)) {
-                    this.hideContextMenu();
+            
+            // テキスト選択が変化したときの処理を主軸にする
+            document.addEventListener('selectionchange', () => {
+                const selection = window.getSelection();
+                
+                // 選択範囲があり、それがPDFビューア内である場合のみ処理
+                if (selection && selection.rangeCount > 0 && selection.toString().trim().length > 0) {
+                    const range = selection.getRangeAt(0);
+                    if (this.elements.pdfViewer.contains(range.commonAncestorContainer)) {
+                        
+                        // ドラッグ操作中はタイマーをリセットし続ける
+                        clearTimeout(this.selectionTimeout);
+                        
+                        // ドラッグが止まってから300ms後に選択処理を実行
+                        this.selectionTimeout = setTimeout(() => {
+                            // isContextMenu = false として選択処理を呼び出す
+                            this.handleSelection(null, false);
+                        }, 300);
+                    }
                 }
             });
-             this.elements.pdfViewer.addEventListener('mouseup', (e) => {
-                if (e.button !== 2 && !this.elements.contextMenu.contains(e.target)) {
-                     setTimeout(() => this.handleSelection(e), 50);
+            
+            // クリックイベントでコンテキストメニューを閉じたり、不要な選択処理をキャンセル
+            document.addEventListener('click', (e) => {
+                if (this.elements.contextMenu && !this.elements.contextMenu.contains(e.target)) {
+                    this.hideContextMenu();
+                }
+                const selection = window.getSelection();
+                if (selection && selection.isCollapsed) {
+                     clearTimeout(this.selectionTimeout);
                 }
             });
         }
+        // =================================================================
+        // ==  ここまでが修正点です ==
+        // =================================================================
         
         preventDefaults(e) {
             e.preventDefault();
@@ -116,12 +148,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const dt = e.dataTransfer;
             const files = dt.files;
             if (files.length > 0) {
-                // ドロップ時の視覚的フィードバックを追加
                 this.elements.uploadArea.style.borderColor = '#28a745';
                 this.elements.uploadArea.style.backgroundColor = '#d4edda';
                 this.updateStatus('ファイルを処理中...');
-                
-                // 少し遅延を入れてユーザーにフィードバックを見せる
                 setTimeout(() => {
                     this.handleFileSelect(files[0]);
                 }, 100);
@@ -173,11 +202,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.viewport = page.getViewport({ scale });
 
                 const canvas = this.elements.pdfCanvas;
-                const container = this.elements.pdfCanvasContainer; // コンテナ要素を取得
+                const container = this.elements.pdfCanvasContainer;
 
-                // CSS変数を更新
                 container.style.setProperty('--scale-factor', this.viewport.scale);
-
                 canvas.width = this.viewport.width;
                 canvas.height = this.viewport.height;
 
@@ -248,20 +275,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 highlightEl.classList.add('selected');
             }
 
-            // ### 蛍光ペン風ハイライト座標計算 START ###
-            // 修正箇所：PyMuPDFのY座標（上から下）をPDF.jsのY座標（下から上）に変換します。
-            const pageHeight = this.viewport.viewBox[3]; // PDFページの元の高さを取得
+            const pageHeight = this.viewport.viewBox[3];
             const pdfRect = [
                 entity.coordinates.x0,
-                pageHeight - entity.coordinates.y1, // y0（下端）を計算
+                pageHeight - entity.coordinates.y1,
                 entity.coordinates.x1,
-                pageHeight - entity.coordinates.y0  // y1（上端）を計算
+                pageHeight - entity.coordinates.y0
             ];
 
-            // ビューポート座標に変換
             const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
             
-            // 座標の順序を確認して正規化
             const left = Math.min(viewportRect[0], viewportRect[2]);
             const top = Math.min(viewportRect[1], viewportRect[3]);
             const right = Math.max(viewportRect[0], viewportRect[2]);
@@ -270,10 +293,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const width = right - left;
             const height = bottom - top;
             
-            // 最小サイズを保証（蛍光ペン効果のため）
-            const minHeight = 12; // 最小高さ
+            const minHeight = 12;
             const adjustedHeight = Math.max(height, minHeight);
-            // ### 蛍光ペン風ハイライト座標計算 END ###
 
             highlightEl.style.left = `${left}px`;
             highlightEl.style.top = `${top}px`;
@@ -306,7 +327,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.renderEntityList();
                 this.renderHighlights();
                 this.elements.saveBtn.disabled = false;
-                this.updateStatus(`検出完了: ${this.detectionResults.length}件の個人情報が見つかりました`);
+                
+                const manualCount = data.manual_count || 0;
+                const newCount = data.new_count || 0;
+                const totalCount = data.count || this.detectionResults.length;
+                
+                let statusMessage = `検出完了: 新規${newCount}件`;
+                if (manualCount > 0) {
+                    statusMessage += `, 手動保護${manualCount}件`;
+                }
+                statusMessage += `, 合計${totalCount}件`;
+                
+                this.updateStatus(statusMessage);
 
             } catch (error) {
                 console.error('Detection error:', error);
@@ -327,24 +359,44 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             this.detectionResults.forEach((entity, index) => {
-                const item = document.createElement('a');
-                item.href = '#';
-                item.className = `list-group-item list-group-item-action`;
+                const item = document.createElement('div');
+                item.className = `list-group-item list-group-item-action d-flex justify-content-between align-items-start`;
                 if (index === this.selectedEntityIndex) {
                     item.classList.add('active');
                 }
+                
                 const confidence = (entity.confidence * 100).toFixed(0);
-                item.innerHTML = `
+                const isManual = entity.manual || false;
+                const manualBadge = isManual ? '<span class="badge bg-success ms-1">手動</span>' : '<span class="badge bg-info ms-1">自動</span>';
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'flex-grow-1';
+                contentDiv.style.cursor = 'pointer';
+                contentDiv.innerHTML = `
                     <div class="d-flex w-100 justify-content-between">
-                        <h6 class="mb-1">${this.getEntityTypeJapanese(entity.entity_type)}</h6>
+                        <h6 class="mb-1">${this.getEntityTypeJapanese(entity.entity_type)}${manualBadge}</h6>
                         <small>信頼度: ${confidence}%</small>
                     </div>
                     <p class="mb-1 text-truncate">${entity.text}</p>
                     <small>ページ: ${entity.page}</small>`;
-                item.addEventListener('click', (e) => {
+                
+                contentDiv.addEventListener('click', (e) => {
                     e.preventDefault();
                     this.selectEntity(index);
                 });
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'btn btn-outline-danger btn-sm';
+                deleteBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                deleteBtn.title = '削除';
+                deleteBtn.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    await this.deleteEntity(index);
+                });
+                
+                item.appendChild(contentDiv);
+                item.appendChild(deleteBtn);
                 listEl.appendChild(item);
             });
         }
@@ -367,7 +419,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        
         previousPage() { this.changePage(this.currentPage - 1); }
         nextPage() { this.changePage(this.currentPage + 1); }
 
@@ -425,7 +476,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         loadSettings() {
-            // 初期値をフォームに反映
             this.settings.entities.forEach(entityValue => {
                 const checkbox = document.querySelector(`#settingsModal input[value="${entityValue}"]`);
                 if (checkbox) checkbox.checked = true;
@@ -463,7 +513,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (this.elements.contextMenu) {
                 this.elements.contextMenu.style.display = 'none';
             }
-            // 選択状態をクリア
             this.clearTextSelection();
         }
         
@@ -471,7 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const selection = window.getSelection();
                 if (!selection || selection.rangeCount === 0) {
-                    this.hideContextMenu();
+                    if (isContextMenu) this.hideContextMenu();
                     return;
                 }
 
@@ -479,22 +528,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 const selectedText = range.toString().trim();
                 
                 if (!selectedText || selectedText.length < 2) {
-                    this.hideContextMenu();
+                    if (isContextMenu) this.hideContextMenu();
                     return;
                 }
 
-                // 選択されたテキストの位置を計算
+                const pdfViewer = this.elements.pdfViewer;
+                if (!pdfViewer || !pdfViewer.contains(range.commonAncestorContainer)) {
+                    return;
+                }
+
                 const rect = range.getBoundingClientRect();
                 const pdfViewerRect = this.elements.pdfViewer.getBoundingClientRect();
                 
-                // PDF座標系での位置を計算
                 const relativeX = rect.left - pdfViewerRect.left;
                 const relativeY = rect.top - pdfViewerRect.top;
 
-                // 選択情報を保存
                 this.currentSelection = {
                     text: selectedText,
-                    range: range,
+                    range: range.cloneRange(),
                     rect: rect,
                     pdfX: relativeX,
                     pdfY: relativeY,
@@ -502,15 +553,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
 
                 if (isContextMenu) {
-                    // 右クリックの場合、コンテキストメニューを表示
                     this.showContextMenu(e.clientX, e.clientY);
                 } else {
-                    // 通常の選択の場合、選択モードに応じて処理
                     this.handleModeBasedSelection();
                 }
 
-                console.log('Text selected:', selectedText, 'at position:', relativeX, relativeY);
-                
             } catch (error) {
                 console.error('Selection handling error:', error);
                 this.hideContextMenu();
@@ -522,7 +569,6 @@ document.addEventListener('DOMContentLoaded', () => {
             
             this.elements.contextMenu.style.display = 'block';
             
-            // 画面端を考慮してメニュー位置を調整
             const menuRect = this.elements.contextMenu.getBoundingClientRect();
             const windowWidth = window.innerWidth;
             const windowHeight = window.innerHeight;
@@ -540,7 +586,6 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.contextMenu.style.left = menuX + 'px';
             this.elements.contextMenu.style.top = menuY + 'px';
             
-            // コンテキストメニューのイベントリスナーを設定
             this.bindContextMenuEvents();
         }
 
@@ -551,15 +596,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const newItem = item.cloneNode(true);
                 item.parentNode.replaceChild(newItem, item);
                 
-                newItem.addEventListener('click', (e) => {
+                newItem.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     const entityType = newItem.getAttribute('data-entity-type');
-                    this.addManualEntity(entityType);
                     this.hideContextMenu();
+                    await this.addManualEntity(entityType);
                 });
             });
 
-            // キャンセルボタン
             const cancelBtn = this.elements.contextMenu.querySelector('#cancelSelection');
             if (cancelBtn) {
                 const newCancelBtn = cancelBtn.cloneNode(true);
@@ -573,49 +617,70 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         handleModeBasedSelection() {
-            // 現在の選択モードを取得
             const selectedMode = document.querySelector('input[name="entityMode"]:checked');
             if (!selectedMode || !selectedMode.value) {
-                return; // 通常モードの場合は何もしない
+                this.updateStatus('手動追加するには、まずエンティティタイプ（人名など）を選択してください。', false);
+                this.clearTextSelection();
+                return;
             }
 
             const entityType = selectedMode.value;
             this.addManualEntity(entityType);
         }
 
-        addManualEntity(entityType) {
-            if (!this.currentSelection) return;
+        async addManualEntity(entityType) {
+            if (!this.currentSelection || !this.currentSelection.text.trim()) {
+                this.showError('テキストが選択されていません。');
+                return;
+            }
+            if (!this.viewport) {
+                this.showError('PDFが正しく読み込まれていません。');
+                return;
+            }
 
             try {
-                // 新しいエンティティを作成
+                const viewportRect = [
+                    this.currentSelection.rect.left - this.elements.pdfCanvasContainer.getBoundingClientRect().left,
+                    this.currentSelection.rect.top - this.elements.pdfCanvasContainer.getBoundingClientRect().top,
+                    this.currentSelection.rect.right - this.elements.pdfCanvasContainer.getBoundingClientRect().left,
+                    this.currentSelection.rect.bottom - this.elements.pdfCanvasContainer.getBoundingClientRect().top
+                ];
+                
+                const pdfPoint1 = this.viewport.convertToPdfPoint(viewportRect[0], viewportRect[1]);
+                const pdfPoint2 = this.viewport.convertToPdfPoint(viewportRect[2], viewportRect[3]);
+                
+                const pageHeight = this.viewport.viewBox[3];
+                
                 const newEntity = {
                     entity_type: entityType,
                     text: this.currentSelection.text,
-                    start: 0, // PDF内での実際の位置は後で計算
+                    start: 0,
                     end: this.currentSelection.text.length,
-                    confidence: 1.0, // 手動追加は100%
-                    page_number: this.currentPage,
-                    bbox: [
-                        this.currentSelection.pdfX,
-                        this.currentSelection.pdfY,
-                        this.currentSelection.pdfX + this.currentSelection.rect.width,
-                        this.currentSelection.pdfY + this.currentSelection.rect.height
-                    ],
-                    manual: true // 手動追加のフラグ
+                    confidence: 1.0,
+                    page: this.currentPage,
+                    coordinates: {
+                        x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
+                        y0: pageHeight - Math.max(pdfPoint1[1], pdfPoint2[1]),
+                        x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
+                        y1: pageHeight - Math.min(pdfPoint1[1], pdfPoint2[1])
+                    },
+                    manual: true
                 };
 
-                // 検出結果に追加
-                this.detectionResults.push(newEntity);
+                const response = await fetch('/api/highlights/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newEntity),
+                });
 
-                // UIを更新
+                const data = await response.json();
+                if (!data.success) throw new Error(data.message);
+
+                this.detectionResults.push(data.entity);
                 this.renderEntityList();
                 this.renderHighlights();
                 this.updateResultCount();
-
-                // 成功メッセージを表示
                 this.updateStatus(`手動追加: ${this.getEntityTypeLabel(entityType)} "${this.currentSelection.text}"`);
-
-                console.log('Manual entity added:', newEntity);
 
             } catch (error) {
                 console.error('Error adding manual entity:', error);
@@ -637,7 +702,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         clearTextSelection() {
-            // テキスト選択をクリア
             if (window.getSelection) {
                 window.getSelection().removeAllRanges();
             }
@@ -649,7 +713,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.elements.resultCount.textContent = this.detectionResults.length;
             }
         }
-
+        
+        async deleteEntity(index) {
+            try {
+                if (index < 0 || index >= this.detectionResults.length) {
+                    this.showError('無効なエンティティです');
+                    return;
+                }
+                
+                const entity = this.detectionResults[index];
+                const confirmMessage = `以下のエンティティを削除しますか？\n\nタイプ: ${this.getEntityTypeJapanese(entity.entity_type)}\nテキスト: ${entity.text}\nページ: ${entity.page}`;
+                
+                if (!confirm(confirmMessage)) return;
+                
+                this.showLoading(true, 'エンティティを削除中...');
+                
+                const response = await fetch(`/api/delete_entity/${index}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                if (!data.success) throw new Error(data.message);
+                
+                this.detectionResults.splice(index, 1);
+                
+                if (this.selectedEntityIndex === index) {
+                    this.selectedEntityIndex = -1;
+                } else if (this.selectedEntityIndex > index) {
+                    this.selectedEntityIndex--;
+                }
+                
+                this.renderEntityList();
+                this.renderHighlights();
+                this.updateResultCount();
+                this.updateStatus(`削除完了: ${data.deleted_entity.text}`);
+                
+            } catch (error) {
+                console.error('Delete entity error:', error);
+                this.showError(error.message || 'エンティティの削除に失敗しました');
+            } finally {
+                this.showLoading(false);
+            }
+        }
     }
 
     new PresidioPDFWebApp();

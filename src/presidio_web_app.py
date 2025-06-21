@@ -12,6 +12,8 @@ import uuid
 import logging
 import traceback
 import sys
+import shutil
+import argparse
 from datetime import datetime
 from typing import List, Dict, Optional
 import io
@@ -43,8 +45,12 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 # アップロードフォルダを作成
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# ログフォルダを作成
+LOG_FOLDER = 'log'
+os.makedirs(LOG_FOLDER, exist_ok=True)
+
 # ログ設定
-log_filename = f"presidio_web_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_filename = os.path.join(LOG_FOLDER, f"presidio_web_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 logging.basicConfig(
     level=logging.INFO, # INFOレベルに変更して、本番運用でのログ量を調整
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -58,11 +64,40 @@ logger = logging.getLogger(__name__)
 # グローバル変数（セッション管理）
 sessions = {}
 
+# コマンドライン引数の解析
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='PDF個人情報マスキングツール - Webアプリケーション版')
+    parser.add_argument('--gpu', action='store_true', help='GPU（NVIDIA CUDA）を使用する（デフォルト: CPU使用）')
+    parser.add_argument('--host', default='0.0.0.0', help='サーバーのホストアドレス（デフォルト: 0.0.0.0）')
+    parser.add_argument('--port', type=int, default=5000, help='サーバーのポート番号（デフォルト: 5000）')
+    parser.add_argument('--debug', action='store_true', help='デバッグモードで実行')
+    return parser.parse_args()
+
+# CPUモードの強制設定
+def force_cpu_mode():
+    """NVIDIA関連の環境変数を無効化してCPUモードを強制"""
+    # CUDA関連の環境変数を無効化
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    os.environ['NVIDIA_VISIBLE_DEVICES'] = ''
+    
+    # PyTorch関連
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = ''
+    
+    # spaCy関連
+    os.environ['SPACY_PREFER_GPU'] = '0'
+    
+    # Transformers関連
+    os.environ['TRANSFORMERS_OFFLINE'] = '1'
+    os.environ['HF_DATASETS_OFFLINE'] = '1'
+    
+    logger.info("CPUモードが強制的に有効化されました。GPU関連機能は無効です。")
+
 class PresidioPDFWebApp:
     """PDF個人情報マスキングWebアプリケーション"""
     
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, use_gpu: bool = False):
         self.session_id = session_id
+        self.use_gpu = use_gpu
         self.current_pdf_path: Optional[str] = None
         self.detection_results: List[Dict] = []
         self.pdf_document = None
@@ -87,14 +122,22 @@ class PresidioPDFWebApp:
                 else:
                     config_manager = ConfigManager()
                     logger.warning(f"設定ファイルが見つかりません: {config_path}。デフォルト設定で初期化します。")
+                
+                # CPU/GPUモードの設定
+                if not self.use_gpu:
+                    # CPUモード強制のため、設定を上書き
+                    config_manager.spacy_model = getattr(config_manager, 'spacy_model', 'ja_core_news_sm')
+                    logger.info(f"CPUモードで初期化中: spaCyモデル = {config_manager.spacy_model}")
             
                 self.processor = PDFPresidioProcessor(config_manager)
-                logger.info("Presidio processor初期化完了")
+                
+                mode_str = "GPU" if self.use_gpu else "CPU"
+                logger.info(f"Presidio processor初期化完了 ({mode_str}モード)")
             except Exception as e:
                 logger.error(f"Presidio processor初期化エラー: {e}")
                 self.processor = None
         
-        logger.info(f"セッション {session_id} 初期化完了")
+        logger.info(f"セッション {session_id} 初期化完了 ({'GPU' if self.use_gpu else 'CPU'}モード)")
     
     def load_pdf_file(self, file_path: str) -> Dict:
         """PDFファイルを読み込み"""
@@ -137,11 +180,15 @@ class PresidioPDFWebApp:
                 logger.error("Presidio processorが利用できません。")
                 return {"success": False, "message": "サーバーエラー: 検出エンジンが利用できません。"}
 
+            # 手動追加されたエンティティを保護
+            manual_entities = [entity for entity in self.detection_results if entity.get("manual", False)]
+            logger.info(f"手動追加エンティティを保護: {len(manual_entities)}件")
+
             # Presidioで解析を実行
             entities = self.processor.analyze_pdf(self.current_pdf_path)
             
             # 結果を整形し、座標を再確認
-            self.detection_results = []
+            new_detection_results = []
             if not self.pdf_document:
                 self.pdf_document = fitz.open(self.current_pdf_path)
 
@@ -174,17 +221,32 @@ class PresidioPDFWebApp:
                             "y0": float(rect.y0),
                             "x1": float(rect.x1),
                             "y1": float(rect.y1)
-                        }
+                        },
+                        "manual": False  # 自動検出フラグ
                     }
-                    self.detection_results.append(result)
+                    
+                    # 重複チェック：同じ場所・同じタイプの自動検出を防ぐ
+                    if not self._is_duplicate_auto_detection(result, new_detection_results):
+                        new_detection_results.append(result)
+                    else:
+                        logger.info(f"重複検出をスキップ: {result['text']} ({result['entity_type']}) on page {page_num}")
 
-            logger.info(f"検出完了: {len(self.detection_results)}件")
+            # 手動追加エンティティと新しい自動検出結果を統合
+            self.detection_results = manual_entities + new_detection_results
+            
+            total_count = len(self.detection_results)
+            new_count = len(new_detection_results)
+            manual_count = len(manual_entities)
+            
+            logger.info(f"検出完了: 自動{new_count}件 + 手動{manual_count}件 = 合計{total_count}件")
             
             return {
                 "success": True,
-                "message": f"個人情報検出完了 ({len(self.detection_results)}件)",
+                "message": f"個人情報検出完了 (新規: {new_count}件, 手動保護: {manual_count}件, 合計: {total_count}件)",
                 "results": self.detection_results,
-                "count": len(self.detection_results)
+                "count": total_count,
+                "new_count": new_count,
+                "manual_count": manual_count
             }
             
         except Exception as ex:
@@ -195,6 +257,67 @@ class PresidioPDFWebApp:
                 "message": f"検出処理に失敗: {str(ex)}"
             }
 
+    def _is_duplicate_auto_detection(self, new_entity: Dict, existing_entities: List[Dict]) -> bool:
+        """自動検出の重複をチェック（同じ場所・同じタイプ）"""
+        OVERLAP_THRESHOLD = 0.8  # 80%以上の重複で同じ場所と判定
+        
+        for existing in existing_entities:
+            # 手動追加は重複チェック対象外
+            if existing.get("manual", False):
+                continue
+                
+            # 同じページ・同じエンティティタイプかチェック
+            if (existing["page"] == new_entity["page"] and 
+                existing["entity_type"] == new_entity["entity_type"]):
+                
+                # 座標の重複度を計算
+                overlap_ratio = self._calculate_overlap_ratio(
+                    new_entity["coordinates"], existing["coordinates"]
+                )
+                
+                if overlap_ratio >= OVERLAP_THRESHOLD:
+                    return True
+        
+        return False
+    
+    def _calculate_overlap_ratio(self, coords1: Dict, coords2: Dict) -> float:
+        """二つの矩形の重複率を計算"""
+        try:
+            # 矩形1
+            x1_min, y1_min = coords1["x0"], coords1["y0"]
+            x1_max, y1_max = coords1["x1"], coords1["y1"]
+            
+            # 矩形2
+            x2_min, y2_min = coords2["x0"], coords2["y0"]
+            x2_max, y2_max = coords2["x1"], coords2["y1"]
+            
+            # 重複領域を計算
+            overlap_x_min = max(x1_min, x2_min)
+            overlap_y_min = max(y1_min, y2_min)
+            overlap_x_max = min(x1_max, x2_max)
+            overlap_y_max = min(y1_max, y2_max)
+            
+            if overlap_x_min >= overlap_x_max or overlap_y_min >= overlap_y_max:
+                return 0.0  # 重複なし
+            
+            # 重複面積
+            overlap_area = (overlap_x_max - overlap_x_min) * (overlap_y_max - overlap_y_min)
+            
+            # 各矩形の面積
+            area1 = (x1_max - x1_min) * (y1_max - y1_min)
+            area2 = (x2_max - x2_min) * (y2_max - y2_min)
+            
+            # 小さい方の矩形に対する重複率
+            smaller_area = min(area1, area2)
+            if smaller_area == 0:
+                return 0.0
+                
+            return overlap_area / smaller_area
+            
+        except Exception as e:
+            logger.error(f"重複率計算エラー: {e}")
+            return 0.0
+    
     def delete_entity(self, index: int) -> Dict:
         """エンティティを削除"""
         try:
@@ -305,6 +428,29 @@ class PresidioPDFWebApp:
                 "message": f"PDF保存用ファイルの生成に失敗: {str(e)}"
             }
 
+    def _is_duplicate_manual_addition(self, new_entity: Dict) -> bool:
+        """手動追加の重複をチェック（手動同士の重複防止）"""
+        OVERLAP_THRESHOLD = 0.9  # 90%以上の重複で同じ場所と判定（手動はより厳格）
+        
+        for existing in self.detection_results:
+            # 手動追加のみチェック
+            if not existing.get("manual", False):
+                continue
+                
+            # 同じページ・同じエンティティタイプかチェック
+            if (existing["page"] == new_entity["page"] and 
+                existing["entity_type"] == new_entity["entity_type"]):
+                
+                # 座標の重複度を計算
+                overlap_ratio = self._calculate_overlap_ratio(
+                    new_entity["coordinates"], existing["coordinates"]
+                )
+                
+                if overlap_ratio >= OVERLAP_THRESHOLD:
+                    return True
+        
+        return False
+    
     def get_entity_type_japanese(self, entity_type: str) -> str:
         """エンティティタイプの日本語名を返す"""
         mapping = {
@@ -322,6 +468,9 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+# グローバル変数でGPU使用フラグを管理
+USE_GPU = False
+
 def get_session_app() -> PresidioPDFWebApp:
     """現在のセッションのアプリケーションインスタンスを取得"""
     if 'session_id' not in session:
@@ -329,7 +478,7 @@ def get_session_app() -> PresidioPDFWebApp:
     
     session_id = session['session_id']
     if session_id not in sessions:
-        sessions[session_id] = PresidioPDFWebApp(session_id)
+        sessions[session_id] = PresidioPDFWebApp(session_id, use_gpu=USE_GPU)
     
     return sessions[session_id]
 
@@ -531,11 +680,19 @@ def add_highlight():
             'page': page_num,
             'start': 0, # 手動追加のためオフセットは0
             'end': len(text),
-            'coordinates': coordinates
+            'coordinates': coordinates,
+            'manual': True  # 手動追加フラグ
         }
         
+        # 手動追加の重複チェック
+        if app_instance._is_duplicate_manual_addition(new_entity):
+            return jsonify({
+                'success': False, 
+                'message': 'ほぼ同じ場所に同じタイプのハイライトが既に存在します'
+            })
+        
         app_instance.detection_results.append(new_entity)
-        logger.info(f"新しいハイライトを追加: {text} (タイプ: {entity_type})")
+        logger.info(f"新しいハイライトを手動追加: {text} (タイプ: {entity_type})")
         
         return jsonify({
             'success': True,
@@ -549,7 +706,30 @@ def add_highlight():
         return jsonify({'success': False, 'message': f'ハイライト追加エラー: {str(e)}'})
 
 
-if __name__ == '__main__':
+def main():
+    """メイン実行関数"""
+    global USE_GPU
+    
+    # コマンドライン引数の解析
+    args = parse_arguments()
+    
+    # GPUフラグの設定
+    USE_GPU = args.gpu
+    
+    # CPUモードの強制設定（--gpuが指定されていない場合）
+    if not USE_GPU:
+        force_cpu_mode()
+        logger.info("CPUモードで起動します。GPU関連機能は無効化されました。")
+    else:
+        logger.info("GPUモードで起動します。NVIDIA CUDA機能が有効です。")
+    
     logger.info("Webアプリケーション開始")
-    # 本番環境では debug=False を推奨
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    logger.info(f"サーバー設定: {args.host}:{args.port}")
+    logger.info(f"デバッグモード: {args.debug}")
+    logger.info(f"処理モード: {'GPU' if USE_GPU else 'CPU'}")
+    
+    # Flaskアプリケーションの実行
+    app.run(debug=args.debug, host=args.host, port=args.port)
+
+if __name__ == '__main__':
+    main()

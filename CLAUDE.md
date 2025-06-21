@@ -51,46 +51,98 @@ deactivate
 ```
 
 ### Installation
+
+#### CPUモード（デフォルト・推奨）
 ```bash
-# Install dependencies using uv (recommended)
+# 基本インストール（CPU用軽量版）
 uv sync
 
-# Install Japanese spaCy model
-uv pip install https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl
-uv pip install https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.7.0/ja_core_news_md-3.7.0-py3-none-any.whl
+# または、最小構成での軽量インストール
+uv sync --extra minimal
 
-# Install GINZA (alternative high-accuracy Japanese model)
+# Webアプリケーション用
+uv sync --extra web
+
+# GUI用
+uv sync --extra gui
+
+# 開発用ツール含む
+uv sync --extra dev
+
+# GINZA（高精度日本語処理）を追加
 uv run python -m pip install 'ginza[ja]'
 ```
 
-### Running the processor
+#### GPUモード（NVIDIA CUDA環境）
 ```bash
-# Single file (using uv run)
+# GPU対応の高精度モデルをインストール
+uv sync --extra gpu
+
+# または、CPU + GPU両方
+uv sync --extra gpu --extra web --extra gui
+
+# CUDA環境確認
+nvidia-smi
+
+# GPU動作確認
+uv run python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+#### 構成オプション
+- **デフォルト（CPU）**: 軽量で安定、一般的な用途に最適
+- **GPU**: 高精度・高速処理、NVIDIA GPU必須
+- **minimal**: 最小構成、依存関係を最小限に
+- **web**: Webアプリケーション機能
+- **gui**: GUI機能
+- **dev**: 開発・テスト用ツール
+
+### Running the processor
+
+#### CPUモード（デフォルト）
+```bash
+# 基本的な単一ファイル処理
 uv run python src/pdf_presidio_processor.py document.pdf
 
-# Folder processing
+# フォルダ処理
 uv run python src/pdf_presidio_processor.py "path\to\folder\"
 
-# Custom suffix
-uv run python src/pdf_presidio_processor.py document.pdf --suffix "_masked"
-
-# Verbose output with new features
+# 詳細出力とバックアップ・レポート機能
 uv run python src/pdf_presidio_processor.py document.pdf --verbose --backup --report
 
-# Entity selection and threshold setting
+# CPU用spaCyモデル指定
+uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_news_sm  # 軽量版
+uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_news_md  # 中サイズ版
+
+# GINZA（CPU用高精度日本語処理）
+uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_ginza
+```
+
+#### GPUモード（高精度・高速）
+```bash
+# GPU用高精度モデル
+uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_news_lg  # 大サイズ版
+uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_news_trf  # Transformer版（最高精度）
+
+# GINZA Electra（transformer版、GPU推奨）
+uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_ginza_electra
+
+# GPU モードで実行（明示的指定）
+uv run python src/pdf_presidio_processor.py document.pdf --gpu --spacy_model ja_core_news_trf
+
+# CPU強制モード（GPUが利用可能でもCPUを使用）
+uv run python src/pdf_presidio_processor.py document.pdf --cpu --spacy_model ja_core_news_md
+```
+
+#### 共通オプション
+```bash
+# エンティティ選択と閾値設定
 uv run python src/pdf_presidio_processor.py document.pdf --entities PERSON PHONE_NUMBER --threshold 0.8
 
-# Custom configuration file
+# カスタム設定ファイル
 uv run python src/pdf_presidio_processor.py document.pdf --config my_config.yaml
 
-# Specify spaCy model
-uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_news_md
-
-# Use GINZA for enhanced Japanese processing
-uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_ginza
-
-# Use GINZA Electra (transformer-based model for highest accuracy)
-uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_ginza_electra
+# カスタムサフィックス
+uv run python src/pdf_presidio_processor.py document.pdf --suffix "_masked"
 
 # Deduplication with priority modes
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode score
