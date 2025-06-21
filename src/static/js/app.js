@@ -258,6 +258,12 @@ class PresidioPDFWebApp {
             container.style.width = this.viewport.width + 'px';
             container.style.height = this.viewport.height + 'px';
 
+            // ハイライトオーバーレイのサイズも同期
+            this.highlightOverlay.style.width = this.viewport.width + 'px';
+            this.highlightOverlay.style.height = this.viewport.height + 'px';
+            this.highlightOverlay.style.left = '0px';
+            this.highlightOverlay.style.top = '0px';
+
             const renderContext = { canvasContext: context, viewport: this.viewport };
             await page.render(renderContext).promise;
             await this.renderTextLayer(page, this.viewport);
@@ -277,6 +283,12 @@ class PresidioPDFWebApp {
             const textContent = await page.getTextContent();
             this.textLayer.style.setProperty('--scale-factor', viewport.scale);
             
+            // テキストレイヤーのサイズと位置をcanvasと完全に同期
+            this.textLayer.style.width = viewport.width + 'px';
+            this.textLayer.style.height = viewport.height + 'px';
+            this.textLayer.style.left = '0px';
+            this.textLayer.style.top = '0px';
+            
             pdfjsLib.renderTextLayer({
                 textContentSource: textContent,
                 container: this.textLayer,
@@ -289,15 +301,25 @@ class PresidioPDFWebApp {
     }
 
     renderHighlights() {
+        console.log('renderHighlights called');
+        console.log('showHighlights checked:', this.elements.showHighlights.checked);
+        console.log('detectionResults:', this.detectionResults);
+        console.log('currentPage:', this.currentPage);
+        
         this.highlightOverlay.innerHTML = '';
-        if (!this.detectionResults) return;
+        if (!this.detectionResults || !this.elements.showHighlights.checked) return;
 
         const pageHighlights = this.detectionResults.filter(entity => entity.page === this.currentPage + 1);
+        console.log('pageHighlights:', pageHighlights);
+        
         pageHighlights.forEach((entity) => {
             const globalIndex = this.detectionResults.indexOf(entity);
             const highlight = this.createHighlightElement(entity, globalIndex);
+            console.log('created highlight:', highlight);
             if (highlight) this.highlightOverlay.appendChild(highlight);
         });
+        
+        console.log('highlightOverlay children count:', this.highlightOverlay.children.length);
     }
 
     createHighlightElement(entity, index) {
