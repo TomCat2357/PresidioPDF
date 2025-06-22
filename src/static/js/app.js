@@ -47,6 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 prevPageBtn: document.getElementById('prevPageBtn'),
                 nextPageBtn: document.getElementById('nextPageBtn'),
                 pageInfo: document.getElementById('pageInfo'),
+                pageJumpInput: document.getElementById('pageJumpInput'),
+                pageJumpBtn: document.getElementById('pageJumpBtn'),
                 zoomSlider: document.getElementById('zoomSlider'),
                 zoomValue: document.getElementById('zoomValue'),
                 showHighlights: document.getElementById('showHighlights'),
