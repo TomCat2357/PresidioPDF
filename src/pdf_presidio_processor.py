@@ -402,8 +402,16 @@ class PDFPresidioProcessor:
             result['end_line'] = detailed_position['end_line']
             result['end_char'] = detailed_position['end_char']
         
-        logger.info(f"PDF解析完了: {len(results)}件の個人情報を検出")
-        return results
+        logger.info(f"PDF解析完了: {len(results)}件の個人情報を検出、ページ番号とY座標でソートします。")
+        
+        # ページ番号、Y座標、X座標でソート
+        sorted_results = sorted(results, key=lambda x: (
+            x.get('page_info', {}).get('page_number', 0),
+            x.get('coordinates', {}).get('y0', 0),
+            x.get('coordinates', {}).get('x0', 0)
+        ))
+        
+        return sorted_results
     
     def _find_page_for_position(self, text_position: int, pages: List[Dict]) -> Dict:
         """テキスト位置に対応するページ情報を取得"""
