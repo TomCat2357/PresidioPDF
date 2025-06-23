@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PyMuPDFのget_text('rawdict')で取得される情報をJSONで詳細出力（rawdict版）
+PyMuPDFのget_text('rawdict')で取得される情報をJSONで詳細出力
 """
 
 import fitz  # PyMuPDF
@@ -22,66 +22,6 @@ def sanitize_for_json(obj):
         return tuple(sanitize_for_json(item) for item in obj)
     else:
         return obj
-
-def analyze_characters(rawdict_data):
-    """rawdictからキャラクター情報を詳細分析"""
-    analysis = {
-        "total_characters": 0,
-        "character_samples": [],
-        "blocks_with_chars": 0,
-        "spans_with_chars": 0,
-        "unique_fonts": set(),
-        "character_distribution": {}
-    }
-    
-    for block in rawdict_data.get('blocks', []):
-        if 'lines' not in block:
-            continue
-            
-        block_has_chars = False
-        for line in block['lines']:
-            for span in line.get('spans', []):
-                chars = span.get('chars', [])
-                if chars:
-                    analysis["spans_with_chars"] += 1
-                    block_has_chars = True
-                    
-                    # フォント情報を収集
-                    font = span.get('font', 'Unknown')
-                    analysis["unique_fonts"].add(font)
-                    
-                    for char in chars:
-                        analysis["total_characters"] += 1
-                        char_text = char.get('c', '')
-                        
-                        # 文字の分布を記録
-                        if char_text in analysis["character_distribution"]:
-                            analysis["character_distribution"][char_text] += 1
-                        else:
-                            analysis["character_distribution"][char_text] = 1
-                        
-                        # サンプル文字を収集（最初の20文字）
-                        if len(analysis["character_samples"]) < 20:
-                            analysis["character_samples"].append({
-                                "char": char_text,
-                                "bbox": char.get('bbox', []),
-                                "font": font,
-                                "size": span.get('size', 0),
-                                "flags": span.get('flags', 0)
-                            })
-        
-        if block_has_chars:
-            analysis["blocks_with_chars"] += 1
-    
-    # セットをリストに変換（JSON化のため）
-    analysis["unique_fonts"] = list(analysis["unique_fonts"])
-    
-    # 文字分布の上位10位を抽出
-    sorted_chars = sorted(analysis["character_distribution"].items(), 
-                         key=lambda x: x[1], reverse=True)
-    analysis["top_10_characters"] = sorted_chars[:10]
-    
-    return analysis
 
 def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
     """PDFのget_text('rawdict')で取得される情報をJSONで詳細出力"""
@@ -110,7 +50,6 @@ def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
         
         # 比較用データも取得
         simple_text = page.get_text()
-        dict_text = page.get_text("dict")
         words = page.get_text("words")
         
         page_info = {
@@ -128,7 +67,6 @@ def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
                     "preview": simple_text[:200],  # 最初の200文字
                     "full_text": simple_text
                 },
-                "dict_structure": sanitize_for_json(dict_text),
                 "words": {
                     "count": len(words),
                     "first_10_words": [
@@ -143,8 +81,7 @@ def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
                             "word_no": word[7]
                         } for word in words[:10]
                     ]
-                },
-                "character_analysis": analyze_characters(text_rawdict)
+                }
             }
         }
         
@@ -159,14 +96,12 @@ def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
     print(f"分析結果を {output_path} に出力しました")
     
     # サマリーも表示
-    print(f"\n=== rawdict分析サマリー ===")
+    print(f"\n=== サマリー ===")
     print(f"PDF: {pdf_path}")
     print(f"ページ数: {result['pdf_info']['page_count']}")
     if result["pages"]:
         page_data = result["pages"][0]
         rawdict_data = page_data["rawdict_structure"]
-        char_analysis = page_data["comparison"]["character_analysis"]
-        
         print(f"ページサイズ: {rawdict_data.get('width')} x {rawdict_data.get('height')}")
         print(f"ブロック数: {len(rawdict_data.get('blocks', []))}")
         print(f"テキスト文字数: {page_data['comparison']['simple_text']['length']}")
@@ -178,20 +113,6 @@ def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
         image_blocks = [b for b in blocks if b.get('type') == 1]
         print(f"テキストブロック数: {len(text_blocks)}")
         print(f"画像ブロック数: {len(image_blocks)}")
-        
-        # 文字レベル分析
-        print(f"\n=== 文字レベル分析 ===")
-        print(f"総文字数: {char_analysis['total_characters']}")
-        print(f"文字を含むブロック数: {char_analysis['blocks_with_chars']}")
-        print(f"文字を含むスパン数: {char_analysis['spans_with_chars']}")
-        print(f"ユニークフォント数: {len(char_analysis['unique_fonts'])}")
-        print(f"使用フォント: {', '.join(char_analysis['unique_fonts'])}")
-        
-        if char_analysis['top_10_characters']:
-            print(f"頻出文字Top5:")
-            for char, count in char_analysis['top_10_characters'][:5]:
-                char_display = repr(char) if char in [' ', '\n', '\t'] else char
-                print(f"  {char_display}: {count}回")
 
 def main():
     """メイン実行部"""

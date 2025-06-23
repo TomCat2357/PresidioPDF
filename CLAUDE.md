@@ -42,11 +42,18 @@ The project follows modern Python development practices with uv for dependency m
 
 ### PDF Processing (Presidio-based)
 - **PDFPresidioProcessor class**: Main processor that integrates spaCy NLP, Presidio analyzers, and PyMuPDF
+- **PDFTextLocator class**: Character-level precise coordinate locator using rawdict synchronization
 - **ConfigManager class**: Unified configuration management supporting YAML files and command-line arguments
 - **Custom recognizers**: Japanese-specific patterns for マイナンバー (Individual Number), 年号 (Japanese Era), honorific names, and phone numbers
 - **Entity masking**: Maps detected entity types to annotations or highlights in PDF documents
 - **Batch processing**: Supports single files or recursive folder processing
 - **Reporting system**: Generates detailed processing statistics and reports
+
+### Precision Coordinate System
+- **Character-level synchronization**: Full text and character data are perfectly synchronized using `page.get_text("rawdict")`
+- **Direct offset mapping**: PII detection offsets are directly mapped to precise coordinates without search operations
+- **Multi-line PII support**: Entities spanning multiple lines are accurately tracked with individual line rectangles
+- **Space and newline handling**: Intelligent insertion of spaces and newlines to maintain text structure integrity
 
 
 ## System Requirements
@@ -129,8 +136,8 @@ uv run python src/pdf_presidio_processor.py document.pdf
 # フォルダ処理
 uv run python src/pdf_presidio_processor.py "path\to\folder\"
 
-# 詳細出力とバックアップ・レポート機能
-uv run python src/pdf_presidio_processor.py document.pdf --verbose --backup --report
+# 詳細出力
+uv run python src/pdf_presidio_processor.py document.pdf --verbose
 
 # CPU用spaCyモデル指定
 uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_news_sm  # 軽量版
@@ -149,23 +156,16 @@ uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_core_n
 # GINZA Electra（transformer版、GPU推奨）
 uv run python src/pdf_presidio_processor.py document.pdf --spacy_model ja_ginza_electra
 
-# GPU モードで実行（明示的指定）
-uv run python src/pdf_presidio_processor.py document.pdf --gpu --spacy_model ja_core_news_trf
 
-# CPU強制モード（GPUが利用可能でもCPUを使用）
-uv run python src/pdf_presidio_processor.py document.pdf --cpu --spacy_model ja_core_news_md
 ```
 
 #### 共通オプション
 ```bash
-# エンティティ選択
-uv run python src/pdf_presidio_processor.py document.pdf --entities PERSON PHONE_NUMBER
-
 # カスタム設定ファイル
 uv run python src/pdf_presidio_processor.py document.pdf --config my_config.yaml
 
-# カスタムサフィックス
-uv run python src/pdf_presidio_processor.py document.pdf --suffix "_masked"
+# 出力ディレクトリ指定
+uv run python src/pdf_presidio_processor.py document.pdf --output-dir /path/to/output
 
 # Deduplication with priority modes
 uv run python src/pdf_presidio_processor.py document.pdf --deduplication-mode wider_range
@@ -184,7 +184,7 @@ uv run python src/pdf_presidio_processor.py document.pdf --masking-method both -
 uv run python src/pdf_presidio_processor.py document.pdf --read-mode --read-report
 
 # 復元モード（レポートからPDFを復元）
-uv run python src/pdf_presidio_processor.py original.pdf --restore-mode --report-file annotations_report_20241215_143052.json
+uv run python src/pdf_presidio_processor.py original.pdf --restore-mode --report-file annotations_report_20250623_225554.json
 
 # 操作モード指定
 uv run python src/pdf_presidio_processor.py document.pdf --operation-mode clear_all        # 既存注釈を全削除
@@ -254,16 +254,53 @@ Processed files are saved with configurable suffixes (default: `_masked`) in the
   - **Text position-based**: Highlights restored using line/character positions
   - **Coordinate-based**: Annotations restored using precise coordinates
   - **Identical duplicate removal**: Automatic removal of duplicate annotations
-- **Enhanced Position Information**: Detailed location tracking with page, line, and character positions
-  - **Page-level positioning**: Track which page contains each entity
-  - **Line-level positioning**: Track line numbers within pages
-  - **Character-level positioning**: Track character positions within lines
-  - **Multi-page/multi-line support**: Handle entities spanning multiple pages or lines
+- **Precision Coordinate Detection**: Character-level accurate coordinate mapping
+  - **rawdict-based synchronization**: Full text and character coordinates perfectly aligned
+  - **Direct offset-to-coordinate mapping**: No search operations required for coordinate detection
+  - **Multi-line entity handling**: Each line of multi-line PIIs gets individual precise rectangles
+  - **Space/newline reconstruction**: Intelligent text structure preservation during synchronization
 
 ### Testing Infrastructure
 - **Comprehensive test suite**: Mock-based testing for PDF processing dependencies
 - **Multiple test scenarios**: Basic functionality, configuration, and edge cases
 - **CI/CD ready**: All tests run through uv for consistency
+
+## Technical Implementation Details
+
+### PDFTextLocator Class Architecture
+The `PDFTextLocator` class implements the core precision coordinate detection system:
+
+```python
+class PDFTextLocator:
+    """
+    PDF文書の文字レベル情報と、PII検出用のプレーンテキストを同期させ、
+    テキストオフセットから直接、精密な座標を算出するクラス。
+    """
+```
+
+**Key Methods:**
+- `_prepare_synced_data()`: Synchronizes full text with character-level coordinate data using `page.get_text("rawdict")`
+- `locate_pii_by_offset(start, end)`: Direct offset-to-coordinate mapping without search operations
+- `locate_pii(pii_text)`: Legacy method for backward compatibility (deprecated)
+
+**Data Structures:**
+- `self.full_text`: Complete synchronized text used for PII detection
+- `self.char_data`: List of character dictionaries with precise coordinates, page, line, and block information
+
+**Synchronization Features:**
+- Space insertion between spans based on horizontal distance thresholds
+- Newline insertion at line and block boundaries
+- Page breaks handled with appropriate newline insertion
+- Character-level rectangle information preserved for precise masking
+
+### Integration with PDFPresidioProcessor
+The processor now uses the synchronized text system:
+
+1. **Initialization**: Creates `PDFTextLocator` instance during PDF analysis
+2. **Text Analysis**: Uses `locator.full_text` for Presidio NLP analysis
+3. **Coordinate Mapping**: Calls `locator.locate_pii_by_offset()` with start/end offsets
+4. **Multi-line Support**: Handles entities spanning multiple lines with individual rectangles
+5. **Backward Compatibility**: Maintains `coordinates` field for legacy code
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
