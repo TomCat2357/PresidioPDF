@@ -27,7 +27,7 @@ def analyze_pdf_dict_to_json(pdf_path: str, output_path: str = None):
     """PDFのget_text('dict')で取得される情報をJSONで詳細出力"""
     
     if output_path is None:
-        output_path = "a1_analysis_result.json"
+        output_path = "a1_analysis_result2.json"
     
     # PDFを開く
     doc = fitz.open(pdf_path)
