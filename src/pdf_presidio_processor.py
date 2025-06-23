@@ -26,6 +26,198 @@ from config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 
+
+class PDFTextLocator:
+    """
+    PDF文書の文字レベル情報と、PII検出用のプレーンテキストを同期させ、
+    テキストオフセットから直接、精密な座標を算出するクラス。
+    """
+    def __init__(self, pdf_doc: fitz.Document):
+        """
+        コンストラクタ。fitz.Documentオブジェクトを受け取り、
+        PII検出用の「フルテキスト」と、文字ごとの「キャラクターデータリスト」を準備する。
+
+        Args:
+            pdf_doc (fitz.Document): 対象のPDFドキュメントオブジェクト。
+        """
+        self.doc = pdf_doc
+        # フルテキストと文字データリストを生成・同期
+        self.full_text, self.char_data = self._prepare_synced_data()
+
+    def _prepare_synced_data(self) -> Tuple[str, List[Dict]]:
+        """
+        `page.get_text("rawdict")`を使い、PDFの全文字情報を抽出。
+        PII検出用テキストと文字情報リストを完全に同期させた状態で生成する。
+        """
+        char_data = []
+        text_parts = []
+        
+        for page in self.doc:
+            page_dict = page.get_text("rawdict")
+            page_num = page.number
+            
+            for block_num, block in enumerate(page_dict.get('blocks', [])):
+                if 'lines' not in block:  # テキストブロックでない場合はスキップ
+                    continue
+                
+                for line_num, line in enumerate(block['lines']):
+                    spans = line.get('spans', [])
+                    
+                    for span_idx, span in enumerate(spans):
+                        chars = span.get('chars', [])
+                        
+                        for char in chars:
+                            # 各文字を text_parts に追加
+                            char_text = char.get('c', '')
+                            text_parts.append(char_text)
+                            
+                            # 文字の詳細情報を char_data に追加
+                            char_data.append({
+                                'char': char_text,
+                                'rect': fitz.Rect(char['bbox']),
+                                'page_num': page_num,
+                                'line_num': line_num,
+                                'block_num': block_num
+                            })
+                        
+                        # スパン間のスペース処理
+                        if span_idx < len(spans) - 1:
+                            next_span = spans[span_idx + 1]
+                            current_span_end = span['bbox'][2]  # x1
+                            next_span_start = next_span['bbox'][0]  # x0
+                            
+                            # 水平距離がある場合はスペースを挿入
+                            if next_span_start - current_span_end > 1.0:  # 閾値は調整可能
+                                text_parts.append(' ')
+                                # 推定矩形でスペース情報を追加
+                                space_rect = fitz.Rect(
+                                    current_span_end, span['bbox'][1],
+                                    next_span_start, span['bbox'][3]
+                                )
+                                char_data.append({
+                                    'char': ' ',
+                                    'rect': space_rect,
+                                    'page_num': page_num,
+                                    'line_num': line_num,
+                                    'block_num': block_num
+                                })
+                    
+                    # 行末に改行を追加（最後の行以外）
+                    if line_num < len(block['lines']) - 1:
+                        text_parts.append('\n')
+                        # 改行の推定矩形
+                        if line.get('spans'):
+                            last_span = line['spans'][-1]
+                            newline_rect = fitz.Rect(
+                                last_span['bbox'][2], last_span['bbox'][1],
+                                last_span['bbox'][2] + 5, last_span['bbox'][3]
+                            )
+                            char_data.append({
+                                'char': '\n',
+                                'rect': newline_rect,
+                                'page_num': page_num,
+                                'line_num': line_num,
+                                'block_num': block_num
+                            })
+                
+                # ブロック間に改行を追加
+                if block_num < len(page_dict['blocks']) - 1:
+                    text_parts.append('\n')
+                    # ブロック間改行の推定矩形
+                    if block.get('lines') and block['lines'][-1].get('spans'):
+                        last_line = block['lines'][-1]
+                        last_span = last_line['spans'][-1]
+                        newline_rect = fitz.Rect(
+                            last_span['bbox'][0], last_span['bbox'][3],
+                            last_span['bbox'][2], last_span['bbox'][3] + 5
+                        )
+                        char_data.append({
+                            'char': '\n',
+                            'rect': newline_rect,
+                            'page_num': page_num,
+                            'line_num': len(block['lines']),
+                            'block_num': block_num
+                        })
+            
+            # ページ間に改行を追加（最後のページ以外）
+            if page_num < len(self.doc) - 1:
+                text_parts.append('\n')
+                # ページ間改行の推定矩形
+                page_rect = page.rect
+                newline_rect = fitz.Rect(
+                    page_rect.x0, page_rect.y1 - 5,
+                    page_rect.x0 + 5, page_rect.y1
+                )
+                char_data.append({
+                    'char': '\n',
+                    'rect': newline_rect,
+                    'page_num': page_num,
+                    'line_num': 0,
+                    'block_num': 0
+                })
+        
+        # フルテキストを生成
+        full_text = "".join(text_parts)
+        
+        return full_text, char_data
+
+    def locate_pii_by_offset(self, start: int, end: int) -> List[fitz.Rect]:
+        """
+        フルテキストにおける文字の開始・終了オフセットを受け取り、
+        対応するキャラクターデータの矩形を結合して、最終的な座標リストを返す。
+
+        Args:
+            start (int): フルテキストにおけるPIIの開始文字インデックス。
+            end (int): フルテキストにおけるPIIの終了文字インデックス。
+
+        Returns:
+            list[fitz.Rect]: PIIの各行を囲むfitz.Rectオブジェクトのリスト。
+        """
+        # 範囲チェック
+        if start < 0 or end > len(self.char_data) or start >= end:
+            return []
+        
+        # 対象キャラクターの切り出し
+        target_chars = self.char_data[start:end]
+        
+        # 行ごとの矩形結合
+        lines = {}
+        for char_info in target_chars:
+            page_num = char_info['page_num']
+            line_num = char_info['line_num']
+            key = (page_num, line_num)
+            
+            if key not in lines:
+                lines[key] = []
+            lines[key].append(char_info['rect'])
+        
+        # 最終的な矩形リストの生成
+        final_rects = []
+        for line_rects in lines.values():
+            if line_rects:
+                # 同じ行内の全矩形を結合
+                combined_rect = line_rects[0]
+                for rect in line_rects[1:]:
+                    combined_rect = combined_rect + rect
+                final_rects.append(combined_rect)
+        
+        return final_rects
+
+    # 後方互換性のために古いメソッドも残す
+    def locate_pii(self, pii_text: str) -> List[fitz.Rect]:
+        """
+        後方互換性のための旧メソッド。新しい実装では直接オフセットを使用することを推奨。
+        """
+        logger.warning("locate_pii method is deprecated. Use locate_pii_by_offset instead.")
+        # フルテキストから該当部分を検索してオフセットを取得
+        start_pos = self.full_text.find(pii_text)
+        if start_pos == -1:
+            return []
+        
+        end_pos = start_pos + len(pii_text)
+        return self.locate_pii_by_offset(start_pos, end_pos)
+
+
 class PDFPresidioProcessor:
     """PyMuPDF版 PDF個人情報検出・マスキングプロセッサー"""
     
@@ -374,7 +566,12 @@ class PDFPresidioProcessor:
         
         # PDFからテキストを抽出
         pdf_data = self.extract_pdf_text(pdf_path)
-        full_text = pdf_data['full_text']
+        
+        # PDFTextLocatorを初期化
+        locator = PDFTextLocator(pdf_data['document'])
+        
+        # Presidioに渡すテキストは、必ずlocator.full_textを使用
+        full_text = locator.full_text
         
         # 個人情報を検出
         enabled_entities = self.config_manager.get_enabled_entities()
@@ -383,11 +580,39 @@ class PDFPresidioProcessor:
         # 結果にページ情報を追加
         for result in results:
             result['pdf_data'] = pdf_data
-            result['page_info'] = self._find_page_for_position(result['start'], pdf_data['pages'])
-            # テキスト位置から座標位置を計算
-            result['coordinates'] = self._calculate_text_coordinates(
-                result['start'], result['end'], pdf_data['pages']
-            )
+            
+            # オフセットから直接座標リストを取得
+            start_offset = result['start']
+            end_offset = result['end']
+            precise_rects = locator.locate_pii_by_offset(start_offset, end_offset)
+            result['line_rects'] = precise_rects
+            
+            # 代表座標として最初の矩形を使用（後方互換性のため）
+            if result['line_rects']:
+                main_rect = result['line_rects'][0]
+                # ページ番号を矩形から特定
+                page_num = self._find_page_for_rect(pdf_data['document'], main_rect)
+                result['coordinates'] = {
+                    'page_number': page_num + 1 if page_num is not None else 1,  # 1-based
+                    'x0': float(main_rect.x0),
+                    'y0': float(main_rect.y0),
+                    'x1': float(main_rect.x1),
+                    'y1': float(main_rect.y1)
+                }
+                # ページ情報も更新
+                result['page_info'] = {
+                    'page_number': page_num + 1 if page_num is not None else 1,
+                    'relative_position': start_offset,
+                    'line_number': 1,
+                    'char_in_line': 1
+                }
+            else:
+                # フォールバック: 従来の方法で座標を計算
+                result['page_info'] = self._find_page_for_position(result['start'], pdf_data['pages'])
+                result['coordinates'] = self._calculate_text_coordinates(
+                    result['start'], result['end'], pdf_data['pages']
+                )
+            
             # 詳細な位置情報を追加
             detailed_position = self._calculate_detailed_position_info(
                 result['start'], result['end'], pdf_data['pages']
@@ -946,65 +1171,50 @@ class PDFPresidioProcessor:
             annotations_added = 0
             
             for entity in entities:
+                # 新しいline_rectsフィールドがある場合はそれを使用、なければ従来の方法
+                line_rects = entity.get('line_rects', [])
                 coords = entity.get('coordinates', {})
-                page_num = coords.get('page_number', 1) - 1  # 0-based index
                 
-                if page_num < len(doc):
-                    page = doc[page_num]
-                    
-                    # 注釈の位置を計算
-                    x0 = float(coords.get('x0', 50))
-                    y0 = float(coords.get('y0', 700))
-                    x1 = float(coords.get('x1', 200))
-                    y1 = float(coords.get('y1', 715))
-                    
-                    # 座標の妥当性をチェック
-                    if x0 >= x1 or y0 >= y1 or any(not float('-inf') < coord < float('inf') for coord in [x0, y0, x1, y1]):
-                        logger.warning(f"無効な座標をスキップ: {coords}")
-                        continue
-                    
-                    rect = fitz.Rect(x0, y0, x1, y1)
-                    
-                    # 矩形が有効かチェック
-                    if rect.is_empty or rect.is_infinite:
-                        logger.warning(f"無効な矩形をスキップ: {rect}")
-                        continue
-                    
-                    try:
-                        # 注釈の色を決定
-                        color = self._get_annotation_color_pymupdf(entity['entity_type'])
+                if line_rects:
+                    # 複数行にまたがるPIIの場合、各行に注釈を追加
+                    for rect in line_rects:
+                        if rect.is_empty or rect.is_infinite:
+                            logger.warning(f"無効な矩形をスキップ: {rect}")
+                            continue
                         
-                        # 注釈内容を生成
-                        content = self._generate_annotation_content(entity)
-                        text_display_mode = self.config_manager.get_masking_text_display_mode()
+                        # ページ番号を決定（矩形からページを特定）
+                        page_num = self._find_page_for_rect(doc, rect)
+                        if page_num is not None and page_num < len(doc):
+                            page = doc[page_num]
+                            self._add_single_annotation(page, rect, entity)
+                            annotations_added += 1
+                else:
+                    # 従来の方法（後方互換性）
+                    page_num = coords.get('page_number', 1) - 1  # 0-based index
+                    
+                    if page_num < len(doc):
+                        page = doc[page_num]
                         
-                        if text_display_mode == "silent":
-                            # silentモードでは色のみの矩形注釈を作成
-                            annot = page.add_square_annot(rect)
-                            annot.set_colors(stroke=color, fill=[c * 0.3 for c in color])
-                            annot.set_info(title="", content="")
-                        else:
-                            # フリーテキスト注釈を追加
-                            annot = page.add_freetext_annot(
-                                rect,
-                                content,
-                                fontsize=8,
-                                text_color=color,
-                                fill_color=[c * 0.3 for c in color]  # 薄い背景色
-                            )
-                            
-                            # 注釈の設定
-                            title = "個人情報検出" if text_display_mode == "verbose" else ""
-                            annot.set_info(title=title, content=content)
+                        # 注釈の位置を計算
+                        x0 = float(coords.get('x0', 50))
+                        y0 = float(coords.get('y0', 700))
+                        x1 = float(coords.get('x1', 200))
+                        y1 = float(coords.get('y1', 715))
                         
-                        annot.update()
+                        # 座標の妥当性をチェック
+                        if x0 >= x1 or y0 >= y1 or any(not float('-inf') < coord < float('inf') for coord in [x0, y0, x1, y1]):
+                            logger.warning(f"無効な座標をスキップ: {coords}")
+                            continue
                         
+                        rect = fitz.Rect(x0, y0, x1, y1)
+                        
+                        # 矩形が有効かチェック
+                        if rect.is_empty or rect.is_infinite:
+                            logger.warning(f"無効な矩形をスキップ: {rect}")
+                            continue
+                        
+                        self._add_single_annotation(page, rect, entity)
                         annotations_added += 1
-                        logger.debug(f"注釈を追加: {entity['entity_type']} - {entity['text']}")
-                        
-                    except Exception as e:
-                        logger.warning(f"注釈追加でエラー: {e} (エンティティ: {entity['text']})")
-                        continue
             
             # PDFを保存
             doc.save(output_path)
@@ -1016,6 +1226,55 @@ class PDFPresidioProcessor:
         except Exception as e:
             logger.error(f"PyMuPDF注釈マスキングエラー: {e}")
             raise
+    
+    def _add_single_annotation(self, page: fitz.Page, rect: fitz.Rect, entity: Dict):
+        """単一の注釈を追加"""
+        try:
+            # 注釈の色を決定
+            color = self._get_annotation_color_pymupdf(entity['entity_type'])
+            
+            # 注釈内容を生成
+            content = self._generate_annotation_content(entity)
+            text_display_mode = self.config_manager.get_masking_text_display_mode()
+            
+            if text_display_mode == "silent":
+                # silentモードでは色のみの矩形注釈を作成
+                annot = page.add_square_annot(rect)
+                annot.set_colors(stroke=color, fill=[c * 0.3 for c in color])
+                annot.set_info(title="", content="")
+            else:
+                # フリーテキスト注釈を追加
+                annot = page.add_freetext_annot(
+                    rect,
+                    content,
+                    fontsize=8,
+                    text_color=color,
+                    fill_color=[c * 0.3 for c in color]  # 薄い背景色
+                )
+                
+                # 注釈の設定
+                title = "個人情報検出" if text_display_mode == "verbose" else ""
+                annot.set_info(title=title, content=content)
+            
+            annot.update()
+            logger.debug(f"注釈を追加: {entity['entity_type']} - {entity['text']}")
+            
+        except Exception as e:
+            logger.warning(f"注釈追加でエラー: {e} (エンティティ: {entity['text']})")
+    
+    def _find_page_for_rect(self, doc: fitz.Document, rect: fitz.Rect) -> Optional[int]:
+        """矩形が属するページ番号を特定"""
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            page_rect = page.rect
+            
+            # 矩形がページの境界内にあるかチェック
+            if (page_rect.x0 <= rect.x0 <= page_rect.x1 and 
+                page_rect.y0 <= rect.y0 <= page_rect.y1):
+                return page_num
+        
+        # 見つからない場合は最初のページを返す
+        return 0 if len(doc) > 0 else None
     
     def _apply_highlight_masking_with_mode(self, pdf_path: str, entities: List[Dict], operation_mode: str) -> str:
         """操作モードに対応したハイライトマスキング"""
@@ -1133,22 +1392,40 @@ class PDFPresidioProcessor:
             highlights_added = 0
             
             for entity in entities:
+                # 新しいline_rectsフィールドがある場合はそれを使用、なければ従来の方法
+                line_rects = entity.get('line_rects', [])
                 coords = entity.get('coordinates', {})
-                page_num = coords.get('page_number', 1) - 1  # 0-based index
                 
-                if page_num < len(doc):
-                    page = doc[page_num]
+                if line_rects:
+                    # 複数行にまたがるPIIの場合、各行にハイライトを追加
+                    for rect in line_rects:
+                        if rect.is_empty or rect.is_infinite:
+                            logger.warning(f"無効な矩形をスキップ: {rect}")
+                            continue
+                        
+                        # ページ番号を決定（矩形からページを特定）
+                        page_num = self._find_page_for_rect(doc, rect)
+                        if page_num is not None and page_num < len(doc):
+                            page = doc[page_num]
+                            self._add_single_highlight(page, rect, entity)
+                            highlights_added += 1
+                else:
+                    # 従来の方法（後方互換性）
+                    page_num = coords.get('page_number', 1) - 1  # 0-based index
                     
-                    # ハイライトの位置を計算
-                    x0 = float(coords.get('x0', 50))
-                    y0 = float(coords.get('y0', 700))
-                    x1 = float(coords.get('x1', 200))
-                    y1 = float(coords.get('y1', 715))
-                    
-                    # 座標の妥当性をチェック
-                    if x0 >= x1 or y0 >= y1 or any(not float('-inf') < coord < float('inf') for coord in [x0, y0, x1, y1]):
-                        logger.warning(f"無効な座標をスキップ: {coords}")
-                        continue
+                    if page_num < len(doc):
+                        page = doc[page_num]
+                        
+                        # ハイライトの位置を計算
+                        x0 = float(coords.get('x0', 50))
+                        y0 = float(coords.get('y0', 700))
+                        x1 = float(coords.get('x1', 200))
+                        y1 = float(coords.get('y1', 715))
+                        
+                        # 座標の妥当性をチェック
+                        if x0 >= x1 or y0 >= y1 or any(not float('-inf') < coord < float('inf') for coord in [x0, y0, x1, y1]):
+                            logger.warning(f"無効な座標をスキップ: {coords}")
+                            continue
                     
                     rect = fitz.Rect(x0, y0, x1, y1)
                     
@@ -1200,6 +1477,38 @@ class PDFPresidioProcessor:
         except Exception as e:
             logger.error(f"PyMuPDFハイライトマスキングエラー: {e}")
             raise
+    
+    def _add_single_highlight(self, page: fitz.Page, rect: fitz.Rect, entity: Dict):
+        """単一のハイライトを追加"""
+        try:
+            # ハイライトの色を決定
+            color = self._get_highlight_color_pymupdf(entity['entity_type'])
+            
+            # ハイライトを追加
+            highlight = page.add_highlight_annot(rect)
+            highlight.set_colors(stroke=color)
+            
+            # テキスト表示モードに応じた設定
+            text_display_mode = self.config_manager.get_masking_text_display_mode()
+            
+            if text_display_mode == "silent":
+                highlight.set_info(title="", content="")
+            elif text_display_mode == "minimal":
+                type_names = {
+                    'PERSON': '人名', 'LOCATION': '場所', 'DATE_TIME': '日時',
+                    'PHONE_NUMBER': '電話番号', 'INDIVIDUAL_NUMBER': 'マイナンバー',
+                    'YEAR': '年号', 'PROPER_NOUN': '固有名詞'
+                }
+                type_name = type_names.get(entity['entity_type'], entity['entity_type'])
+                highlight.set_info(title=type_name, content="")
+            else:  # verbose
+                highlight.set_info(title=f"個人情報: {entity['entity_type']}", content=entity['text'])
+            
+            highlight.update()
+            logger.debug(f"ハイライトを追加: {entity['entity_type']} - {entity['text']}")
+            
+        except Exception as e:
+            logger.warning(f"ハイライト追加でエラー: {e} (エンティティ: {entity['text']})")
     
     def _get_annotation_color_pymupdf(self, entity_type: str) -> List[float]:
         """エンティティタイプに応じたPyMuPDF用注釈色を取得"""
@@ -2449,7 +2758,7 @@ def main(path, config, verbose, output_dir, read_mode, read_report, restore_mode
             
             try:
                 output_path = processor.restore_pdf_from_report(path, report_file)
-                click.echo(f"\n✅ 復元成功: {output_path}")
+                click.echo(f"\n復元成功: {output_path}")
                 
                 # 復元後の確認情報を表示
                 restored_annotations = processor.read_pdf_annotations(output_path)
@@ -2495,7 +2804,7 @@ def main(path, config, verbose, output_dir, read_mode, read_report, restore_mode
                     click.echo(f"\n[スキップ] {result['input_file']}")
                     click.echo(f"   理由: {result.get('reason', '不明')}")
                 else:
-                    click.echo(f"\n📖 [読み取り成功] {result['input_file']}")
+                    click.echo(f"\n[読み取り成功] {result['input_file']}")
                     click.echo(f"   注釈数: {result['total_annotations']}")
                     if result.get('report_file'):
                         click.echo(f"   レポート: {result['report_file']}")
@@ -2588,7 +2897,7 @@ def main(path, config, verbose, output_dir, read_mode, read_report, restore_mode
                     click.echo(f"\n[スキップ] {result['input_file']}")
                     click.echo(f"   理由: {result.get('reason', '不明')}")
                 else:
-                    click.echo(f"\n✅ [成功] {result['input_file']}")
+                    click.echo(f"\n[成功] {result['input_file']}")
                     click.echo(f"   出力: {result['output_file']}")
                     if result.get('backup_file'):
                         click.echo(f"   バックアップ: {result['backup_file']}")
