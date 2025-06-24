@@ -8,27 +8,6 @@ This is a Japanese personal information detection and masking tool for PDF docum
 
 ## Development Environment and Tools
 
-### Desktop Commander Usage
-When working with this project, use the desktop-commander MCP server for file operations and command execution.
-
-**Project Root Directory:**
-```
-"C:\\Users\\gk3t-\\OneDrive - 又村 友幸\\working\\PresidioPDF"
-```
-
-**Important Notes:**
-- Always start desktop-commander operations by running `pwd` to confirm the current working directory
-- Use absolute paths when working with desktop-commander tools
-- The project root should be set to the path above for consistent file operations
-
-### Desktop Commander Commands Reference
-- `mcp__desktop-commander__execute_command`: Execute terminal commands
-- `mcp__desktop-commander__read_file`: Read file contents with offset/length support
-- `mcp__desktop-commander__write_file`: Write files in chunks (recommended: 25-30 lines max)
-- `mcp__desktop-commander__edit_block`: Make surgical text replacements
-- `mcp__desktop-commander__search_code`: Search for text patterns in code
-- `mcp__desktop-commander__search_files`: Find files by name patterns
-- `mcp__desktop-commander__list_directory`: List directory contents
 
 ### Development Environment
 
