@@ -485,12 +485,12 @@ class Analyzer:
         import re
         
         if entity_type == "PERSON":
-            refined = re.sub(r'[0-9\-\s]*.strip()
+            refined = re.sub(r'[0-9\-\s]*', '', entity_text).strip()
             if refined:
                 return refined
         
         elif entity_type == "LOCATION":
-            refined = re.sub(r'[0-9\-\s]*.strip()
+            refined = re.sub(r'[0-9\-\s]*', '', entity_text).strip()
             if refined:
                 return refined
         

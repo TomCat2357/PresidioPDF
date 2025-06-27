@@ -15,13 +15,8 @@ from typing import List, Dict, Optional
 import fitz  # PyMuPDF
 
 # 自プロジェクトのモジュールをインポート
-try:
-    from pdf_presidio_processor import PDFPresidioProcessor
-    from config_manager import ConfigManager
-    PRESIDIO_AVAILABLE = True
-except ImportError as e:
-    print(f"Presidio processor import failed: {e}")
-    PRESIDIO_AVAILABLE = False
+from config_manager import ConfigManager
+PRESIDIO_AVAILABLE = False
 
 # ログ設定の初期化（既存のロガーを使用）
 logger = logging.getLogger(__name__)

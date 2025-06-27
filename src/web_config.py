@@ -13,13 +13,8 @@ import argparse
 from datetime import datetime
 
 # 自プロジェクトのモジュールをインポート
-try:
-    from pdf_presidio_processor import PDFPresidioProcessor
-    from config_manager import ConfigManager
-    PRESIDIO_AVAILABLE = True
-except ImportError as e:
-    print(f"Presidio processor import failed: {e}")
-    PRESIDIO_AVAILABLE = False
+from config_manager import ConfigManager
+PRESIDIO_AVAILABLE = False
 
 # Flask アプリケーションの設定
 app = Flask(__name__)
