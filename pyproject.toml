@@ -35,21 +35,20 @@ dev = [
     "mypy>=1.0.0",
 ]
 
-# GPUモード（NVIDIA CUDA対応）- テスト用に一時的に無効化
-# gpu = [
-#     # GPU対応spaCy（transformers含む）
-#     "spacy[transformers,cuda]>=3.7.0",
-#     # 高精度日本語NLPモデル（GPU推奨）
-#     "ja-core-news-lg",
-#     "ja-core-news-trf",  # Transformer版（GPU推奨）
-#     "ja-ginza-electra>=5.2.0",  # Electra版（GPU推奨）
-#     # GPU対応機械学習ライブラリ
-#     "torch>=2.0.0",
-#     "tensorflow>=2.13.0",
-#     "transformers>=4.21.0",
-#     # CUDA対応
-#     "cupy-cuda12x>=12.0.0",  # CUDA 12.x用
-# ]
+# GPUモード（高精度モデル）- CPU環境でも動作、GPU環境ではより高速
+gpu = [
+    # 高精度日本語NLPモデル（GPU推奨だがCPUでも動作、Rustコンパイラ不要）
+    "ja-core-news-lg",
+    # 機械学習ライブラリ（CPU版、GPU環境では自動的にGPU加速）
+    "torch>=2.0.0",
+    # 以下は手動インストール推奨（Rustコンパイラまたは特別な環境が必要）
+    # "ja-core-news-trf",  # Transformer版（最高精度、transformers必要）
+    # "ja-ginza-electra>=5.2.0",  # Electra版（tokenizers+Rust必要）
+    # "transformers>=4.21.0",  # Rustコンパイラ必要
+    # "spacy[transformers,cuda]>=3.7.0",  # CUDA環境のみ
+    # "tensorflow>=2.13.0",  # 重いため除外
+    # "cupy-cuda12x>=12.0.0",  # CUDA環境のみ
+]
 
 # 軽量版（Presidio PDF処理のみ、最小構成）
 minimal = [
