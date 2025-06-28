@@ -35,7 +35,8 @@ class PresidioPDFWebApp:
         self.total_pages = 0
         self.settings = {
             "entities": ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-            "masking_method": "highlight"  # highlight, annotation, both
+            "masking_method": "highlight",  # highlight, annotation, both
+            "spacy_model": "ja_core_news_sm"
         }
         
         # Presidio プロセッサーの初期化
@@ -68,6 +69,48 @@ class PresidioPDFWebApp:
                 self.processor = None
         
         logger.info(f"セッション {session_id} 初期化完了 ({'GPU' if self.use_gpu else 'CPU'}モード)")
+    
+    def _reinitialize_processor_with_model(self, spacy_model: str):
+        """指定されたspaCyモデルでプロセッサを再初期化"""
+        try:
+            logger.info(f"プロセッサを再初期化: {spacy_model}")
+            
+            # 既存のプロセッサを破棄
+            if self.processor:
+                self.processor = None
+            
+            # 新しい設定でプロセッサを初期化
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            config_path = os.path.join(base_dir, '..', 'config_template.yaml')
+            
+            if os.path.exists(config_path):
+                config_manager = ConfigManager(config_file=config_path)
+            else:
+                config_manager = ConfigManager()
+            
+            # spaCyモデルを強制設定
+            config_manager.spacy_model = spacy_model
+            
+            # CPUモード設定
+            if not self.use_gpu:
+                logger.info(f"CPUモードで再初期化: spaCyモデル = {spacy_model}")
+            
+            self.processor = PDFProcessor(config_manager)
+            
+            mode_str = "GPU" if self.use_gpu else "CPU"
+            logger.info(f"プロセッサ再初期化完了: {spacy_model} ({mode_str}モード)")
+            
+        except Exception as e:
+            logger.error(f"プロセッサ再初期化エラー: {e}")
+            # エラーが発生した場合はデフォルトに戻す
+            try:
+                config_manager = ConfigManager()
+                config_manager.spacy_model = 'ja_core_news_sm'
+                self.processor = PDFProcessor(config_manager)
+                logger.warning("デフォルトモデル (ja_core_news_sm) で復旧しました")
+            except Exception as fallback_error:
+                logger.error(f"フォールバック初期化も失敗: {fallback_error}")
+                self.processor = None
     
     def load_pdf_file(self, file_path: str) -> Dict:
         """PDFファイルを読み込み"""

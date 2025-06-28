@@ -72,6 +72,13 @@ def detect_entities():
         settings_data = request.get_json()
         if settings_data:
             app_instance.settings.update(settings_data)
+            
+            # spaCyモデルが変更された場合は、プロセッサを再初期化
+            if 'spacy_model' in settings_data:
+                spacy_model = settings_data['spacy_model']
+                logger.info(f"spaCyモデルを変更: {spacy_model}")
+                app_instance._reinitialize_processor_with_model(spacy_model)
+            
             logger.info(f"セッションの設定を更新: {app_instance.settings}")
 
         result = app_instance.run_detection()
@@ -169,6 +176,9 @@ def settings():
                 app_instance.settings['entities'] = data['entities']
             if 'masking_method' in data:
                 app_instance.settings['masking_method'] = data['masking_method']
+            if 'spacy_model' in data:
+                app_instance.settings['spacy_model'] = data['spacy_model']
+                logger.info(f"spaCyモデル設定を更新: {data['spacy_model']}")
             
             logger.info(f"設定更新完了: {app_instance.settings}")
             return jsonify({

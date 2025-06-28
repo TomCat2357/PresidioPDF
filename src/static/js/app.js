@@ -29,7 +29,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
-                masking_method: "highlight"
+                masking_method: "highlight",
+                spacy_model: "ja_core_news_sm"
             };
 
             this.initializeElements();
@@ -743,6 +744,7 @@ document.addEventListener('DOMContentLoaded', () => {
         saveSettings() {
             this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
             this.settings.masking_method = document.getElementById('maskingMethod').value;
+            this.settings.spacy_model = document.getElementById('spacyModel').value;
             this.updateStatus('設定を保存しました');
             const modal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
             if(modal) modal.hide();
@@ -754,6 +756,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (checkbox) checkbox.checked = true;
             });
             document.getElementById('maskingMethod').value = this.settings.masking_method;
+            document.getElementById('spacyModel').value = this.settings.spacy_model;
         }
 
         getEntityTypeJapanese(entityType) {

@@ -551,6 +551,20 @@
                         </div>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label">検出モデル</label>
+                        <select class="form-select" id="spacyModel">
+                            <option value="ja_core_news_sm">ja_core_news_sm (軽量版・CPU)</option>
+                            <option value="ja_core_news_md">ja_core_news_md (中サイズ版・CPU)</option>
+                            <option value="ja_core_news_lg">ja_core_news_lg (大サイズ版・GPU推奨)</option>
+                            <option value="ja_core_news_trf">ja_core_news_trf (Transformer版・GPU推奨)</option>
+                            <option value="ja_ginza">ja_ginza (GINZA・CPU)</option>
+                            <option value="ja_ginza_electra">ja_ginza_electra (GINZA Electra・GPU推奨)</option>
+                        </select>
+                        <small class="form-text text-muted">
+                            CPU環境では軽量版、GPU環境では高精度版を選択してください
+                        </small>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">マスキング方法</label>
                         <select class="form-select" id="maskingMethod">
                             <option value="highlight">ハイライト表示</option>
