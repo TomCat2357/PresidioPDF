@@ -191,9 +191,9 @@ uv run pytest tests/test_pdf_processor.py -v
 uv run pytest -v
 ```
 
-### Web版のテスト (Playwright)
+### src/web_main.pyの実行チェック(Playwright)
 
-WebアプリケーションのE2E（エンドツーエンド）テストは、以下の手順を想定しています。
+Webアプリケーションは、以下の手順で実行確認することを想定しています。
 
 ⓪ **既存プロセスの停止**
 テストの前に、`localhost:5000` で動作している可能性のある既存のWebサーバープロセスを停止してください。
@@ -216,12 +216,6 @@ Playwrightを使用したテストスクリプトは、以下の自動操作を�
 6.  処理完了まで待機します。
 7.  結果を検証するために画面のスナップショットを撮影します。
 
-Playwrightのテストは、`pytest` 経由で実行できます。
-
-```bash
-# Webアプリケーションのテストを実行 (例)
-uv run pytest tests/test_e2e_webapp.py
-```
 
 ## Entity Detection & Masking
 
