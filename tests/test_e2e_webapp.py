@@ -18,13 +18,13 @@ def live_server():
     # uvが見つからない場合は、python -m uvicornを試す
     try:
         process = subprocess.Popen(
-            ["uv", "run", "--host", "127.0.0.1", "--port", "5000", "src.web_main:app"],
+            ["uv", "run", "python", "src/web_main.py"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
         process = subprocess.Popen(
-            ["python", "-m", "uvicorn", "src.web_main:app", "--host", "127.0.0.1", "--port", "5000"],
+            ["python", "src/web_main.py"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

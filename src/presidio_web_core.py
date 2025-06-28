@@ -16,7 +16,9 @@ import fitz  # PyMuPDF
 
 # 自プロジェクトのモジュールをインポート
 from config_manager import ConfigManager
-PRESIDIO_AVAILABLE = False
+from pdf_processor import PDFProcessor
+
+PRESIDIO_AVAILABLE = True
 
 # ログ設定の初期化（既存のロガーを使用）
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ class PresidioPDFWebApp:
                     config_manager.spacy_model = getattr(config_manager, 'spacy_model', 'ja_core_news_sm')
                     logger.info(f"CPUモードで初期化中: spaCyモデル = {config_manager.spacy_model}")
             
-                self.processor = PDFPresidioProcessor(config_manager)
+                self.processor = PDFProcessor(config_manager)
                 
                 mode_str = "GPU" if self.use_gpu else "CPU"
                 logger.info(f"Presidio processor初期化完了 ({mode_str}モード)")
