@@ -62,14 +62,16 @@ class PDFProcessor:
         
         doc = fitz.open(pdf_path)
         locator = PDFTextLocator(doc)
-        full_text = locator.full_text
+        
+        # 改行なしテキストで解析して改行を跨ぐ単語も検出
+        full_text_no_newlines = locator.full_text_no_newlines
         
         enabled_entities = self.config_manager.get_enabled_entities()
-        results = self.analyzer.analyze_text(full_text, enabled_entities)
+        results = self.analyzer.analyze_text(full_text_no_newlines, enabled_entities)
         
         for result in results:
             start, end = result['start'], result['end']
-            precise_rects = locator.locate_pii_by_offset(start, end)
+            precise_rects = locator.locate_pii_by_offset_no_newlines(start, end)
             
             # ページごとに矩形をグループ化
             rects_by_page = {}

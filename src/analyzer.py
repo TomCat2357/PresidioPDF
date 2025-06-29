@@ -42,38 +42,7 @@ class Analyzer:
                 model_name = preferred_model
                 logger.info(f"spaCyモデルを読み込みました: {model_name}")
             except OSError:
-                logger.warning(f"優先モデル '{preferred_model}' が見つかりません。フォールバックモデルを試行します。")
-                
-                # フォールバックモデルを順番に試行
-                for fallback_model in fallback_models:
-                    if fallback_model == preferred_model:
-                        continue  # 既に試行済み
-                    try:
-                        nlp = spacy.load(fallback_model)
-                        model_name = fallback_model
-                        logger.info(f"フォールバックモデルを読み込みました: {model_name}")
-                        break
-                    except OSError:
-                        logger.debug(f"フォールバックモデル '{fallback_model}' が見つかりません。")
-                        continue
-                
-                # すべてのモデルが見つからない場合
-                if model_name is None:
-                    if auto_download:
-                        logger.info("利用可能なモデルが見つかりません。ja_core_news_smを自動ダウンロードを試行します。")
-                        try:
-                            import subprocess
-                            import sys
-                            subprocess.check_call([sys.executable, "-m", "pip", "install", 
-                                                 "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl"])
-                            nlp = spacy.load("ja_core_news_sm")
-                            model_name = "ja_core_news_sm"
-                            logger.info("ja_core_news_smを自動ダウンロードして読み込みました。")
-                        except Exception as e:
-                            logger.error(f"モデルの自動ダウンロードに失敗しました: {e}")
-                            raise OSError("日本語spaCyモデルが見つかりません。'uv pip install https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl'を実行してください。")
-                    else:
-                        raise OSError("日本語spaCyモデルが見つかりません。'uv pip install https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl'を実行してください。")
+                raise OSError(f"指定されたspaCyモデル '{preferred_model}' が見つかりません。モデルを正しくインストールしてください。")
         
         except Exception as e:
             logger.error(f"spaCyモデルの読み込みでエラーが発生しました: {e}")

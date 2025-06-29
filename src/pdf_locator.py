@@ -25,6 +25,8 @@ class PDFTextLocator:
         """
         self.doc = pdf_doc
         self.full_text, self.char_data = self._prepare_synced_data()
+        self.full_text_no_newlines = self.full_text.replace('\n', '').replace('\r', '')
+        self._create_offset_mapping()
 
     def _prepare_synced_data(self) -> Tuple[str, List[Dict]]:
         """
@@ -159,3 +161,25 @@ class PDFTextLocator:
                 final_rects.append(combined_rect)
         
         return final_rects
+
+    def _create_offset_mapping(self):
+        """
+        改行なしテキストのオフセットを元テキストのオフセットにマップするテーブルを作成
+        """
+        self.no_newlines_to_original = {}
+        no_newlines_pos = 0
+        
+        for original_pos, char in enumerate(self.full_text):
+            if char not in ['\n', '\r']:
+                self.no_newlines_to_original[no_newlines_pos] = original_pos
+                no_newlines_pos += 1
+
+    def locate_pii_by_offset_no_newlines(self, start: int, end: int) -> List[fitz.Rect]:
+        """
+        改行なしテキストでのオフセットを受け取り、元テキストのオフセットに変換してから座標を取得
+        """
+        # 改行なしテキストのオフセットを元テキストのオフセットに変換
+        original_start = self.no_newlines_to_original.get(start, start)
+        original_end = self.no_newlines_to_original.get(end - 1, end - 1) + 1
+        
+        return self.locate_pii_by_offset(original_start, original_end)
