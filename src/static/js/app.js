@@ -4,12 +4,43 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-    // PDF.jsのグローバルワーカーを設定
-    if (typeof pdfjsLib === 'undefined') {
-        console.error('PDF.js library not found!');
-        return;
-    }
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    console.log('=== PDF Viewer Debug Mode ===');
+    
+    // Wait for PDF.js library to be fully loaded
+    const initializePDFViewer = () => {
+        console.log('Checking PDF.js library availability...');
+        console.log('pdfjsLib type:', typeof pdfjsLib);
+        console.log('window.pdfjsLib:', window.pdfjsLib);
+        console.log('Available globals:', Object.keys(window).filter(k => k.includes('pdf')));
+        
+        if (typeof pdfjsLib === 'undefined') {
+            console.error('PDF.js library not found!');
+            console.log('Checking alternative global names...');
+            
+            // Check alternative global variable names
+            if (typeof window.pdfjsLib !== 'undefined') {
+                window.pdfjsLib = window.pdfjsLib;
+                console.log('Using window.pdfjsLib');
+            } else if (typeof window.PDFJS !== 'undefined') {
+                window.pdfjsLib = window.PDFJS;
+                console.log('Using window.PDFJS');
+            } else {
+                console.error('No PDF.js library found in any global scope');
+                alert('PDF.js library not loaded. Please check your internet connection.');
+                return;
+            }
+        }
+        
+        console.log('PDF.js library found, setting worker...');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        console.log('PDF.js worker set to:', pdfjsLib.GlobalWorkerOptions.workerSrc);
+        
+        // Initialize the application
+        initializeApp();
+    };
+    
+    const initializeApp = () => {
+        console.log('Initializing PDF web application...');
 
     class PresidioPDFWebApp {
         constructor() {
@@ -305,17 +336,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         async handleFileSelect(file) {
+            console.log('=== handleFileSelect called ===');
+            console.log('File:', file);
+            console.log('File type:', file?.type);
+            console.log('File size:', file?.size);
+            
             if (!file || file.type !== 'application/pdf') {
+                console.error('Invalid file type:', file?.type);
                 this.showError('PDFファイルを選択してください');
                 return;
             }
             this.showLoading(true, 'PDFをアップロード中...');
             
             try {
+                console.log('Creating FormData for upload...');
                 const formData = new FormData();
                 formData.append('pdf_file', file);
+                
+                console.log('Sending file to server...');
                 const response = await fetch('/api/upload', { method: 'POST', body: formData });
                 const data = await response.json();
+                console.log('Server response:', data);
 
                 if (!data.success) throw new Error(data.message);
 
@@ -323,17 +364,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.elements.selectedFileName.textContent = file.name;
                 this.updateStatus('PDFを読み込み中...');
                 
+                console.log('Reading file as ArrayBuffer...');
                 const arrayBuffer = await file.arrayBuffer();
-                this.currentPdfDocument = await pdfjsLib.getDocument(arrayBuffer).promise;
+                console.log('ArrayBuffer size:', arrayBuffer.byteLength);
+                
+                console.log('Loading PDF with PDF.js...');
+                console.log('pdfjsLib.getDocument typeof:', typeof pdfjsLib.getDocument);
+                
+                const loadingTask = pdfjsLib.getDocument(arrayBuffer);
+                console.log('Loading task created:', loadingTask);
+                
+                this.currentPdfDocument = await loadingTask.promise;
+                console.log('PDF document loaded:', this.currentPdfDocument);
+                console.log('Number of pages:', this.currentPdfDocument.numPages);
+                
                 this.totalPages = this.currentPdfDocument.numPages;
                 this.currentPage = 1;
                 this.elements.detectBtn.disabled = false;
                 
+                console.log('Rendering first page...');
                 await this.renderPage(this.currentPage);
                 this.updateStatus(`PDF読み込み完了: ${file.name}`);
+                console.log('PDF loading completed successfully');
 
             } catch (error) {
-                console.error('File handling error:', error);
+                console.error('=== File handling error ===');
+                console.error('Error details:', error);
+                console.error('Error stack:', error.stack);
                 this.showError(error.message || 'ファイルの処理中にエラーが発生しました');
             } finally {
                 this.showLoading(false);
@@ -341,35 +398,65 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         async renderPage(pageNum) {
-            if (!this.currentPdfDocument || pageNum < 1 || pageNum > this.totalPages) return;
+            console.log('=== renderPage called ===');
+            console.log('Page number:', pageNum);
+            console.log('Total pages:', this.totalPages);
+            console.log('PDF document:', this.currentPdfDocument);
+            
+            if (!this.currentPdfDocument || pageNum < 1 || pageNum > this.totalPages) {
+                console.error('Invalid page rendering conditions');
+                return;
+            }
             this.showLoading(true, 'ページを描画中...');
             try {
+                console.log('Getting page from PDF document...');
                 const page = await this.currentPdfDocument.getPage(pageNum);
+                console.log('Page object:', page);
+                
                 const scale = this.zoomLevel / 100;
+                console.log('Scale:', scale);
+                
                 this.viewport = page.getViewport({ scale });
+                console.log('Viewport:', this.viewport);
+                console.log('Viewport dimensions:', this.viewport.width, 'x', this.viewport.height);
 
                 const canvas = this.elements.pdfCanvas;
                 const container = this.elements.pdfCanvasContainer;
+                console.log('Canvas element:', canvas);
+                console.log('Container element:', container);
 
                 container.style.setProperty('--scale-factor', this.viewport.scale);
                 canvas.width = this.viewport.width;
                 canvas.height = this.viewport.height;
+                console.log('Canvas dimensions set to:', canvas.width, 'x', canvas.height);
 
                 const renderContext = {
                     canvasContext: this.pdfContext,
                     viewport: this.viewport
                 };
+                console.log('Render context:', renderContext);
+                console.log('Canvas context:', this.pdfContext);
+                
+                console.log('Starting page rendering...');
                 await page.render(renderContext).promise;
+                console.log('Page rendering completed');
 
+                console.log('Rendering text layer...');
                 await this.renderTextLayer(page);
+                console.log('Text layer rendering completed');
+                
                 this.renderHighlights();
 
                 this.updatePageInfo();
                 this.elements.pdfPlaceholder.style.display = 'none';
                 this.elements.pdfCanvasContainer.style.display = 'block';
+                
+                console.log('Page rendering process completed successfully');
 
             } catch (error) {
+                console.error('=== renderPage error ===');
                 console.error(`Error rendering page ${pageNum}:`, error);
+                console.error('Error stack:', error.stack);
                 this.showError('ページの描画に失敗しました');
             } finally {
                 this.showLoading(false);
@@ -1194,4 +1281,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     new PresidioPDFWebApp();
+    };
+
+    // Try to initialize immediately, or wait for library to load
+    if (typeof pdfjsLib !== 'undefined') {
+        initializePDFViewer();
+    } else {
+        console.log('PDF.js not yet loaded, waiting...');
+        // Wait a bit for the script to load, then try again
+        setTimeout(() => {
+            initializePDFViewer();
+        }, 1000);
+    }
 });
