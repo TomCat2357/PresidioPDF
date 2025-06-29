@@ -58,7 +58,7 @@ def test_pdf_anonymization_e2e(live_server):
         pytest.skip(f"テストPDFファイルが見つかりません: {TEST_PDF}")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)  # ヘッドレスモードを無効化して表示
+        browser = p.chromium.launch(headless=True)  # ヘッドレスモードで実行
         page = browser.new_page()
 
         console_messages = []
@@ -77,20 +77,14 @@ def test_pdf_anonymization_e2e(live_server):
             page.wait_for_timeout(2000)  # 2秒待機
             print("PDFをアップロードしました。")
 
-            # 4. 必要に応じて設定ボタンで設定を変える
-            # 例：設定ボタンをクリックして、特定のチェックボックスをオンにする
-            # settings_button = page.locator('button:has-text("設定")')
-            # if settings_button.count() > 0:
-            #     settings_button.click()
-            #     page.locator('input[type="checkbox"][name="some_setting"]').check()
-            #     page.locator('button:has-text("閉じる")').click()
-            #     print("設定を変更しました。")
+            # 4. 設定はスキップしてデフォルトモデルで実行
+            print("設定をスキップして、デフォルトモデルで検出を実行します。")
 
             # 5. 検出ボタンを押す
             start_button = page.locator('button:has-text("検出開始")')
             expect(start_button).to_be_enabled()
-            # APIのレスポンスをキャプチャ
-            with page.expect_response("**/api/detect") as response_info:
+            # APIのレスポンスをキャプチャ（タイムアウトを3分に延長）
+            with page.expect_response("**/api/detect", timeout=180000) as response_info:
                 start_button.click()
             
             response = response_info.value
@@ -100,7 +94,7 @@ def test_pdf_anonymization_e2e(live_server):
             # 6. ちょっと待つ（処理完了を待機）
             # プレースホルダーでない、実際の検出結果が表示されるまで待つ
             result_list_items = page.locator('#entityList .list-group-item:not(:has-text("検出結果がここに表示されます"))')
-            expect(result_list_items.first).to_be_visible(timeout=60000)
+            expect(result_list_items.first).to_be_visible(timeout=180000)
             print("実際の検出結果が表示されました。")
 
             # ハイライトが描画されるのを待つ

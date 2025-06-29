@@ -7,7 +7,10 @@ ConfigManagerのテスト
 import pytest
 import tempfile
 import os
-from src.config_manager import ConfigManager
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from config_manager import ConfigManager
 
 
 class TestConfigManager:
