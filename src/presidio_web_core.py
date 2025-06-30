@@ -163,49 +163,66 @@ class PresidioPDFWebApp:
             if not self.pdf_document:
                 self.pdf_document = fitz.open(self.current_pdf_path)
 
-            # 各ページごとに文字-オフセット-座標マッピングを構築
-            page_mappings = {}
-            for page_num in range(len(self.pdf_document)):
-                page_mappings[page_num] = self._build_character_offset_mapping(page_num)
+            # PDFTextLocatorを使用して改行なしテキストとの同期を確保
+            from pdf_locator import PDFTextLocator
+            locator = PDFTextLocator(self.pdf_document)
+            presidio_text = locator.full_text_no_newlines  # Presidio解析用と同じテキスト
 
             for entity in entities:
-                page_num = entity.get("page_info", {}).get("page_number", 1)
-                page_index = page_num - 1  # 0-based index
-                
-                if page_index not in page_mappings:
-                    logger.warning(f"ページマッピングが見つかりません: page {page_num}")
-                    continue
-                
                 # エンティティタイプでフィルタリング
                 if entity['entity_type'] in self.settings['entities']:
                     
-                    # オフセットベース座標特定を実行
+                    # オフセットベース座標特定を実行（改行なしオフセットを使用）
                     start_offset = entity.get("start", 0)
                     end_offset = entity.get("end", 0)
                     
-                    coordinate_data = self._locate_pii_by_offset_precise(
-                        page_mappings[page_index], start_offset, end_offset, entity['text']
-                    )
+                    # PDFTextLocatorの改行なしオフセット座標特定を使用
+                    coord_rects = locator.locate_pii_by_offset_no_newlines(start_offset, end_offset)
                     
-                    if not coordinate_data:
-                        logger.warning(f"オフセットベース座標特定に失敗: '{entity['text']}' on page {page_num}")
+                    if not coord_rects:
+                        logger.warning(f"オフセットベース座標特定に失敗: '{entity['text']}'")
                         continue
-
+                    
+                    # 最初の矩形をメイン座標として使用
+                    main_rect = coord_rects[0]
+                    main_coordinates = {
+                        'x0': float(main_rect.x0),
+                        'y0': float(main_rect.y0),
+                        'x1': float(main_rect.x1),
+                        'y1': float(main_rect.y1)
+                    }
+                    
+                    # 複数行矩形情報を作成
+                    line_rects = []
+                    for i, rect in enumerate(coord_rects):
+                        line_rects.append({
+                            'rect': {
+                                'x0': float(rect.x0),
+                                'y0': float(rect.y0),
+                                'x1': float(rect.x1),
+                                'y1': float(rect.y1)
+                            },
+                            'text': entity['text'],  # 簡略化
+                            'line_number': i + 1
+                        })
+                    
                     result = {
                         "entity_type": str(entity.get("entity_type", "UNKNOWN")),
                         "text": str(entity.get("text", "")),
-                        "page": page_num,
-                        # 詳細な位置情報を追加
-                        "start_page": entity.get('position_details', {}).get('start_page'),
-                        "start_line": entity.get('position_details', {}).get('start_line'),
+                        "score": float(entity.get("score", 0.0)),
+                        "page": entity.get("page_info", {}).get("page_number", 1),
+                        "recognition_metadata": entity.get("recognition_metadata", {}),
+                        "analysis_explanation": entity.get("analysis_explanation", {}),
+                        "location_info": {
+                            "line_number": entity.get('position_details', {}).get('line_number'),
+                            "word_index": entity.get('position_details', {}).get('word_index'),
+                        },
                         "start_char": entity.get('position_details', {}).get('start_char'),
-                        "end_page": entity.get('position_details', {}).get('end_page'),
-                        "end_line": entity.get('position_details', {}).get('end_line'),
                         "end_char": entity.get('position_details', {}).get('end_char'),
                         "start": int(entity.get("start", 0)),
                         "end": int(entity.get("end", 0)),
-                        "coordinates": coordinate_data['main_coordinates'],
-                        "line_rects": coordinate_data['line_rects'],
+                        "coordinates": main_coordinates,
+                        "line_rects": line_rects,
                         "manual": False  # 自動検出フラグ
                     }
                     
@@ -443,202 +460,3 @@ class PresidioPDFWebApp:
         }
         return mapping.get(entity_type, entity_type)
     
-    def _build_character_offset_mapping(self, page_index: int) -> Dict:
-        """
-        指定されたページの文字-オフセット-座標マッピングを構築
-        
-        Args:
-            page_index: ページインデックス（0-based）
-            
-        Returns:
-            Dict: {'full_text': str, 'char_positions': List[Dict]}
-        """
-        try:
-            page = self.pdf_document[page_index]
-            textpage = page.get_textpage()
-            raw_data = json.loads(textpage.extractRAWJSON())
-            
-            full_text = ''
-            char_positions = []
-            char_index = 0
-            
-            for block in raw_data['blocks']:
-                for line in block['lines']:
-                    for span in line['spans']:
-                        for char_data in span['chars']:
-                            char_text = char_data['c']
-                            full_text += char_text
-                            char_positions.append({
-                                'offset': char_index,
-                                'char': char_text,
-                                'bbox': char_data['bbox']
-                            })
-                            char_index += 1
-                    
-                    # 行末に改行を追加
-                    full_text += '\n'
-                    char_positions.append({
-                        'offset': char_index,
-                        'char': '\n',
-                        'bbox': None  # 改行は座標なし
-                    })
-                    char_index += 1
-            
-            logger.debug(f"Page {page_index + 1}: Built character mapping with {len(char_positions)} positions")
-            
-            return {
-                'full_text': full_text,
-                'char_positions': char_positions
-            }
-            
-        except Exception as e:
-            logger.error(f"文字オフセットマッピング構築エラー (page {page_index + 1}): {e}")
-            return {'full_text': '', 'char_positions': []}
-    
-    def _locate_pii_by_offset_precise(self, page_mapping: Dict, start_offset: int, end_offset: int, pii_text: str) -> Optional[Dict]:
-        """
-        オフセット範囲から正確な座標データを取得
-        
-        Args:
-            page_mapping: _build_character_offset_mapping()で作成されたマッピング
-            start_offset: PII開始オフセット
-            end_offset: PII終了オフセット
-            pii_text: PII文字列（検証用）
-            
-        Returns:
-            Dict: {'main_coordinates': Dict, 'line_rects': List[Dict]} または None
-        """
-        try:
-            char_positions = page_mapping['char_positions']
-            full_text = page_mapping['full_text']
-            
-            # オフセット範囲の検証
-            if start_offset < 0 or end_offset > len(char_positions):
-                logger.warning(f"オフセット範囲が無効: {start_offset}-{end_offset} (max: {len(char_positions)})")
-                return None
-            
-            # オフセット範囲のテキストを抽出して検証
-            extracted_chars = []
-            valid_bboxes = []
-            
-            for i in range(start_offset, end_offset):
-                if i < len(char_positions):
-                    char_info = char_positions[i]
-                    extracted_chars.append(char_info['char'])
-                    
-                    # 改行以外の文字の座標を収集
-                    if char_info['bbox'] is not None:
-                        valid_bboxes.append({
-                            'char': char_info['char'],
-                            'bbox': char_info['bbox'],
-                            'offset': i
-                        })
-            
-            extracted_text = ''.join(extracted_chars)
-            
-            # テキスト検証（改行を除いて比較）
-            pii_normalized = pii_text.replace('\n', '').replace('\r', '')
-            extracted_normalized = extracted_text.replace('\n', '').replace('\r', '')
-            
-            if pii_normalized != extracted_normalized:
-                logger.warning(f"テキスト不一致: 期待='{pii_normalized}' 実際='{extracted_normalized}'")
-                # 部分的一致でも処理を続行
-            
-            if not valid_bboxes:
-                logger.warning(f"有効な座標が見つかりません: '{pii_text}'")
-                return None
-            
-            # メイン座標（全体の境界矩形）を計算
-            all_x0 = [bbox_info['bbox'][0] for bbox_info in valid_bboxes]
-            all_y0 = [bbox_info['bbox'][1] for bbox_info in valid_bboxes]
-            all_x1 = [bbox_info['bbox'][2] for bbox_info in valid_bboxes]
-            all_y1 = [bbox_info['bbox'][3] for bbox_info in valid_bboxes]
-            
-            main_coordinates = {
-                'x0': min(all_x0),
-                'y0': min(all_y0),
-                'x1': max(all_x1),
-                'y1': max(all_y1)
-            }
-            
-            # 複数行矩形を作成（改行を跨ぐPII用）
-            line_rects = self._create_line_rects_from_chars(valid_bboxes, extracted_text)
-            
-            logger.debug(f"オフセット座標特定成功: '{pii_text}' -> {len(line_rects)} rects")
-            
-            return {
-                'main_coordinates': main_coordinates,
-                'line_rects': line_rects
-            }
-            
-        except Exception as e:
-            logger.error(f"オフセットベース座標特定エラー: {e}")
-            return None
-    
-    def _create_line_rects_from_chars(self, valid_bboxes: List[Dict], extracted_text: str) -> List[Dict]:
-        """
-        文字座標から行ごとの矩形を作成（改行を跨ぐPII対応）
-        
-        Args:
-            valid_bboxes: 有効な文字座標リスト
-            extracted_text: 抽出されたテキスト（改行含む）
-            
-        Returns:
-            List[Dict]: 行ごとの矩形情報
-        """
-        try:
-            if not valid_bboxes:
-                return []
-            
-            # Y座標でグループ化（同じ行の文字をまとめる）
-            line_groups = {}
-            for bbox_info in valid_bboxes:
-                bbox = bbox_info['bbox']
-                y_center = (bbox[1] + bbox[3]) / 2  # Y座標の中心
-                
-                # 近い行をグループ化（±2ピクセル以内）
-                found_group = False
-                for existing_y in line_groups.keys():
-                    if abs(y_center - existing_y) <= 2.0:
-                        line_groups[existing_y].append(bbox_info)
-                        found_group = True
-                        break
-                
-                if not found_group:
-                    line_groups[y_center] = [bbox_info]
-            
-            # 各行ごとに矩形を作成
-            line_rects = []
-            for line_y, line_chars in sorted(line_groups.items()):
-                if not line_chars:
-                    continue
-                
-                # 行内の文字から境界矩形を計算
-                line_x0 = min(char['bbox'][0] for char in line_chars)
-                line_y0 = min(char['bbox'][1] for char in line_chars)
-                line_x1 = max(char['bbox'][2] for char in line_chars)
-                line_y1 = max(char['bbox'][3] for char in line_chars)
-                
-                # 行のテキストを再構築
-                line_text = ''.join(char['char'] for char in sorted(line_chars, key=lambda x: x['bbox'][0]))
-                
-                line_rect = {
-                    'rect': {
-                        'x0': line_x0,
-                        'y0': line_y0,
-                        'x1': line_x1,
-                        'y1': line_y1
-                    },
-                    'text': line_text,
-                    'line_number': len(line_rects) + 1  # 1-based line number
-                }
-                
-                line_rects.append(line_rect)
-            
-            logger.debug(f"複数行矩形作成完了: {len(line_rects)} lines for text '{extracted_text.replace(chr(10), '\\n')}'")
-            
-            return line_rects
-            
-        except Exception as e:
-            logger.error(f"複数行矩形作成エラー: {e}")
-            return []
