@@ -32,7 +32,7 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ログフォルダを作成
-LOG_FOLDER = 'log'
+LOG_FOLDER = 'outputs/logs'
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
 # ログ設定

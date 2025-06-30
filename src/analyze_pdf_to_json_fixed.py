@@ -195,7 +195,7 @@ def analyze_pdf_rawdict_to_json(pdf_path: str, output_path: str = None):
 
 def main():
     """メイン実行部"""
-    pdf_path = "./test_pdfs/a1.pdf"
+    pdf_path = "test_pdfs/a1.pdf"
     
     # ファイルの存在確認
     if not Path(pdf_path).exists():
