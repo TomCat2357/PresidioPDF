@@ -230,7 +230,7 @@ class PresidioPDFWebApp:
                     if not self._is_duplicate_auto_detection(result, new_detection_results):
                         new_detection_results.append(result)
                     else:
-                        logger.info(f"重複検出をスキップ: {result['text']} ({result['entity_type']}) on page {page_num}")
+                        logger.info(f"重複検出をスキップ: {result['text']} ({result['entity_type']}) on page {result['page']}")
 
             # 手動追加エンティティと新しい自動検出結果を統合
             self.detection_results = manual_entities + new_detection_results
