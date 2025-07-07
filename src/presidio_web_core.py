@@ -89,7 +89,7 @@ class PresidioPDFWebApp:
                 config_manager = ConfigManager()
             
             # spaCyモデルを強制設定
-            config_manager.spacy_model = spacy_model
+            config_manager.set_spacy_model(spacy_model)
             
             # CPUモード設定
             if not self.use_gpu:
@@ -105,7 +105,7 @@ class PresidioPDFWebApp:
             # エラーが発生した場合はデフォルトに戻す
             try:
                 config_manager = ConfigManager()
-                config_manager.spacy_model = 'ja_core_news_sm'
+                config_manager.set_spacy_model('ja_core_news_sm')
                 self.processor = PDFProcessor(config_manager)
                 logger.warning("デフォルトモデル (ja_core_news_sm) で復旧しました")
             except Exception as fallback_error:

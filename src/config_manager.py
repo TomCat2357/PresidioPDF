@@ -544,6 +544,13 @@ class ConfigManager:
         """使用するspaCyモデル名を返す"""
         return self._safe_get_config('nlp.spacy_model', 'ja_core_news_sm')
     
+    def set_spacy_model(self, model_name: str):
+        """spaCyモデル名を設定する"""
+        if 'nlp' not in self.config:
+            self.config['nlp'] = {}
+        self.config['nlp']['spacy_model'] = model_name
+        logger.info(f"spaCyモデル設定を更新: {model_name}")
+    
     def get_fallback_models(self) -> List[str]:
         """フォールバックモデルのリストを返す"""
         return self._safe_get_config('nlp.fallback_models', ['ja_core_news_sm', 'ja_core_news_md'])
