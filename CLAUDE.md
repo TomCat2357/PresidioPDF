@@ -62,6 +62,11 @@ The project supports multiple installation modes:
 - This is a Japanese NLP project focusing on PII detection in PDFs
 - The project uses spaCy with Japanese models for text processing
 - Web interface is available via Flask application
+- **Command availability troubleshooting:**
+  - If a command is not found on Windows, use `where <command>` to check location
+  - If a command is not found on Linux/Unix, use `which <command>` to check location
+  - Note: `uv` may be installed in user-specific paths like `/home/user/.local/bin/uv` (Linux) or `%USERPROFILE%\.local\bin\uv` (Windows)
+  - If `uv` is not in PATH, you may need to use the full path or add it to environment variables
 
 ## Important Files
 - `pyproject.toml`: Project configuration and dependency definitions
