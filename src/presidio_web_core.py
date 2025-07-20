@@ -45,7 +45,7 @@ class PresidioPDFWebApp:
             try:
                 # デフォルトの設定ファイルパスを解決
                 base_dir = os.path.dirname(os.path.abspath(__file__))
-                config_path = os.path.join(base_dir, '..', 'config_template.yaml')
+                config_path = os.path.join(base_dir, '..', 'config', 'config_template.yaml')
 
                 if os.path.exists(config_path):
                     config_manager = ConfigManager(config_file=config_path)
@@ -81,7 +81,7 @@ class PresidioPDFWebApp:
             
             # 新しい設定でプロセッサを初期化
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(base_dir, '..', 'config_template.yaml')
+            config_path = os.path.join(base_dir, '..', 'config', 'config_template.yaml')
             
             if os.path.exists(config_path):
                 config_manager = ConfigManager(config_file=config_path)

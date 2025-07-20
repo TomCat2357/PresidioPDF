@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # PresidioPDF Project Configuration
 
 ## Overview
@@ -9,6 +13,9 @@ This project is a **Japanese personal information detection and masking tool for
 - **Add development dependencies**: `uv add --dev <package-name>`
 - **Sync dependencies**: `uv sync`
 - **Run commands**: `uv run <command>` or activate virtual environment
+
+## Remark!
+- Don't use desktop-commander unless the user specifically requests it.
 
 ## Project Structure
 ```
@@ -46,6 +53,34 @@ The project supports multiple installation modes:
 - **GUI**: Desktop GUI dependencies
 - **Dev**: Development and testing tools
 
+## Core Architecture
+
+The project implements a modular PDF PII detection and masking system with two main execution modes:
+
+### Entry Points
+- **CLI Mode**: `src/cli.py` - Command-line interface with comprehensive options
+- **Web Mode**: `src/web_main.py` - Flask web application with GUI
+
+### Core Components
+- **PDFProcessor** (`src/pdf_processor.py`): Main orchestrator handling workflow coordination
+- **Analyzer** (`src/analyzer.py`): Presidio-based PII detection with Japanese NLP models
+- **PDFMasker** (`src/pdf_masker.py`): PyMuPDF-based text masking operations
+- **PDFAnnotator** (`src/pdf_annotator.py`): Annotation/highlight management for PDFs
+- **PDFTextLocator** (`src/pdf_locator.py`): Text coordinate location within PDF documents
+- **ConfigManager** (`src/config_manager.py`): YAML-based configuration with CLI override support
+
+### Processing Modes
+1. **Detection & Masking**: Standard PII detection and masking workflow
+2. **Read Mode**: Extract existing annotations/highlights from PDFs (`--read-mode`)
+3. **Restore Mode**: Restore annotations from saved reports (`--restore-mode`)
+
+### Multi-Model Support
+The system supports different spaCy Japanese models via optional dependencies:
+- `ja-core-news-sm`: Lightweight model (default/minimal)
+- `ja-core-news-md`: Medium accuracy model
+- `ja-core-news-lg`: High accuracy model (GPU optional)
+- `ja-core-news-trf`: Transformer-based model (highest accuracy, requires transformers)
+
 ## Development Workflow
 1. **Setup**: `uv sync` to install project dependencies
 2. **Development**: Edit code, then run with `uv run <script>`
@@ -68,12 +103,35 @@ The project supports multiple installation modes:
   - Note: `uv` may be installed in user-specific paths like `/home/user/.local/bin/uv` (Linux) or `%USERPROFILE%\.local\bin\uv` (Windows)
   - If `uv` is not in PATH, you may need to use the full path or add it to environment variables
 
+## Configuration Management
+
+The application uses YAML configuration files with CLI override support:
+
+### Primary Config Files
+- `config/config.yaml`: Main application configuration
+- `config/config_template.yaml`: Template for custom configurations
+
+### Key Configuration Sections
+- `nlp.spacy_model`: Japanese spaCy model selection
+- `pdf_masking_method`: Choose 'annotation', 'highlight', or 'both'
+- `entities`: Enable/disable specific PII entity types
+- `output_settings`: Control output paths and backup behavior
+- `features.logging`: Logging level and output configuration
+
+### Override Priority (highest to lowest)
+1. CLI arguments (`--spacy-model`, `--masking-method`, etc.)
+2. Custom config file (`--config custom.yaml`)
+3. Default config file (`config/config.yaml`)
+4. Built-in defaults
+
 ## Important Files
-- `pyproject.toml`: Project configuration and dependency definitions
+- `pyproject.toml`: Project configuration and dependency definitions with optional extras
 - `uv.lock`: Dependency lock file (version pinning)
-- `config.yaml`: Application configuration file
-- `src/pdf_presidio_processor.py.old`: Legacy main processor
+- `config/config.yaml`: Application configuration file
+- `src/pdf_presidio_processor.py.old`: Legacy main processor (deprecated)
 - `src/web_main.py`: Web application entry point
+- `src/cli.py`: Command-line interface entry point
+- `src/pdf_processor.py`: Main processing orchestrator
 
 ## Common Commands
 ```bash
@@ -86,24 +144,36 @@ uv sync --extra gpu        # GPU-optimized models
 uv sync --extra web        # Web application
 uv sync --extra gui        # Desktop GUI
 
-# Run the main application
-uv run python -m src.cli
+# Run the CLI application (various modes)
+uv run python -m src.cli path/to/file.pdf
+uv run python -m src.cli path/to/file.pdf --read-mode
+uv run python -m src.cli path/to/file.pdf --restore-mode --report-file report.json
+uv run python -m src.cli path/to/file.pdf --config config.yaml --spacy-model ja-core-news-lg
 
 # Run web application
 uv run python src/web_main.py
+uv run python src/web_main.py --gpu --port 8080
 
-# Run tests
-uv run pytest
+# Testing
+uv run pytest                    # Run all tests
+uv run pytest tests/test_*.py   # Run specific test files
+uv run pytest -v               # Verbose test output
+uv run pytest --cov=src       # Run with coverage
 
-# Code formatting
-uv run black .
+# Code quality
+uv run black .                  # Format all code
+uv run black src/              # Format specific directory
+uv run mypy src/               # Type check source code
+uv run mypy src/pdf_processor.py  # Type check specific file
 
-# Type checking
-uv run mypy src/
+# Dependency management
+uv tree                        # Show dependency tree
+uv sync                        # Sync dependencies
+uv sync --extra dev           # Install with dev dependencies
+uv sync --extra gpu           # Install with GPU support
+uv add package-name           # Add new dependency
+uv add --dev pytest-mock      # Add dev dependency
 
-# Check dependency tree
-uv tree
-
-# Enter virtual environment shell
-uv shell
+# Environment management
+uv shell                       # Enter virtual environment shell
 ```
