@@ -41,7 +41,7 @@ class PDFProcessor:
         self.processing_stats = {
             'files_processed': 0, 'files_failed': 0,
             'total_entities_found': 0, 'entities_by_type': {},
-            'start_time': datetime.now()
+            'start_time': datetime.now().isoformat()
         }
     
     def _setup_logging(self):
@@ -199,6 +199,19 @@ class PDFProcessor:
             'backup_file': back_path, 'total_entities_found': len(entities),
             'entities_by_type': {}
         }
+        
+        # 詳細なエンティティ情報を含める場合
+        if self.config_manager.should_include_detected_text_in_pdf_report():
+            summary['detected_entities'] = []
+            for entity in entities:
+                entity_detail = {
+                    'entity_type': entity['entity_type'],
+                    'text': entity['text'],
+                    'coordinates': entity.get('coordinates', {}),
+                    'page_number': entity.get('page_info', {}).get('page_number', 1)
+                }
+                summary['detected_entities'].append(entity_detail)
+        
         for entity in entities:
             e_type = entity['entity_type']
             summary['entities_by_type'][e_type] = summary['entities_by_type'].get(e_type, 0) + 1

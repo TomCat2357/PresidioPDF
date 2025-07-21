@@ -554,20 +554,18 @@ requires-dist = [
 
 [[package]]
 name = "ja-core-news-sm"
-version = "3.7.0"
-source = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl" }
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" }
 dependencies = [
-    { name = "spacy" },
     { name = "sudachidict-core" },
     { name = "sudachipy" },
 ]
 wheels = [
-    { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl", hash = "sha256:1191e5bbffcc90670146616c274a64850e54d12070bc5846e78a094f2f6fcfca" },
+    { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl", hash = "sha256:65693016b7cf33ffa845af3523a9c9b8d9aabae85dfc2e46731513a5e03def04" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "spacy", specifier = ">=3.7.0,<3.8.0" },
     { name = "sudachidict-core", specifier = ">=20211220" },
     { name = "sudachipy", specifier = ">=0.5.2,!=0.6.1" },
 ]
@@ -1326,8 +1324,8 @@ requires-dist = [
     { name = "ja-core-news-lg", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.7.0/ja_core_news_lg-3.7.0-py3-none-any.whl" },
     { name = "ja-core-news-lg", marker = "extra == 'gpu'", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.7.0/ja_core_news_lg-3.7.0-py3-none-any.whl" },
     { name = "ja-core-news-md", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.7.0/ja_core_news_md-3.7.0-py3-none-any.whl" },
-    { name = "ja-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl" },
-    { name = "ja-core-news-sm", marker = "extra == 'minimal'", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl" },
+    { name = "ja-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" },
+    { name = "ja-core-news-sm", marker = "extra == 'minimal'", url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "ja-ginza", marker = "extra == 'gui'", specifier = ">=5.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.26.0" },

@@ -114,4 +114,4 @@ ja-core-news-md = { url = "https://github.com/explosion/spacy-models/releases/do
 # GPU用高精度日本語spaCyモデル
 ja-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.7.0/ja_core_news_lg-3.7.0-py3-none-any.whl" }
 ja-core-news-trf = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.7.0/ja_core_news_trf-3.7.0-py3-none-any.whl" }
-ja-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.7.0/ja_core_news_sm-3.7.0-py3-none-any.whl" }
+ja-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" }

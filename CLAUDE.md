@@ -177,3 +177,19 @@ uv add --dev pytest-mock      # Add dev dependency
 # Environment management
 uv shell                       # Enter virtual environment shell
 ```
+
+## Automated Web Testing
+
+### webui-integration-test
+Full web application integration test routine that performs end-to-end testing of the PII detection web interface:
+
+1. **Process Check**: Check if localhost:5000 is running and kill any existing processes
+2. **Server Start**: Launch Flask server with `src/web_main.py` on localhost:5000 (run in background or with timeout since server doesn't return control)
+3. **Browser Access**: Use Playwright to access localhost:5000
+4. **File Upload**: Upload specified PDF file using the upload button
+5. **Model Selection**: Select specified spaCy model (defaults to "ja-core-news-sm" if not specified)
+6. **Detection**: Click the detection button to process the PDF
+7. **Results Save**: Save detected personal information list to `output/` directory with specified filename
+8. **Screenshot**: Take page screenshot and save to `output/` directory with same name as results but different extension
+
+This test routine validates the complete web application workflow from file upload to PII detection results.
