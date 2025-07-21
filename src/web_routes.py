@@ -64,12 +64,21 @@ def upload_file():
 def detect_entities():
     """個人情報検出"""
     try:
+        logger.info("=== 検出処理開始 ===")
         app_instance = get_session_app()
+        logger.info(f"セッションアプリ取得完了: {id(app_instance)}")
+        
         if not app_instance.current_pdf_path:
+            logger.error("PDFファイルが読み込まれていません")
             return jsonify({'success': False, 'message': 'PDFファイルが読み込まれていません'})
+        
+        logger.info(f"現在のPDFパス: {app_instance.current_pdf_path}")
+        logger.info(f"プロセッサー存在確認: {app_instance.processor is not None}")
         
         # クライアントから送信された設定を適用
         settings_data = request.get_json()
+        logger.info(f"受信した設定データ: {settings_data}")
+        
         if settings_data:
             app_instance.settings.update(settings_data)
             
@@ -80,8 +89,23 @@ def detect_entities():
                 app_instance._reinitialize_processor_with_model(spacy_model)
             
             logger.info(f"セッションの設定を更新: {app_instance.settings}")
-
+        
+        logger.info("現在の検出対象エンティティ:")
+        logger.info(f"  - app_instance.settings['entities']: {app_instance.settings.get('entities', [])}")
+        if app_instance.processor:
+            logger.info(f"  - processor enabled entities: {app_instance.processor.config_manager.get_enabled_entities()}")
+        
+        logger.info("検出処理実行開始...")
         result = app_instance.run_detection()
+        logger.info(f"検出処理完了: success={result.get('success')}")
+        
+        if result.get('success'):
+            entities_count = len(result.get('entities', []))
+            logger.info(f"検出されたエンティティ数: {entities_count}")
+        else:
+            logger.error(f"検出処理失敗: {result.get('message')}")
+        
+        logger.info("=== 検出処理終了 ===")
         return jsonify(result)
     
     except Exception as e:

@@ -34,7 +34,7 @@ class PresidioPDFWebApp:
         self.pdf_document = None
         self.total_pages = 0
         self.settings = {
-            "entities": ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
+            "entities": ["PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN"],
             "masking_method": "highlight",  # highlight, annotation, both
             "spacy_model": "ja_core_news_sm"
         }
@@ -44,8 +44,7 @@ class PresidioPDFWebApp:
         if PRESIDIO_AVAILABLE:
             try:
                 # デフォルトの設定ファイルパスを解決
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                config_path = os.path.join(base_dir, '..', 'config', 'config_template.yaml')
+                config_path = os.path.join(os.getcwd(), 'config.yaml')
 
                 if os.path.exists(config_path):
                     config_manager = ConfigManager(config_file=config_path)
@@ -80,8 +79,7 @@ class PresidioPDFWebApp:
                 self.processor = None
             
             # 新しい設定でプロセッサを初期化
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            config_path = os.path.join(base_dir, '..', 'config', 'config_template.yaml')
+            config_path = os.path.join(os.getcwd(), 'config.yaml')
             
             if os.path.exists(config_path):
                 config_manager = ConfigManager(config_file=config_path)
@@ -145,7 +143,10 @@ class PresidioPDFWebApp:
     def run_detection(self) -> Dict:
         """個人情報検出処理を実行（オフセットベース座標特定）"""
         try:
-            logger.info(f"個人情報検出開始: {self.current_pdf_path}")
+            logger.info(f"=== run_detection開始 ===")
+            logger.info(f"PDF path: {self.current_pdf_path}")
+            logger.info(f"Processor存在: {self.processor is not None}")
+            logger.info(f"PRESIDIO_AVAILABLE: {PRESIDIO_AVAILABLE}")
             
             if not self.processor or not PRESIDIO_AVAILABLE:
                 logger.error("Presidio processorが利用できません。")
@@ -155,8 +156,12 @@ class PresidioPDFWebApp:
             manual_entities = [entity for entity in self.detection_results if entity.get("manual", False)]
             logger.info(f"手動追加エンティティを保護: {len(manual_entities)}件")
 
+            logger.info("Presidio解析実行開始...")
+            logger.info(f"検出設定エンティティ: {self.settings['entities']}")
+            
             # Presidioで解析を実行
             entities = self.processor.analyze_pdf(self.current_pdf_path)
+            logger.info(f"Presidio解析完了: {len(entities)}件のエンティティを検出")
             
             # 結果を整形し、オフセットベース座標特定を実行
             new_detection_results = []
@@ -168,9 +173,12 @@ class PresidioPDFWebApp:
             locator = PDFTextLocator(self.pdf_document)
             presidio_text = locator.full_text_no_newlines  # Presidio解析用と同じテキスト
 
+            logger.info(f"エンティティフィルタリング開始 (設定エンティティ: {self.settings['entities']})")
+            filtered_count = 0
             for entity in entities:
                 # エンティティタイプでフィルタリング
                 if entity['entity_type'] in self.settings['entities']:
+                    filtered_count += 1
                     
                     # オフセットベース座標特定を実行（改行なしオフセットを使用）
                     start_offset = entity.get("start", 0)
