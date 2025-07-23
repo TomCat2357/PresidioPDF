@@ -120,8 +120,8 @@ The system supports different spaCy Japanese models via optional dependencies:
 The application uses YAML configuration files with CLI override support:
 
 ### Primary Config Files
-- `config/config.yaml`: Main application configuration
-- `config/config_template.yaml`: Template for custom configurations
+- `config.yaml`: Main application configuration (project root)
+- `config_ja_core_news_md.yaml`: Japanese NLP model specific configuration
 
 ### Key Configuration Sections
 - `nlp.spacy_model`: Japanese spaCy model selection
@@ -133,17 +133,18 @@ The application uses YAML configuration files with CLI override support:
 ### Override Priority (highest to lowest)
 1. CLI arguments (`--spacy-model`, `--masking-method`, etc.)
 2. Custom config file (`--config custom.yaml`)
-3. Default config file (`config/config.yaml`)
+3. Default config file (`config.yaml`)
 4. Built-in defaults
 
 ## Important Files
 - `pyproject.toml`: Project configuration and dependency definitions with optional extras
 - `uv.lock`: Dependency lock file (version pinning)
-- `config/config.yaml`: Application configuration file
-- `src/pdf_presidio_processor.py.old`: Legacy main processor (deprecated)
+- `config.yaml`: Application configuration file (project root)
 - `src/web_main.py`: Web application entry point
 - `src/cli.py`: Command-line interface entry point
 - `src/pdf_processor.py`: Main processing orchestrator
+- `src/static/js/app.js`: Frontend JavaScript with PDF.js integration
+- `src/templates/index.html`: Main web UI template
 
 ## Common Commands
 ```bash

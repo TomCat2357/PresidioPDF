@@ -139,6 +139,9 @@ cython_debug/
 *.pdf
 !examples/*.pdf
 
+# Node.js
+node_modules/
+
 # 出力フォルダ
 output/
 logs/
