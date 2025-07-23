@@ -204,6 +204,16 @@ def settings():
                 app_instance.settings['spacy_model'] = data['spacy_model']
                 logger.info(f"spaCyモデル設定を更新: {data['spacy_model']}")
             
+            # 重複除去設定の更新
+            deduplication_settings = [
+                'deduplication_enabled', 'deduplication_method', 
+                'deduplication_priority', 'deduplication_overlap_mode'
+            ]
+            for setting in deduplication_settings:
+                if setting in data:
+                    app_instance.settings[setting] = data[setting]
+                    logger.info(f"重複除去設定を更新: {setting} = {data[setting]}")
+            
             logger.info(f"設定更新完了: {app_instance.settings}")
             return jsonify({
                 'success': True,

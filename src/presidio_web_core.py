@@ -36,7 +36,12 @@ class PresidioPDFWebApp:
         self.settings = {
             "entities": ["PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN"],
             "masking_method": "highlight",  # highlight, annotation, both
-            "spacy_model": "ja_core_news_sm"
+            "spacy_model": "ja_core_news_sm",
+            # 重複除去設定（CLI版と同様）
+            "deduplication_enabled": False,
+            "deduplication_method": "overlap",  # exact, contain, overlap
+            "deduplication_priority": "wider_range",  # wider_range, narrower_range, entity_type
+            "deduplication_overlap_mode": "partial_overlap"  # contain_only, partial_overlap
         }
         
         # Presidio プロセッサーの初期化
@@ -234,11 +239,21 @@ class PresidioPDFWebApp:
                         "manual": False  # 自動検出フラグ
                     }
                     
-                    # 重複チェック：同じ場所・同じタイプの自動検出を防ぐ
-                    if not self._is_duplicate_auto_detection(result, new_detection_results):
-                        new_detection_results.append(result)
+                    # Web版独自の重複チェック（従来の処理）を設定に応じて実行
+                    if self.settings.get("deduplication_enabled", False) and self._uses_web_deduplication():
+                        if not self._is_duplicate_auto_detection(result, new_detection_results):
+                            new_detection_results.append(result)
+                        else:
+                            logger.info(f"Web版重複検出をスキップ: {result['text']} ({result['entity_type']}) on page {result['page']}")
                     else:
-                        logger.info(f"重複検出をスキップ: {result['text']} ({result['entity_type']}) on page {result['page']}")
+                        # 重複チェックを行わない（または後でCLI版の方式で実行）
+                        new_detection_results.append(result)
+
+            # CLI版の重複除去ロジックを使用（設定で有効な場合）
+            if self.settings.get("deduplication_enabled", False) and not self._uses_web_deduplication():
+                logger.info(f"CLI版重複除去ロジックを実行: {len(new_detection_results)}件から重複除去開始")
+                new_detection_results = self._apply_cli_deduplication(new_detection_results)
+                logger.info(f"CLI版重複除去完了: {len(new_detection_results)}件")
 
             # 手動追加エンティティと新しい自動検出結果を統合
             self.detection_results = manual_entities + new_detection_results
@@ -457,6 +472,131 @@ class PresidioPDFWebApp:
         
         return False
     
+    def _uses_web_deduplication(self) -> bool:
+        """Web版独自の重複除去を使用するかを判定"""
+        # Web版独自の重複除去は基本的に座標ベースの処理に特化
+        # CLI版の方が高機能なため、基本的にはCLI版を推奨
+        return False  # 常にCLI版の重複除去を使用
+    
+    def _apply_cli_deduplication(self, entities: List[Dict]) -> List[Dict]:
+        """CLI版の重複除去ロジックを適用"""
+        try:
+            if not entities:
+                return entities
+            
+            # analyzer.pyの重複除去ロジックを再現
+            return self._deduplicate_entities_cli_style(entities)
+            
+        except Exception as e:
+            logger.error(f"CLI版重複除去エラー: {e}")
+            return entities
+    
+    def _deduplicate_entities_cli_style(self, entities: List[Dict]) -> List[Dict]:
+        """CLI版と同じ重複除去ロジック（analyzer.pyから移植）"""
+        if not entities:
+            return entities
+        
+        method = self.settings.get("deduplication_method", "overlap")
+        priority = self.settings.get("deduplication_priority", "wider_range")
+        
+        sorted_entities = sorted(entities, key=lambda x: x.get('start', 0))
+        deduplicated = []
+        
+        for current_entity in sorted_entities:
+            should_add = True
+            entities_to_remove = []
+            
+            for i, existing_entity in enumerate(deduplicated):
+                if self._has_overlap_cli_style(current_entity, existing_entity, method):
+                    current_should_win = self._should_current_entity_win_cli_style(
+                        current_entity, existing_entity, priority)
+                    
+                    if current_should_win:
+                        entities_to_remove.append(i)
+                    else:
+                        should_add = False
+                        break
+            
+            for i in sorted(entities_to_remove, reverse=True):
+                removed_entity = deduplicated.pop(i)
+                logger.debug(f"CLI版重複除去: '{removed_entity['text']}' ({removed_entity['entity_type']}) を除去")
+            
+            if should_add:
+                deduplicated.append(current_entity)
+            else:
+                logger.debug(f"CLI版重複除去: '{current_entity['text']}' ({current_entity['entity_type']}) を除去")
+        
+        original_count = len(entities)
+        deduplicated_count = len(deduplicated)
+        if original_count != deduplicated_count:
+            logger.info(f"CLI版重複除去: {original_count}件 → {deduplicated_count}件 ({original_count - deduplicated_count}件を除去)")
+        
+        return deduplicated
+    
+    def _has_overlap_cli_style(self, entity1: Dict, entity2: Dict, method: str) -> bool:
+        """CLI版の重複判定（analyzer.pyから移植）"""
+        start1, end1 = entity1.get('start', 0), entity1.get('end', 0)
+        start2, end2 = entity2.get('start', 0), entity2.get('end', 0)
+        
+        if method == "exact":
+            return start1 == start2 and end1 == end2
+        elif method == "contain":
+            return (start1 <= start2 and end1 >= end2) or (start2 <= start1 and end2 >= end1)
+        elif method == "overlap":
+            overlap_mode = self.settings.get("deduplication_overlap_mode", "partial_overlap")
+            
+            if overlap_mode == "contain_only":
+                return (start1 <= start2 and end1 >= end2) or (start2 <= start1 and end2 >= end1)
+            elif overlap_mode == "partial_overlap":
+                return not (end1 <= start2 or end2 <= start1)
+            else:
+                logger.warning(f"不明な重複モード: {overlap_mode}. デフォルトのpartial_overlapを使用します。")
+                return not (end1 <= start2 or end2 <= start1)
+        else:
+            logger.warning(f"不明な重複判定方法: {method}. デフォルトのoverlapを使用します。")
+            return not (end1 <= start2 or end2 <= start1)
+    
+    def _should_current_entity_win_cli_style(self, current_entity: Dict, existing_entity: Dict, priority: str) -> bool:
+        """CLI版の優先度判定（analyzer.pyから移植）"""
+        if priority == "wider_range":
+            current_range = current_entity.get('end', 0) - current_entity.get('start', 0)
+            existing_range = existing_entity.get('end', 0) - existing_entity.get('start', 0)
+            if current_range != existing_range:
+                return current_range > existing_range
+            return current_entity.get('start', 0) < existing_entity.get('start', 0)
+
+        elif priority == "narrower_range":
+            current_range = current_entity.get('end', 0) - current_entity.get('start', 0)
+            existing_range = existing_entity.get('end', 0) - existing_entity.get('start', 0)
+            if current_range != existing_range:
+                return current_range < existing_range
+            return current_entity.get('start', 0) < existing_entity.get('start', 0)
+
+        elif priority == "entity_type":
+            # デフォルトの優先順位
+            entity_order = ["INDIVIDUAL_NUMBER", "PHONE_NUMBER", "PERSON", "LOCATION", "DATE_TIME", "YEAR", "PROPER_NOUN"]
+            try:
+                current_priority = entity_order.index(current_entity.get('entity_type', ''))
+            except ValueError:
+                current_priority = len(entity_order)
+            
+            try:
+                existing_priority = entity_order.index(existing_entity.get('entity_type', ''))
+            except ValueError:
+                existing_priority = len(entity_order)
+            
+            if current_priority != existing_priority:
+                return current_priority < existing_priority
+            return current_entity.get('start', 0) < existing_entity.get('start', 0)
+        
+        else:
+            # デフォルト: wider_range
+            current_range = current_entity.get('end', 0) - current_entity.get('start', 0)
+            existing_range = existing_entity.get('end', 0) - existing_entity.get('start', 0)
+            if current_range != existing_range:
+                return current_range > existing_range
+            return current_entity.get('start', 0) < existing_entity.get('start', 0)
+
     def get_entity_type_japanese(self, entity_type: str) -> str:
         """エンティティタイプの日本語名を返す"""
         mapping = {

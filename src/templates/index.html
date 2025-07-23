@@ -569,6 +569,39 @@
                             <option value="both">両方</option>
                         </select>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">重複除去設定</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="deduplicationEnabled">
+                            <label class="form-check-label" for="deduplicationEnabled">重複除去を有効化</label>
+                        </div>
+                        <div class="mt-2">
+                            <label class="form-label">重複判定方法</label>
+                            <select class="form-select" id="deduplicationMethod">
+                                <option value="exact">完全一致</option>
+                                <option value="contain">包含関係</option>
+                                <option value="overlap">重複判定</option>
+                            </select>
+                        </div>
+                        <div class="mt-2">
+                            <label class="form-label">優先度設定</label>
+                            <select class="form-select" id="deduplicationPriority">
+                                <option value="wider_range">広い範囲を優先</option>
+                                <option value="narrower_range">狭い範囲を優先</option>
+                                <option value="entity_type">エンティティタイプ順</option>
+                            </select>
+                        </div>
+                        <div class="mt-2">
+                            <label class="form-label">重複モード</label>
+                            <select class="form-select" id="deduplicationOverlapMode">
+                                <option value="contain_only">包含のみ</option>
+                                <option value="partial_overlap">部分重複含む</option>
+                            </select>
+                        </div>
+                        <small class="form-text text-muted">
+                            重複除去を有効にすると、重複した個人情報の検出結果を統合します
+                        </small>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>

@@ -61,7 +61,12 @@ document.addEventListener('DOMContentLoaded', () => {
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
                 masking_method: "highlight",
-                spacy_model: "ja_core_news_sm"
+                spacy_model: "ja_core_news_sm",
+                // 重複除去設定（CLI版と同様）
+                deduplication_enabled: false,
+                deduplication_method: "overlap",
+                deduplication_priority: "wider_range",
+                deduplication_overlap_mode: "partial_overlap"
             };
 
             this.initializeElements();
@@ -832,6 +837,20 @@ document.addEventListener('DOMContentLoaded', () => {
             this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
             this.settings.masking_method = document.getElementById('maskingMethod').value;
             this.settings.spacy_model = document.getElementById('spacyModel').value;
+            
+            // 重複除去設定を取得
+            this.settings.deduplication_enabled = document.getElementById('deduplicationEnabled').checked;
+            this.settings.deduplication_method = document.getElementById('deduplicationMethod').value;
+            this.settings.deduplication_priority = document.getElementById('deduplicationPriority').value;
+            this.settings.deduplication_overlap_mode = document.getElementById('deduplicationOverlapMode').value;
+            
+            console.log('重複除去設定を保存:', {
+                enabled: this.settings.deduplication_enabled,
+                method: this.settings.deduplication_method,
+                priority: this.settings.deduplication_priority,
+                overlap_mode: this.settings.deduplication_overlap_mode
+            });
+            
             this.updateStatus('設定を保存しました');
             const modal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
             if(modal) modal.hide();
@@ -844,6 +863,19 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             document.getElementById('maskingMethod').value = this.settings.masking_method;
             document.getElementById('spacyModel').value = this.settings.spacy_model;
+            
+            // 重複除去設定をロード
+            document.getElementById('deduplicationEnabled').checked = this.settings.deduplication_enabled || false;
+            document.getElementById('deduplicationMethod').value = this.settings.deduplication_method || 'overlap';
+            document.getElementById('deduplicationPriority').value = this.settings.deduplication_priority || 'wider_range';
+            document.getElementById('deduplicationOverlapMode').value = this.settings.deduplication_overlap_mode || 'partial_overlap';
+            
+            console.log('重複除去設定をロード:', {
+                enabled: this.settings.deduplication_enabled,
+                method: this.settings.deduplication_method,
+                priority: this.settings.deduplication_priority,
+                overlap_mode: this.settings.deduplication_overlap_mode
+            });
         }
 
         getEntityTypeJapanese(entityType) {
