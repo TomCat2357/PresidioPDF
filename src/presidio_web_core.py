@@ -36,7 +36,7 @@ class PresidioPDFWebApp:
         self.settings = {
             "entities": ["PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN"],
             "masking_method": "highlight",  # highlight, annotation, both
-            "spacy_model": "ja_core_news_sm",
+            "spacy_model": "ja_core_news_md",
             # 重複除去設定（CLI版と同様）
             "deduplication_enabled": False,
             "deduplication_method": "overlap",  # exact, contain, overlap
@@ -406,6 +406,9 @@ class PresidioPDFWebApp:
                     'LOCATION': (0.8, 1, 0.8),
                     'PHONE_NUMBER': (0.8, 0.8, 1),
                     'DATE_TIME': (1, 1, 0.8),
+                    'INDIVIDUAL_NUMBER': (1, 0.8, 1),
+                    'YEAR': (0.8, 1, 1),
+                    'PROPER_NOUN': (1, 0.86, 0.7),
                     'CUSTOM': (0.9, 0.9, 0.9)
                 }
                 color = color_map.get(entity['entity_type'], (0.9, 0.9, 0.9))
@@ -604,6 +607,9 @@ class PresidioPDFWebApp:
             "LOCATION": "場所", 
             "PHONE_NUMBER": "電話番号",
             "DATE_TIME": "日時",
+            "INDIVIDUAL_NUMBER": "個人番号",
+            "YEAR": "年号",
+            "PROPER_NOUN": "固有名詞",
             "CUSTOM": "カスタム"
         }
         return mapping.get(entity_type, entity_type)

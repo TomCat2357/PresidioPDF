@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.maxSelectionHistory = 10;
 
             this.settings = {
-                entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME"],
+                entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN"],
                 masking_method: "highlight",
                 spacy_model: "ja_core_news_sm",
                 // 重複除去設定（CLI版と同様）
@@ -879,7 +879,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         getEntityTypeJapanese(entityType) {
-            const mapping = { "PERSON": "人名", "LOCATION": "場所", "PHONE_NUMBER": "電話番号", "DATE_TIME": "日時", "CUSTOM": "カスタム" };
+            const mapping = { 
+                "PERSON": "人名", 
+                "LOCATION": "場所", 
+                "PHONE_NUMBER": "電話番号", 
+                "DATE_TIME": "日時", 
+                "INDIVIDUAL_NUMBER": "個人番号",
+                "YEAR": "年号",
+                "PROPER_NOUN": "固有名詞",
+                "CUSTOM": "カスタム" 
+            };
             return mapping[entityType] || entityType;
         }
 

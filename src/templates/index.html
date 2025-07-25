@@ -130,6 +130,18 @@
             background-color: rgba(255, 255, 180, 0.8);
         }
         
+        .highlight-rect.individual_number, .highlight-rect.individual {
+            background-color: rgba(255, 200, 255, 0.8);
+        }
+        
+        .highlight-rect.year {
+            background-color: rgba(200, 255, 255, 0.8);
+        }
+        
+        .highlight-rect.proper_noun, .highlight-rect.proper-noun {
+            background-color: rgba(255, 220, 180, 0.8);
+        }
+        
         .highlight-rect.selected {
             outline: 2px solid #0056b3;
             outline-offset: 1px;
@@ -336,6 +348,9 @@
         .context-menu-item.location { color: #28a745; }
         .context-menu-item.phone { color: #17a2b8; }
         .context-menu-item.date { color: #ffc107; }
+        .context-menu-item.individual { color: #e83e8c; }
+        .context-menu-item.year { color: #20c997; }
+        .context-menu-item.proper-noun { color: #fd7e14; }
         .context-menu-item.custom { color: #6c757d; }
         
         .context-menu-separator {
@@ -420,16 +435,32 @@
                                 <label class="btn btn-outline-success btn-sm" for="mode-location">
                                     <i class="fas fa-map-marker-alt"></i> 場所
                                 </label>
-                            </div>
-                            <div class="btn-group" role="group">
+                            
                                 <input type="radio" class="btn-check" name="entityMode" id="mode-phone" value="PHONE_NUMBER">
                                 <label class="btn btn-outline-info btn-sm" for="mode-phone">
                                     <i class="fas fa-phone"></i> 電話
                                 </label>
-                                
+                            </div>
+                            <div class="btn-group mb-2" role="group">
                                 <input type="radio" class="btn-check" name="entityMode" id="mode-date" value="DATE_TIME">
                                 <label class="btn btn-outline-warning btn-sm" for="mode-date">
                                     <i class="fas fa-calendar"></i> 日時
+                                </label>
+                                
+                                <input type="radio" class="btn-check" name="entityMode" id="mode-individual" value="INDIVIDUAL_NUMBER">
+                                <label class="btn btn-outline-primary btn-sm" for="mode-individual">
+                                    <i class="fas fa-id-card"></i> 個人番号
+                                </label>
+                                
+                                <input type="radio" class="btn-check" name="entityMode" id="mode-year" value="YEAR">
+                                <label class="btn btn-outline-secondary btn-sm" for="mode-year">
+                                    <i class="fas fa-calendar-alt"></i> 年号
+                                </label>
+                            </div>
+                            <div class="btn-group" role="group">
+                                <input type="radio" class="btn-check" name="entityMode" id="mode-proper-noun" value="PROPER_NOUN">
+                                <label class="btn btn-outline-info btn-sm" for="mode-proper-noun">
+                                    <i class="fas fa-font"></i> 固有名詞
                                 </label>
                             
                                 <input type="radio" class="btn-check" name="entityMode" id="mode-custom" value="CUSTOM">
@@ -546,6 +577,18 @@
                             <input class="form-check-input" type="checkbox" id="entityDate" value="DATE_TIME">
                             <label class="form-check-label" for="entityDate">日時</label>
                         </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityIndividualNumber" value="INDIVIDUAL_NUMBER">
+                            <label class="form-check-label" for="entityIndividualNumber">個人番号</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityYear" value="YEAR">
+                            <label class="form-check-label" for="entityYear">年号</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="entityProperNoun" value="PROPER_NOUN">
+                            <label class="form-check-label" for="entityProperNoun">固有名詞</label>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">検出モデル</label>
@@ -636,6 +679,18 @@
         <div class="context-menu-item date" data-entity-type="DATE_TIME">
             <i class="fas fa-calendar"></i>
             日時として追加
+        </div>
+        <div class="context-menu-item individual" data-entity-type="INDIVIDUAL_NUMBER">
+            <i class="fas fa-id-card"></i>
+            個人番号として追加
+        </div>
+        <div class="context-menu-item year" data-entity-type="YEAR">
+            <i class="fas fa-calendar-alt"></i>
+            年号として追加
+        </div>
+        <div class="context-menu-item proper-noun" data-entity-type="PROPER_NOUN">
+            <i class="fas fa-font"></i>
+            固有名詞として追加
         </div>
         <div class="context-menu-item custom" data-entity-type="CUSTOM">
             <i class="fas fa-tag"></i>
