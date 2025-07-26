@@ -221,16 +221,17 @@ class PDFTextLocator:
         except Exception as e:
             logger.error(f"オフセットマッピング構築エラー: {e}")
     
-    def locate_pii_by_offset_no_newlines(self, start_offset: int, end_offset: int) -> List[fitz.Rect]:
+    def locate_pii_by_offset_no_newlines(self, start_offset: int, end_offset: int) -> List[Dict]:
         """
-        改行なしテキストオフセットから座標矩形リストを取得
+        改行なしテキストオフセットから座標矩形リストとページ番号を取得
         
         Args:
             start_offset: 開始オフセット（改行なしテキスト基準）
             end_offset: 終了オフセット（改行なしテキスト基準）
         
         Returns:
-            List[fitz.Rect]: 座標矩形リスト（改行を跨ぐ場合は複数）
+            List[Dict]: 座標矩形とページ番号のリスト（改行を跨ぐ場合は複数）
+                       [{'rect': fitz.Rect, 'page_num': int}, ...]
         """
         try:
             # キャッシュチェック
@@ -293,7 +294,10 @@ class PDFTextLocator:
                     x1 = max(bbox[2] for bbox in bboxes)
                     y1 = max(bbox[3] for bbox in bboxes)
                     
-                    rects.append(fitz.Rect(x0, y0, x1, y1))
+                    rects.append({
+                        'rect': fitz.Rect(x0, y0, x1, y1),
+                        'page_num': page
+                    })
             
             # キャッシュに保存
             if self._coordinate_cache:
@@ -305,6 +309,20 @@ class PDFTextLocator:
         except Exception as e:
             logger.error(f"座標特定エラー: オフセット{start_offset}-{end_offset}, エラー: {e}")
             return []
+    
+    def locate_pii_by_offset_no_newlines_legacy(self, start_offset: int, end_offset: int) -> List[fitz.Rect]:
+        """
+        後方互換性のための旧形式メソッド - 矩形のみを返す
+        
+        Args:
+            start_offset: 開始オフセット（改行なしテキスト基準）
+            end_offset: 終了オフセット（改行なしテキスト基準）
+        
+        Returns:
+            List[fitz.Rect]: 座標矩形リスト（改行を跨ぐ場合は複数）
+        """
+        rect_data = self.locate_pii_by_offset_no_newlines(start_offset, end_offset)
+        return [item['rect'] for item in rect_data]
     
     # 後方互換性のためのメソッド
     def locate_pii_by_offset(self, start: int, end: int) -> List[fitz.Rect]:
@@ -353,15 +371,16 @@ class PDFTextLocator:
             List[Dict]: line_rects形式のデータ
         """
         try:
-            coord_rects = self.locate_pii_by_offset_no_newlines(start_offset, end_offset)
-            if not coord_rects:
+            coord_rects_with_pages = self.locate_pii_by_offset_no_newlines(start_offset, end_offset)
+            if not coord_rects_with_pages:
                 return []
             
             # 対象テキストを取得
             pii_text = self.full_text_no_newlines[start_offset:end_offset] if end_offset <= len(self.full_text_no_newlines) else ""
             
             line_rects = []
-            for i, rect in enumerate(coord_rects):
+            for i, rect_data in enumerate(coord_rects_with_pages):
+                rect = rect_data['rect']
                 line_rects.append({
                     'rect': {
                         'x0': float(rect.x0),
@@ -370,7 +389,8 @@ class PDFTextLocator:
                         'y1': float(rect.y1)
                     },
                     'text': pii_text if i == 0 else f"line_{i+1}",
-                    'line_number': i + 1
+                    'line_number': i + 1,
+                    'page_num': rect_data['page_num']
                 })
             
             return line_rects

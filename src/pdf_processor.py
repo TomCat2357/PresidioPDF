@@ -71,21 +71,15 @@ class PDFProcessor:
         
         for result in results:
             start, end = result['start'], result['end']
-            precise_rects = locator.locate_pii_by_offset_no_newlines(start, end)
+            precise_rects_with_pages = locator.locate_pii_by_offset_no_newlines(start, end)
             
-            # ページごとに矩形をグループ化
-            rects_by_page = {}
-            for r in precise_rects:
-                page_num = self._find_page_for_rect(doc, r)
-                if page_num is None: continue
-                if page_num not in rects_by_page: rects_by_page[page_num] = []
-                rects_by_page[page_num].append(r)
-
-            # エンティティ情報を更新
+            # エンティティ情報を更新（ページ番号はPDFTextLocatorから直接取得）
             result['line_rects'] = []
-            for page_num, rects in rects_by_page.items():
-                for r in rects:
-                    result['line_rects'].append({'rect': r, 'page_num': page_num})
+            for rect_data in precise_rects_with_pages:
+                result['line_rects'].append({
+                    'rect': rect_data['rect'], 
+                    'page_num': rect_data['page_num']
+                })
 
             if result['line_rects']:
                 first_rect_info = result['line_rects'][0]
@@ -287,9 +281,3 @@ class PDFProcessor:
                 return True
         return False
 
-    def _find_page_for_rect(self, doc: fitz.Document, rect: fitz.Rect) -> Optional[int]:
-        """矩形が属するページ番号を特定"""
-        for page in doc:
-            if page.rect.contains(rect):
-                return page.number
-        return 0 if len(doc) > 0 else None

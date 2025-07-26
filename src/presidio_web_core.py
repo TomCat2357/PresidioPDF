@@ -207,14 +207,15 @@ class PresidioPDFWebApp:
                     end_offset = entity.get("end", 0)
                     
                     # PDFTextLocatorの改行なしオフセット座標特定を使用
-                    coord_rects = locator.locate_pii_by_offset_no_newlines(start_offset, end_offset)
+                    coord_rects_with_pages = locator.locate_pii_by_offset_no_newlines(start_offset, end_offset)
                     
-                    if not coord_rects:
+                    if not coord_rects_with_pages:
                         logger.warning(f"オフセットベース座標特定に失敗: '{entity['text']}'")
                         continue
                     
                     # 最初の矩形をメイン座標として使用
-                    main_rect = coord_rects[0]
+                    main_rect_data = coord_rects_with_pages[0]
+                    main_rect = main_rect_data['rect']
                     main_coordinates = {
                         'x0': float(main_rect.x0),
                         'y0': float(main_rect.y0),
@@ -224,7 +225,8 @@ class PresidioPDFWebApp:
                     
                     # 複数行矩形情報を作成
                     line_rects = []
-                    for i, rect in enumerate(coord_rects):
+                    for i, rect_data in enumerate(coord_rects_with_pages):
+                        rect = rect_data['rect']
                         line_rects.append({
                             'rect': {
                                 'x0': float(rect.x0),
@@ -233,14 +235,15 @@ class PresidioPDFWebApp:
                                 'y1': float(rect.y1)
                             },
                             'text': entity['text'],  # 簡略化
-                            'line_number': i + 1
+                            'line_number': i + 1,
+                            'page_num': rect_data['page_num']
                         })
                     
                     result = {
                         "entity_type": str(entity.get("entity_type", "UNKNOWN")),
                         "text": str(entity.get("text", "")),
                         "score": float(entity.get("score", 0.0)),
-                        "page": entity.get("page_info", {}).get("page_number", 1),
+                        "page": main_rect_data['page_num'],
                         "recognition_metadata": entity.get("recognition_metadata", {}),
                         "analysis_explanation": entity.get("analysis_explanation", {}),
                         "location_info": {
