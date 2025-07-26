@@ -180,9 +180,26 @@ class PresidioPDFWebApp:
 
             logger.info(f"エンティティフィルタリング開始 (設定エンティティ: {self.settings['entities']})")
             filtered_count = 0
+            excluded_symbols_count = 0
+            
+            import re
+            
             for entity in entities:
                 # エンティティタイプでフィルタリング
                 if entity['entity_type'] in self.settings['entities']:
+                    
+                    # 単一文字記号の除外フィルタリング
+                    entity_text = entity.get('text', '')
+                    entity_type = entity.get('entity_type', '')
+                    
+                    # PROPER_NOUNかつ単一文字かつ記号文字の場合は除外
+                    if (entity_type == 'PROPER_NOUN' and 
+                        len(entity_text) == 1 and 
+                        re.match(r'[^\w\s]', entity_text)):
+                        excluded_symbols_count += 1
+                        logger.debug(f"単一文字記号を除外: '{entity_text}' (PROPER_NOUN)")
+                        continue
+                    
                     filtered_count += 1
                     
                     # オフセットベース座標特定を実行（改行なしオフセットを使用）
@@ -263,6 +280,8 @@ class PresidioPDFWebApp:
             manual_count = len(manual_entities)
             
             logger.info(f"検出完了: 自動{new_count}件 + 手動{manual_count}件 = 合計{total_count}件")
+            if excluded_symbols_count > 0:
+                logger.info(f"単一文字記号を除外: {excluded_symbols_count}件")
             
             return {
                 "success": True,
@@ -395,12 +414,27 @@ class PresidioPDFWebApp:
                     continue
                 
                 page = new_doc[page_num]
-                coords = entity.get('coordinates')
-                if not (coords and all(k in coords for k in ['x0', 'y0', 'x1', 'y1'])):
+                
+                # line_rectsを優先的に使用（複数行対応）
+                line_rects = entity.get('line_rects', [])
+                if line_rects:
+                    # 複数行エンティティの場合は各行に対してハイライトを追加
+                    rects_to_process = []
+                    for line_rect in line_rects:
+                        rect_data = line_rect.get('rect')
+                        if rect_data and all(k in rect_data for k in ['x0', 'y0', 'x1', 'y1']):
+                            rects_to_process.append(fitz.Rect(rect_data['x0'], rect_data['y0'], rect_data['x1'], rect_data['y1']))
+                else:
+                    # 単一行エンティティの場合は従来通り
+                    coords = entity.get('coordinates')
+                    if coords and all(k in coords for k in ['x0', 'y0', 'x1', 'y1']):
+                        rects_to_process = [fitz.Rect(coords['x0'], coords['y0'], coords['x1'], coords['y1'])]
+                    else:
+                        continue
+                
+                if not rects_to_process:
                     continue
 
-                rect = fitz.Rect(coords['x0'], coords['y0'], coords['x1'], coords['y1'])
-                
                 color_map = {
                     'PERSON': (1, 0.8, 0.8),
                     'LOCATION': (0.8, 1, 0.8),
@@ -415,17 +449,26 @@ class PresidioPDFWebApp:
                 
                 masking_method = self.settings.get("masking_method", "highlight")
                 
-                if masking_method in ["highlight", "both"]:
-                    highlight = page.add_highlight_annot(rect)
-                    highlight.set_colors(stroke=color)
-                    highlight.set_info(title=f"{self.get_entity_type_japanese(entity['entity_type'])}",
-                                       content=f"テキスト: {entity['text']}")
-                    highlight.update()
+                # 全ての矩形に対してハイライト/アノテーションを適用
+                for rect_index, rect in enumerate(rects_to_process):
+                    if masking_method in ["highlight", "both"]:
+                        highlight = page.add_highlight_annot(rect)
+                        highlight.set_colors(stroke=color)
+                        # 最初の矩形のみにタイトル情報を設定（重複回避）
+                        if rect_index == 0:
+                            highlight.set_info(title=f"{self.get_entity_type_japanese(entity['entity_type'])}",
+                                               content=f"テキスト: {entity['text']}")
+                        else:
+                            highlight.set_info(title=f"{self.get_entity_type_japanese(entity['entity_type'])} (続き)",
+                                               content=f"テキスト: {entity['text']} (行 {rect_index + 1})")
+                        highlight.update()
 
-                if masking_method in ["annotation", "both"]:
-                    annotation = page.add_text_annot(rect.tl, f"{self.get_entity_type_japanese(entity['entity_type'])}")
-                    annotation.set_info(title="個人情報検出", content=f"タイプ: {entity['entity_type']}\\nテキスト: {entity['text']}")
-                    annotation.update()
+                    if masking_method in ["annotation", "both"]:
+                        # アノテーションは最初の矩形のみに追加（重複回避）
+                        if rect_index == 0:
+                            annotation = page.add_text_annot(rect.tl, f"{self.get_entity_type_japanese(entity['entity_type'])}")
+                            annotation.set_info(title="個人情報検出", content=f"タイプ: {entity['entity_type']}\\nテキスト: {entity['text']}")
+                            annotation.update()
             
             new_doc.saveIncr() # 変更を追記保存
             new_doc.close()
