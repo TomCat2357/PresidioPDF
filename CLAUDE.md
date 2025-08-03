@@ -193,7 +193,50 @@ uv shell                       # Enter virtual environment shell
 
 ## Automated Web Testing
 
-### webui-integration-test
+### web_app_test.py (tests/web_app_test.py)
+改良されたWebアプリケーション統合テストスクリプト。ローディング状態やテキスト抽出状態を検出して適切に待機します。
+
+**主な改良点:**
+- **ローディングスピナー検出**: ぐるぐるマーク（スピナー）が表示されている間は待機・再撮影
+- **テキスト抽出状態検出**: 「抽出中」「処理中」等のテキストがある間は待機
+- **スクリーンショット再試行**: ローディング状態を検出した場合は自動で再撮影
+- **場所移動**: `tests/` ディレクトリに配置
+
+**実行方法:**
+```bash
+# 1. 前提条件：Flask サーバーを起動
+uv run python src/web_main.py &
+
+# 2. テストスクリプトを実行
+uv run python tests/web_app_test.py
+```
+
+**テスト手順（改良版）:**
+1. **サーバー確認**: Flask サーバー（localhost:5000）が起動していることを確認
+2. **ブラウザアクセス**: Playwright（ヘッドレスモード）でlocalhost:5000にアクセス
+3. **初期スクリーンショット**: ローディング完了を待機してから撮影
+4. **PDFアップロード**: test_pdfs/a1.pdf をWebUIでアップロード
+5. **アップロード後スクリーンショット**: ローディング状態をチェックして撮影
+6. **PII検出実行**: 「検出開始」ボタンをクリックして処理完了まで待機
+7. **検出完了スクリーンショット**: ローディングスピナー消失を確認して撮影
+8. **テキスト抽出**: 「抽出中」等の文字が消えるまで待機してからテキスト取得
+9. **最終スクリーンショット**: 全ページ・PDFビューアのスクリーンショット撮影
+
+**改良された検出機能:**
+- `.spinner-border`, `.loading`, `#loadingOverlay`, `.fa-spinner` 等のローディング要素を検出
+- 「抽出中」「処理中」「読み込み中」「解析中」「検出中」のテキストを監視
+- 最大3回の再試行でローディング状態を回避したスクリーンショット撮影
+
+**出力ファイル:**
+- `/workspace/outputs/detection_results_text.txt`: 検出結果のテキストデータ
+- `/workspace/outputs/*.png`: 各段階のスクリーンショット
+  - `01_initial_page.png`: 初期ページ（ローディング完了後）
+  - `02_after_upload.png`: ファイルアップロード後（ローディング完了後）
+  - `03_after_detection.png`: 検出処理完了後（ローディング完了後）
+  - `04_full_page_with_highlights.png`: フルページビュー
+  - `05_pdf_viewer_highlights.png`: PDFビューア（ハイライト表示）
+
+### webui-integration-test（レガシー版）
 Full web application integration test routine that performs end-to-end testing of the PII detection web interface:
 
 1. **Process Check**: Check if localhost:5000 is running and kill any existing processes
@@ -206,6 +249,38 @@ Full web application integration test routine that performs end-to-end testing o
 8. **Screenshot**: Take page screenshot and save to `output/` directory with same name as results but different extension
 
 This test routine validates the complete web application workflow from file upload to PII detection results.
+
+### web_app_test
+MCPサーバーのPlaywrightツールを使用した完全な統合テスト。以下の手順で実行：
+
+**実行方法:**
+```bash
+# 1. 前提条件：Flask サーバーを起動
+uv run python src/web_main.py &
+
+# 2. テストスクリプトを実行
+uv run python web_app_test.py
+```
+
+**テスト手順:**
+1. **サーバー確認**: Flask サーバー（localhost:5000）が起動していることを確認
+2. **ブラウザアクセス**: Playwright（ヘッドレスモード）でlocalhost:5000にアクセス
+3. **PDFアップロード**: test_pdfs/内のPDFファイルをWebUIでアップロード
+4. **条件設定**: spaCyモデル選択等の設定（必要に応じて）
+5. **PII検出実行**: 個人情報検出ボタンをクリックして処理完了まで待機
+6. **結果取得**: Ctrl+Aで全選択してページのテキストデータを取得
+7. **スクリーンショット**: 複数箇所でスクリーンショットを撮影してPIIハイライトを確認
+
+**出力ファイル:**
+- `/workspace/outputs/detection_results_text.txt`: 検出結果のテキストデータ
+- `/workspace/outputs/*.png`: 各段階のスクリーンショット
+  - `01_initial_page.png`: 初期ページ
+  - `02_after_upload.png`: ファイルアップロード後
+  - `03_after_detection.png`: 検出処理完了後
+  - `04_full_page_with_highlights.png`: フルページビュー
+  - `05_pdf_viewer_highlights.png`: PDFビューア（ハイライト表示）
+
+このテストにより、WebUIの操作からPII検出、結果表示までの完全なワークフローを自動で検証できます。
 
 ## Comprehensive Documentation Structure
 
