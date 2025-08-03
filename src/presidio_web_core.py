@@ -289,7 +289,7 @@ class PresidioPDFWebApp:
             return {
                 "success": True,
                 "message": f"個人情報検出完了 (新規: {new_count}件, 手動保護: {manual_count}件, 合計: {total_count}件)",
-                "results": self.detection_results,
+                "entities": self.detection_results,
                 "count": total_count,
                 "new_count": new_count,
                 "manual_count": manual_count

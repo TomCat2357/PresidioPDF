@@ -488,30 +488,109 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         renderHighlights() {
+            console.log('=== renderHighlights called ===');
             const container = this.elements.highlightOverlay;
             container.innerHTML = '';
             container.style.width = `${this.viewport.width}px`;
             container.style.height = `${this.viewport.height}px`;
+            
+            console.log('Highlight container:', container);
+            console.log('Container dimensions:', container.style.width, 'x', container.style.height);
+            console.log('showHighlights checked:', this.elements.showHighlights?.checked);
+            console.log('viewport exists:', !!this.viewport);
+            console.log('detectionResults length:', this.detectionResults.length);
+            console.log('currentPage:', this.currentPage);
 
-            if (!this.elements.showHighlights.checked || !this.viewport) return;
+            if (!this.elements.showHighlights.checked || !this.viewport) {
+                console.log('Early return: showHighlights=', this.elements.showHighlights?.checked, 'viewport=', !!this.viewport);
+                return;
+            }
 
-            const pageEntities = this.detectionResults.filter(e => e.page === this.currentPage);
+            // エンティティデータの詳細を確認
+            console.log('Sample detection results (first 3):');
+            this.detectionResults.slice(0, 3).forEach((entity, index) => {
+                console.log(`Entity ${index} - JSON:`, JSON.stringify(entity, null, 2));
+                console.log(`Entity ${index} - Fields:`, Object.keys(entity));
+                console.log(`Entity ${index} - Text:`, entity.text);
+                console.log(`Entity ${index} - Page fields:`, {
+                    page: entity.page,
+                    start_page: entity.start_page,
+                    page_number: entity.page_number,
+                    coordinates: entity.coordinates ? 'exists' : 'missing'
+                });
+            });
+            
+            // 全エンティティのページ番号分析
+            const pageFieldAnalysis = {
+                page: new Set(),
+                start_page: new Set(), 
+                page_number: new Set()
+            };
+            
+            this.detectionResults.forEach(entity => {
+                if (entity.page !== undefined) pageFieldAnalysis.page.add(entity.page);
+                if (entity.start_page !== undefined) pageFieldAnalysis.start_page.add(entity.start_page);
+                if (entity.page_number !== undefined) pageFieldAnalysis.page_number.add(entity.page_number);
+            });
+            
+            console.log('Page field analysis across all entities:');
+            console.log('- page values:', Array.from(pageFieldAnalysis.page));
+            console.log('- start_page values:', Array.from(pageFieldAnalysis.start_page)); 
+            console.log('- page_number values:', Array.from(pageFieldAnalysis.page_number));
+            
+            // ページ番号フィールドの修正: start_pageを優先使用、デフォルトを1とする
+            const pageEntities = this.detectionResults.filter(e => {
+                const entityPage = e.start_page || e.page || e.page_number || 1;
+                return entityPage === this.currentPage;
+            });
+            console.log('Page entities for page', this.currentPage, ':', pageEntities.length);
+            
+            // 異なるページ番号フィールドで試してみる
+            const pageEntitiesAlt1 = this.detectionResults.filter(e => e.start_page === this.currentPage);
+            const pageEntitiesAlt2 = this.detectionResults.filter(e => e.page_number === this.currentPage);
+            const pageEntitiesOriginal = this.detectionResults.filter(e => e.page === this.currentPage);
+            console.log('Alternative filters:');
+            console.log('- page filter (original):', pageEntitiesOriginal.length);
+            console.log('- start_page filter:', pageEntitiesAlt1.length);
+            console.log('- page_number filter:', pageEntitiesAlt2.length);
+            
             pageEntities.forEach((entity, localIndex) => {
+                console.log(`Processing entity ${localIndex}:`, entity);
                 const globalIndex = this.detectionResults.indexOf(entity);
                 const el = this.createHighlightElement(entity, globalIndex);
-                if (el) container.appendChild(el);
+                console.log(`Created highlight element:`, el);
+                if (el) {
+                    container.appendChild(el);
+                    console.log(`Added highlight element to container`);
+                } else {
+                    console.log(`Failed to create highlight element for entity:`, entity);
+                }
             });
+            
+            console.log('Final container children count:', container.children.length);
         }
         
         createHighlightElement(entity, index) {
-            if (!entity.coordinates) return null;
+            console.log('=== createHighlightElement called ===');
+            console.log('Entity:', entity);
+            console.log('Entity coordinates:', entity.coordinates);
+            
+            if (!entity.coordinates) {
+                console.log('No coordinates found for entity, returning null');
+                return null;
+            }
 
             // デバッグ情報を追加
             console.log('Creating highlight for entity:', {
                 text: entity.text,
                 hasLineRects: !!(entity.line_rects),
                 lineRectsCount: entity.line_rects ? entity.line_rects.length : 0,
-                coordinates: entity.coordinates
+                coordinates: entity.coordinates,
+                viewport: this.viewport ? {
+                    width: this.viewport.width,
+                    height: this.viewport.height,
+                    viewBox: this.viewport.viewBox
+                } : null
             });
 
             // 複数行矩形がある場合、または改行を含むテキストの場合は複数の矩形を作成
@@ -533,15 +612,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 highlightEl.classList.add('selected');
             }
 
-            const pageHeight = this.viewport.viewBox[3];
+            // 座標変換の修正：PyMuPDF座標系からPDF.js座標系への正確な変換
+            const coords = entity.coordinates;
+            
+            // PyMuPDF座標系（左下原点）からPDF.js座標系（左上原点）への変換
+            const pageHeight = this.viewport.viewBox[3]; // PDFページの高さ
             const pdfRect = [
-                entity.coordinates.x0,
-                pageHeight - entity.coordinates.y1,
-                entity.coordinates.x1,
-                pageHeight - entity.coordinates.y0
+                coords.x0,
+                pageHeight - coords.y1,  // Y軸を反転: 下端→上端
+                coords.x1,
+                pageHeight - coords.y0   // Y軸を反転: 上端→下端
             ];
 
+            console.log('Original coordinates:', coords);
+            console.log('Page height:', pageHeight);
+            console.log('PDF rect for viewport conversion:', pdfRect);
+
             const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
+            console.log('Converted viewport rect:', viewportRect);
             
             const left = Math.min(viewportRect[0], viewportRect[2]);
             const top = Math.min(viewportRect[1], viewportRect[3]);
@@ -553,6 +641,10 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const minHeight = 12;
             const adjustedHeight = Math.max(height, minHeight);
+
+            console.log('Final highlight position:', {
+                left, top, width, height: adjustedHeight
+            });
 
             highlightEl.style.left = `${left}px`;
             highlightEl.style.top = `${top}px`;
@@ -575,13 +667,17 @@ document.addEventListener('DOMContentLoaded', () => {
             container.className = 'multi-line-highlight';
             container.dataset.index = index;
 
-            const pageHeight = this.viewport.viewBox[3];
-
             // line_rectsが存在しない場合は、テキストを行分割して推定矩形を作成
             let lineRects = entity.line_rects;
             if (!lineRects || lineRects.length === 0) {
                 lineRects = this.estimateLineRects(entity);
             }
+
+            console.log('Multi-line highlight creation:', {
+                entityText: entity.text,
+                lineRectsCount: lineRects.length,
+                lineRects: lineRects
+            });
 
             // 各行の矩形を作成
             lineRects.forEach((lineRect, lineIndex) => {
@@ -593,14 +689,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     highlightEl.classList.add('selected');
                 }
 
+                // 座標変換の修正：PyMuPDF座標系からPDF.js座標系への変換
+                const pageHeight = this.viewport.viewBox[3]; // PDFページの高さ
                 const pdfRect = [
                     lineRect.rect.x0,
-                    pageHeight - lineRect.rect.y1,
+                    pageHeight - lineRect.rect.y1,  // Y軸を反転: 下端→上端
                     lineRect.rect.x1,
-                    pageHeight - lineRect.rect.y0
+                    pageHeight - lineRect.rect.y0   // Y軸を反転: 上端→下端
                 ];
 
+                console.log(`Line ${lineIndex} conversion:`, {
+                    originalRect: lineRect.rect,
+                    pdfRect: pdfRect
+                });
+
                 const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
+                console.log(`Line ${lineIndex} viewport rect:`, viewportRect);
                 
                 const left = Math.min(viewportRect[0], viewportRect[2]);
                 const top = Math.min(viewportRect[1], viewportRect[3]);
@@ -612,6 +716,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 const minHeight = 12;
                 const adjustedHeight = Math.max(height, minHeight);
+
+                console.log(`Line ${lineIndex} final position:`, {
+                    left, top, width, height: adjustedHeight
+                });
 
                 highlightEl.style.left = `${left}px`;
                 highlightEl.style.top = `${top}px`;
@@ -679,7 +787,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await response.json();
                 if (!data.success) throw new Error(data.message);
 
-                this.detectionResults = data.results || [];
+                this.detectionResults = data.entities || [];
                 this.renderEntityList();
                 this.renderHighlights();
                 this.elements.saveBtn.disabled = false;
@@ -762,8 +870,9 @@ document.addEventListener('DOMContentLoaded', () => {
         selectEntity(index) {
             this.selectedEntityIndex = index;
             const entity = this.detectionResults[index];
-            if (entity.page !== this.currentPage) {
-                this.changePage(entity.page);
+            const entityPage = entity.start_page || entity.page;
+            if (entityPage !== this.currentPage) {
+                this.changePage(entityPage);
             } else {
                 this.renderEntityList();
                 this.renderHighlights();
@@ -778,7 +887,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     // ページ変更後にエンティティが選択されている場合はスクロール
                     if (this.selectedEntityIndex >= 0) {
                         const entity = this.detectionResults[this.selectedEntityIndex];
-                        if (entity && entity.page === this.currentPage) {
+                        const entityPage = entity && (entity.start_page || entity.page);
+                        if (entity && entityPage === this.currentPage) {
                             this.scrollToEntityInPDF(this.selectedEntityIndex);
                         }
                     }
@@ -1090,9 +1200,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 return {
                     rect: {
                         x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
-                        y0: pageHeight - Math.max(pdfPoint1[1], pdfPoint2[1]),
+                        y0: Math.min(pdfPoint1[1], pdfPoint2[1]),
                         x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
-                        y1: pageHeight - Math.min(pdfPoint1[1], pdfPoint2[1])
+                        y1: Math.max(pdfPoint1[1], pdfPoint2[1])
                     },
                     text: '', // Cannot get text per line from clientRects
                     line_number: 0 // Cannot get line number easily
@@ -1111,9 +1221,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const mainPdfPoint2 = this.viewport.convertToPdfPoint(mainViewportRect[2], mainViewportRect[3]);
             const coordinates = {
                 x0: Math.min(mainPdfPoint1[0], mainPdfPoint2[0]),
-                y0: pageHeight - Math.max(mainPdfPoint1[1], mainPdfPoint2[1]),
+                y0: Math.min(mainPdfPoint1[1], mainPdfPoint2[1]),
                 x1: Math.max(mainPdfPoint1[0], mainPdfPoint2[0]),
-                y1: pageHeight - Math.min(mainPdfPoint1[1], mainPdfPoint2[1])
+                y1: Math.max(mainPdfPoint1[1], mainPdfPoint2[1])
             };
 
             const newEntity = {
@@ -1241,7 +1351,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         scrollToEntityInPDF(index) {
             const entity = this.detectionResults[index];
-            if (!entity || !entity.coordinates || entity.page !== this.currentPage) {
+            const entityPage = entity && (entity.start_page || entity.page);
+            if (!entity || !entity.coordinates || entityPage !== this.currentPage) {
                 return;
             }
 
@@ -1321,7 +1432,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    new PresidioPDFWebApp();
+    window.app = new PresidioPDFWebApp();
     };
 
     // Try to initialize immediately, or wait for library to load
