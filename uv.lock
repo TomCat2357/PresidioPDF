@@ -1309,6 +1309,11 @@ web = [
     { name = "werkzeug" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "playwright" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
@@ -1355,6 +1360,9 @@ requires-dist = [
     { name = "werkzeug", marker = "extra == 'web'", specifier = ">=3.0.0" },
 ]
 provides-extras = ["dev", "gpu", "minimal", "web", "gui"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "playwright", specifier = ">=1.54.0" }]
 
 [[package]]
 name = "pycodestyle"

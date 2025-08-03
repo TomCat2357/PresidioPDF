@@ -874,10 +874,25 @@ document.addEventListener('DOMContentLoaded', () => {
         selectEntity(index) {
             this.selectedEntityIndex = index;
             const entity = this.detectionResults[index];
-            const entityPage = entity.start_page || entity.page;
+            
+            // ページ番号の統一的な取得（renderHighlightsと同じロジック）
+            const entityPage = (entity.page_num !== undefined) ? entity.page_num + 1 :
+                               (entity.start_page !== undefined) ? entity.start_page :
+                               (entity.page !== undefined) ? entity.page :
+                               (entity.page_number !== undefined) ? entity.page_number : 1;
+            
+            console.log('selectEntity:', {
+                index,
+                entityPage,
+                currentPage: this.currentPage,
+                entity: entity
+            });
+            
             if (entityPage !== this.currentPage) {
+                console.log('Changing page from', this.currentPage, 'to', entityPage);
                 this.changePage(entityPage);
             } else {
+                console.log('Same page, updating UI');
                 this.renderEntityList();
                 this.renderHighlights();
                 this.scrollToEntityInPDF(index);
@@ -1355,8 +1370,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
         scrollToEntityInPDF(index) {
             const entity = this.detectionResults[index];
-            const entityPage = entity && (entity.start_page || entity.page);
+            
+            // ページ番号の統一的な取得
+            const entityPage = entity ? ((entity.page_num !== undefined) ? entity.page_num + 1 :
+                                        (entity.start_page !== undefined) ? entity.start_page :
+                                        (entity.page !== undefined) ? entity.page :
+                                        (entity.page_number !== undefined) ? entity.page_number : 1) : null;
+            
+            console.log('scrollToEntityInPDF:', {
+                index,
+                hasEntity: !!entity,
+                hasCoordinates: !!(entity && entity.coordinates),
+                entityPage,
+                currentPage: this.currentPage
+            });
+            
             if (!entity || !entity.coordinates || entityPage !== this.currentPage) {
+                console.log('Early return from scrollToEntityInPDF');
                 return;
             }
 
