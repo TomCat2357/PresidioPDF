@@ -540,7 +540,11 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // ページ番号フィールドの修正: start_pageを優先使用、デフォルトを1とする
             const pageEntities = this.detectionResults.filter(e => {
-                const entityPage = e.start_page || e.page || e.page_number || 1;
+                // バックエンドからのpage_numは0ベース、currentPageは1ベースなので調整
+                const entityPage = (e.page_num !== undefined) ? e.page_num + 1 :
+                                   (e.start_page !== undefined) ? e.start_page :
+                                   (e.page !== undefined) ? e.page :
+                                   (e.page_number !== undefined) ? e.page_number : 1;
                 return entityPage === this.currentPage;
             });
             console.log('Page entities for page', this.currentPage, ':', pageEntities.length);

@@ -20,21 +20,21 @@ if tool_name != "Bash":
     sys.exit(0)
 
 # cdコマンドの検出
-cd_match = re.search(r'^\s*cd\s+(.+)', command)
+cd_match = re.search(r"^\s*cd\s+(.+)", command)
 if cd_match:
-    target_dir = cd_match.group(1).strip().strip('"\'')
-    
+    target_dir = cd_match.group(1).strip().strip("\"'")
+
     # 絶対パスに変換
     if not os.path.isabs(target_dir):
         target_dir = os.path.join(PROJECT_DIR, target_dir)
-    
+
     target_dir = os.path.abspath(target_dir)
-    
+
     # プロジェクトディレクトリ外かチェック
     if not target_dir.startswith(PROJECT_DIR):
         response = {
             "decision": "block",
-            "reason": f"プロジェクトディレクトリ外（{target_dir}）への移動は許可されていません。プロジェクト内（{PROJECT_DIR}）にとどまってください。"
+            "reason": f"プロジェクトディレクトリ外（{target_dir}）への移動は許可されていません。プロジェクト内（{PROJECT_DIR}）にとどまってください。",
         }
         print(json.dumps(response, ensure_ascii=False))
         sys.exit(0)
