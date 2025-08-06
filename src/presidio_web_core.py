@@ -450,6 +450,15 @@ class PresidioPDFWebApp:
             logger.error(f"エンティティ削除エラー: {e}")
             return {"success": False, "message": f"削除エラー: {str(e)}"}
 
+    def _convert_pdfjs_to_pymupdf_coords(self, coords: Dict, page_height: float) -> Dict:
+        """PDF.js座標系からPyMuPDF座標系への変換"""
+        return {
+            "x0": coords["x0"],
+            "y0": page_height - coords["y1"],  # Y軸を反転
+            "x1": coords["x1"], 
+            "y1": page_height - coords["y0"]   # Y軸を反転
+        }
+
     def generate_pdf_with_annotations(self, upload_folder: str) -> Dict:
         """現在の検出結果をアノテーション/ハイライトとしてPDFに適用し、ダウンロード用のパスを返す"""
         if not self.current_pdf_path or not self.pdf_document:
@@ -472,7 +481,8 @@ class PresidioPDFWebApp:
             new_doc = fitz.open(temp_pdf_path)
 
             for entity in self.detection_results:
-                page_num = entity.get("page", 1) - 1
+                # ページ番号は自動検出時に0始まりで記録されているため、そのまま使用
+                page_num = entity.get("page", 0)
                 if page_num >= len(new_doc):
                     continue
 
@@ -497,14 +507,33 @@ class PresidioPDFWebApp:
                                 )
                             )
                 else:
-                    # 単一行エンティティの場合は従来通り
+                    # 単一行エンティティの場合
                     coords = entity.get("coordinates")
                     if coords and all(k in coords for k in ["x0", "y0", "x1", "y1"]):
-                        rects_to_process = [
-                            fitz.Rect(
-                                coords["x0"], coords["y0"], coords["x1"], coords["y1"]
+                        # 手動追加エンティティかどうかで座標変換を判断
+                        if entity.get("manual", False):
+                            # 手動追加エンティティの座標はPDF.js座標系なのでPyMuPDF座標系に変換
+                            page_height = page.rect.height
+                            converted_coords = self._convert_pdfjs_to_pymupdf_coords(
+                                coords, page_height
                             )
-                        ]
+                            logger.debug(f"手動追加エンティティの座標変換: {coords} -> {converted_coords}")
+                            
+                            rects_to_process = [
+                                fitz.Rect(
+                                    converted_coords["x0"], 
+                                    converted_coords["y0"], 
+                                    converted_coords["x1"], 
+                                    converted_coords["y1"]
+                                )
+                            ]
+                        else:
+                            # 自動検出エンティティの座標は既にPyMuPDF座標系
+                            rects_to_process = [
+                                fitz.Rect(
+                                    coords["x0"], coords["y0"], coords["x1"], coords["y1"]
+                                )
+                            ]
                     else:
                         continue
 

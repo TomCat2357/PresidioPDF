@@ -244,7 +244,81 @@ def run_web_app_test():
                 f.write(page_text)
             print("検出結果のテキストデータを保存しました")
 
-            print("⑧ PDFビューアのハイライト確認用スクリーンショット撮影中...")
+            print("⑧ PDFを保存してハイライト確認")
+            # PDF保存ボタンをクリック
+            save_button = page.locator('#saveBtn')
+            if save_button.count() > 0 and not save_button.is_disabled():
+                print("PDF保存ボタンをクリック中...")
+                save_button.click()
+                
+                # ダウンロード完了まで待機
+                print("PDF生成とダウンロードを待機中...")
+                time.sleep(10)  # PDFの生成とダウンロードに十分な時間を与える
+                
+                # ダウンロードされたファイルを確認（ブラウザのデフォルトダウンロードフォルダまたはworkspaceの出力フォルダ）
+                download_paths = [
+                    "/workspace/downloads",
+                    "/workspace/outputs", 
+                    "/workspace/web_uploads",
+                    "/tmp/downloads"
+                ]
+                
+                downloaded_pdf = None
+                for download_path in download_paths:
+                    if os.path.exists(download_path):
+                        pdf_files = [f for f in os.listdir(download_path) if f.endswith('.pdf')]
+                        if pdf_files:
+                            # 最新のPDFファイルを取得
+                            latest_pdf = max([os.path.join(download_path, f) for f in pdf_files], 
+                                           key=os.path.getmtime)
+                            downloaded_pdf = latest_pdf
+                            print(f"ダウンロードされたPDFを発見: {downloaded_pdf}")
+                            break
+                
+                if not downloaded_pdf:
+                    print("警告: ダウンロードされたPDFファイルが見つかりませんでした")
+                else:
+                    # ダウンロードされたPDFを新しいタブで開いて確認
+                    print("⑨ ダウンロードされたPDFをブラウザで開いて確認...")
+                    new_tab = browser.new_page()
+                    try:
+                        # file:// URLでPDFを開く
+                        pdf_url = f"file://{downloaded_pdf}"
+                        new_tab.goto(pdf_url)
+                        
+                        # PDFが読み込まれるまで待機
+                        time.sleep(5)
+                        
+                        # ダウンロードされたPDFのスクリーンショットを撮影
+                        new_tab.screenshot(
+                            path="/workspace/outputs/06_downloaded_pdf_with_highlights.png",
+                            full_page=True
+                        )
+                        print("ダウンロードされたPDFのスクリーンショットを保存しました")
+                        
+                        # PDFの内容を確認（可能であれば）
+                        try:
+                            page_text = new_tab.evaluate("() => document.body.innerText")
+                            if "個人情報" in page_text or "マスク" in page_text or page_text.strip():
+                                print("✅ ダウンロードされたPDFにコンテンツが含まれています")
+                            else:
+                                print("⚠️  ダウンロードされたPDFのコンテンツを確認できませんでした")
+                        except:
+                            print("ℹ️  PDFコンテンツの自動読み取りはスキップされました")
+                            
+                    except Exception as pdf_error:
+                        print(f"ダウンロードされたPDFの確認中にエラー: {pdf_error}")
+                        # エラー時でもスクリーンショットを撮影
+                        try:
+                            new_tab.screenshot(path="/workspace/outputs/06_pdf_error_screenshot.png")
+                        except:
+                            pass
+                    finally:
+                        new_tab.close()
+            else:
+                print("PDF保存ボタンが利用できません（無効化されているか見つかりません）")
+
+            print("⑩ PDFビューアのハイライト確認用スクリーンショット撮影中...")
             # PDFビューア部分のスクリーンショット（複数に分けて撮影）
 
             # 全体スクリーンショット

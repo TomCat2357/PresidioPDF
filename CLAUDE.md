@@ -215,12 +215,14 @@ uv run python tests/web_app_test.py
 1. **サーバー確認**: Flask サーバー（localhost:5000）が起動していることを確認
 2. **ブラウザアクセス**: Playwright（ヘッドレスモード）でlocalhost:5000にアクセス
 3. **初期スクリーンショット**: ローディング完了を待機してから撮影
-4. **PDFアップロード**: test_pdfs/a1.pdf をWebUIでアップロード
+4. **PDFアップロード**: test_pdfs/sony.pdf をWebUIでアップロード
 5. **アップロード後スクリーンショット**: ローディング状態をチェックして撮影
 6. **PII検出実行**: 「検出開始」ボタンをクリックして処理完了まで待機
 7. **検出完了スクリーンショット**: ローディングスピナー消失を確認して撮影
 8. **テキスト抽出**: 「抽出中」等の文字が消えるまで待機してからテキスト取得
-9. **最終スクリーンショット**: 全ページ・PDFビューアのスクリーンショット撮影
+9. **PDF保存とダウンロード**: 「PDFを保存」ボタンをクリックしてマスキング済みPDFを生成・ダウンロード
+10. **ダウンロードPDF確認**: ダウンロードされたPDFを新しいタブで開いてハイライト状態を確認
+11. **最終スクリーンショット**: 全ページ・PDFビューア・ダウンロードPDFのスクリーンショット撮影
 
 **改良された検出機能:**
 - `.spinner-border`, `.loading`, `#loadingOverlay`, `.fa-spinner` 等のローディング要素を検出
@@ -235,6 +237,8 @@ uv run python tests/web_app_test.py
   - `03_after_detection.png`: 検出処理完了後（ローディング完了後）
   - `04_full_page_with_highlights.png`: フルページビュー
   - `05_pdf_viewer_highlights.png`: PDFビューア（ハイライト表示）
+  - `06_downloaded_pdf_with_highlights.png`: ダウンロードされたPDFの表示確認
+  - `06_pdf_error_screenshot.png`: PDF確認時のエラースクリーンショット（エラー時のみ）
 
 ### webui-integration-test（レガシー版）
 Full web application integration test routine that performs end-to-end testing of the PII detection web interface:
