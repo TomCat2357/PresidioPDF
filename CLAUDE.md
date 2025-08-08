@@ -115,6 +115,36 @@ The system supports different spaCy Japanese models via optional dependencies:
   - Note: `uv` may be installed in user-specific paths like `/home/user/.local/bin/uv` (Linux) or `%USERPROFILE%\.local\bin\uv` (Windows)
   - If `uv` is not in PATH, you may need to use the full path or add it to environment variables
 
+## Serena Token Optimization
+
+### Token Usage Guidelines
+To optimize Serena MCP server token consumption and avoid usage limits:
+
+1. **Use Phased Analysis Approach**:
+   - **Phase 1**: Start with `get_symbols_overview` for high-level understanding
+   - **Phase 2**: Use `find_symbol` with `include_body=False` to identify targets
+   - **Phase 3**: Only read full code bodies (`include_body=True`) when necessary
+
+2. **Configure Response Limits**:
+   - Set `max_answer_chars` parameter to control response size
+   - Use smaller values (e.g., 50000-100000) for initial exploration
+   - Increase only when detailed analysis is required
+
+3. **Target Specific Analysis**:
+   - Use `relative_path` parameter to restrict searches to specific files/directories
+   - Prefer `find_symbol` over broad `search_for_pattern` when symbol names are known
+   - Use `substring_matching=True` only when necessary
+
+4. **Efficient Code Reading Strategy**:
+   - AVOID reading entire files unless absolutely necessary
+   - Use symbolic tools to read only required code sections
+   - Leverage `depth` parameter to control symbol hierarchy depth
+
+5. **File Exclusion Configuration**:
+   - Configure `.serena/project.yml` with `ignored_paths` for non-essential directories
+   - Set `ignore_all_files_in_gitignore: true` to exclude build artifacts
+   - Exclude test files, documentation, and build outputs when not relevant
+
 ## Configuration Management
 
 The application uses YAML configuration files with CLI override support:

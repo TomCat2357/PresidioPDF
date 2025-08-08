@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 import fitz  # PyMuPDF
 
-from config_manager import ConfigManager
-from analyzer import Analyzer
-from pdf_locator import PDFTextLocator
-from pdf_masker import PDFMasker
-from pdf_annotator import PDFAnnotator
+from core.config_manager import ConfigManager
+from analysis.analyzer import Analyzer
+from pdf.pdf_locator import PDFTextLocator
+from pdf.pdf_masker import PDFMasker
+from pdf.pdf_annotator import PDFAnnotator
 
 logger = logging.getLogger(__name__)
 

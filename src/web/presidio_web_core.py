@@ -15,8 +15,8 @@ from typing import List, Dict, Optional
 import fitz  # PyMuPDF
 
 # 自プロジェクトのモジュールをインポート
-from config_manager import ConfigManager
-from pdf_processor import PDFProcessor
+from core.config_manager import ConfigManager
+from pdf.pdf_processor import PDFProcessor
 
 PRESIDIO_AVAILABLE = True
 
@@ -198,7 +198,7 @@ class PresidioPDFWebApp:
                 self.pdf_document = fitz.open(self.current_pdf_path)
 
             # PDFTextLocatorを使用して改行なしテキストとの同期を確保
-            from pdf_locator import PDFTextLocator
+            from pdf.pdf_locator import PDFTextLocator
 
             locator = PDFTextLocator(self.pdf_document)
             presidio_text = (
