@@ -165,3 +165,5 @@ runs/*
 update_20240531/*
 *.pt
 *.cache
+uv.lock
+*.pkl
