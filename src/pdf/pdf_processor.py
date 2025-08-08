@@ -314,21 +314,8 @@ class PDFProcessor:
             logger.error(f"レポート生成でエラー: {e}")
 
     def _create_backup(self, file_path: str) -> Optional[str]:
-        """ファイルのバックアップを作成"""
-        if not self.config_manager.is_pdf_backup_enabled():
-            return None
-
-        suffix = self.config_manager.get_pdf_backup_suffix()
-        path_obj = Path(file_path)
-        backup_path = path_obj.with_name(f"{path_obj.stem}{suffix}{path_obj.suffix}")
-
-        try:
-            shutil.copy2(file_path, backup_path)
-            logger.info(f"バックアップを作成: {backup_path}")
-            return str(backup_path)
-        except Exception as e:
-            logger.warning(f"バックアップ作成に失敗: {e}")
-            return None
+        """ファイルのバックアップ出力は廃止（常にNone）"""
+        return None
 
     def _should_skip_file(self, file_path: str) -> bool:
         """ファイルをスキップすべきか判定"""

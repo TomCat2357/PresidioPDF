@@ -58,7 +58,7 @@ class PresidioPDFWebApp:
         if PRESIDIO_AVAILABLE:
             try:
                 # デフォルトの設定ファイルパスを解決
-                config_path = os.path.join(os.getcwd(), "config.yaml")
+                config_path = os.path.join(os.getcwd(), "config/config.yaml")
 
                 if os.path.exists(config_path):
                     config_manager = ConfigManager(config_file=config_path)
@@ -101,7 +101,7 @@ class PresidioPDFWebApp:
                 self.processor = None
 
             # 新しい設定でプロセッサを初期化
-            config_path = os.path.join(os.getcwd(), "config.yaml")
+            config_path = os.path.join(os.getcwd(), "config/config.yaml")
 
             if os.path.exists(config_path):
                 config_manager = ConfigManager(config_file=config_path)

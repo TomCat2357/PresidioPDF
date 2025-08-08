@@ -31,7 +31,7 @@ class ConfigManager:
             config_file: YAML設定ファイルのパス
             args: コマンドライン引数の辞書
         """
-        self.config_file = config_file or "config.yaml"
+        self.config_file = config_file or "config/config.yaml"
         self.args = args or {}
         self.config = self._load_config()
 
@@ -282,9 +282,7 @@ class ConfigManager:
             config["pdf_processing"] = config.get("pdf_processing", {})
             config["pdf_processing"]["output_suffix"] = args["pdf_output_suffix"]
 
-        if "pdf_backup" in args and args["pdf_backup"] is not None:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["backup_enabled"] = args["pdf_backup"]
+        # バックアップPDF機能は廃止: CLI引数から backup_enabled を設定しない
 
         # 読み取りモード設定
         if "read_mode" in args and args["read_mode"] is not None:

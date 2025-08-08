@@ -8,26 +8,16 @@ version = "0.1.0"
 description = "Japanese personal information detection and masking tool for PDF documents"
 readme = "README.md"
 requires-python = ">=3.11"
-# デフォルト依存関係（CPUモード）
+# 最小限のデフォルト依存関係（CPUモード）
 dependencies = [
-    # PDF処理とPresidio関連
+    # 基本的なCLI機能に必要な最小限のパッケージ
     "click>=8.0.0",
-    "spacy>=3.7.0", # CPU版（transformersなし）
+    "spacy>=3.7.0",
     "presidio-analyzer>=2.2.0",
-    "pdfplumber>=0.10.0",
     "PyMuPDF>=1.23.0",
-    "reportlab>=4.0.0",
     "PyYAML>=6.0",
-    "colorama>=0.4.0",
-    # 機械学習・画像処理（CPU版）
     "numpy>=1.26.0",
     "ja-core-news-sm",
-    "playwright>=1.54.0",
-    "flask>=3.1.1",
-    "requests>=2.32.4",
-    "pandas>=2.3.1",
-    "ja-core-news-md>=3.7.0",
-    "ja-core-news-lg>=3.7.0",
 ]
 
 [project.optional-dependencies]
@@ -39,33 +29,29 @@ dev = [
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
+    "playwright>=1.54.0",
+    "pytest-playwright>=0.7.0",
 ]
 
-# GPUモード（高精度モデル）- CPU環境でも動作、GPU環境ではより高速
+# GPUモード（高精度モデル）
 gpu = [
-    # 高精度日本語NLPモデル（GPU推奨だがCPUでも動作、Rustコンパイラ不要）
-    "ja-core-news-lg",
-    # 機械学習ライブラリ（CPU版、GPU環境では自動的にGPU加速）
+    "ja-core-news-md>=3.7.0",
+    "ja-core-news-lg>=3.7.0",
     "torch>=2.0.0",
-    # 以下は手動インストール推奨（Rustコンパイラまたは特別な環境が必要）
-    # "ja-core-news-trf",  # Transformer版（最高精度、transformers必要）
-    # "ja-ginza-electra>=5.2.0",  # Electra版（tokenizers+Rust必要）
-    # "transformers>=4.21.0",  # Rustコンパイラ必要
-    # "spacy[transformers,cuda]>=3.7.0",  # CUDA環境のみ
-    # "tensorflow>=2.13.0",  # 重いため除外
-    # "cupy-cuda12x>=12.0.0",  # CUDA環境のみ
+    "pandas>=2.3.1",
+    "reportlab>=4.0.0",
+    "pdfplumber>=0.10.0",
 ]
 
 # 軽量版（Presidio PDF処理のみ、最小構成）
 minimal = [
     "click>=8.0.0",
     "spacy>=3.7.0",
-    "presidio-analyzer>=2.2.0", 
-    "pdfplumber>=0.10.0",
+    "presidio-analyzer>=2.2.0",
     "PyMuPDF>=1.23.0",
     "PyYAML>=6.0",
     "numpy<2.0",
-    "ja-core-news-sm",  # 最小日本語モデル
+    "ja-core-news-sm",
 ]
 
 # Webアプリケーション専用
@@ -73,8 +59,10 @@ web = [
     "Flask>=3.0.0",
     "Flask-CORS>=4.0.0",
     "Werkzeug>=3.0.0",
-    "playwright>=1.42.0",
     "requests>=2.25.0",
+    "colorama>=0.4.0",
+    "reportlab>=4.0.0",
+    "pdfplumber>=0.10.0",
 ]
 
 # GUI専用
@@ -116,7 +104,4 @@ ja-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/do
 ja-core-news-trf = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.7.0/ja_core_news_trf-3.7.0-py3-none-any.whl" }
 ja-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" }
 
-[dependency-groups]
-dev = [
-    "playwright>=1.54.0",
-]
+# [dependency-groups] - 不要なので削除
