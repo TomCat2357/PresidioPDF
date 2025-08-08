@@ -613,6 +613,14 @@
                         </select>
                     </div>
                     <div class="mb-3">
+                        <label class="form-label">注釈のテキスト表示</label>
+                        <select class="form-select" id="maskingTextMode">
+                            <option value="verbose">タイトル+本文（推奨）</option>
+                            <option value="minimal">タイトルのみ</option>
+                            <option value="silent">表示しない</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
                         <label class="form-label">重複除去設定</label>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="deduplicationEnabled">

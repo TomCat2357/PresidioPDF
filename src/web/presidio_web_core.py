@@ -450,169 +450,101 @@ class PresidioPDFWebApp:
             logger.error(f"エンティティ削除エラー: {e}")
             return {"success": False, "message": f"削除エラー: {str(e)}"}
 
-    def _convert_pdfjs_to_pymupdf_coords(self, coords: Dict, page_height: float) -> Dict:
-        """PDF.js座標系からPyMuPDF座標系への変換"""
-        return {
-            "x0": coords["x0"],
-            "y0": page_height - coords["y1"],  # Y軸を反転
-            "x1": coords["x1"], 
-            "y1": page_height - coords["y0"]   # Y軸を反転
-        }
 
-    def generate_pdf_with_annotations(self, upload_folder: str) -> Dict:
-        """現在の検出結果をアノテーション/ハイライトとしてPDFに適用し、ダウンロード用のパスを返す"""
+
+    def _rect_for_entity(self, e, page):
+        """エンティティからfitz.Rectを決定する。
+        - rect_pdf: PDF座標（最優先）
+        - coordinates: 自動検出結果の座標
+        """
+        try:
+            # 1) トップレベルに rect_pdf があれば最優先（手動追加で使用）
+            rp = e.get("rect_pdf")
+            if isinstance(rp, (list, tuple)) and len(rp) == 4:
+                return fitz.Rect(rp)
+
+            # 2) coordinates に x0..y1 (自動検出結果など)
+            c = e.get("coordinates") or {}
+            if all(k in c for k in ("x0", "y0", "x1", "y1")):
+                return fitz.Rect(float(c["x0"]), float(c["y0"]), float(c["x1"]), float(c["y1"]))
+
+            return None
+        except Exception as ex:
+            logger.debug(f"_rect_for_entity: 変換失敗: {ex}")
+            return None
+
+    def _generate_web_annotation_content(self, entity: Dict, mode: str) -> Dict:
+        """Web UI用の注釈内容を生成"""
+        entity_type_jp = self.get_entity_type_japanese(entity.get("entity_type", "CUSTOM"))
+        text = entity.get("text", "")
+
+        if mode == "silent":
+            return {"title": "", "content": "", "text": ""}
+        elif mode == "minimal":
+            return {"title": entity_type_jp, "content": "", "text": f"【{entity_type_jp}】"}
+        else:  # verbose
+            title = f"個人情報: {entity_type_jp}"
+            return {"title": title, "content": text, "text": f"【{entity_type_jp}】\n{text}"}
+
+    def generate_pdf_with_annotations(self, upload_folder: str):
         if not self.current_pdf_path or not self.pdf_document:
             return {"success": False, "message": "PDFファイルが利用できません"}
+        os.makedirs(upload_folder, exist_ok=True)
+        out_path = os.path.join(
+            upload_folder, f"annotated_{uuid.uuid4()}_{os.path.basename(self.current_pdf_path)}"
+        )
+        shutil.copy2(self.current_pdf_path, out_path)
+        doc = fitz.open(out_path)
 
-        try:
-            logger.info(f"PDF保存用アノテーション適用開始: {self.current_pdf_path}")
+        # Web UIからの設定を取得
+        masking_method = self.settings.get("masking_method", "highlight")
+        text_display_mode = self.settings.get("masking_text_mode", "verbose")
 
-            if not os.path.exists(upload_folder):
-                os.makedirs(upload_folder, exist_ok=True)
+        for e in self.detection_results:
+            page_idx = int(e.get("page_num", e.get("page", 0)))
+            if "page" in e and "page_num" not in e and e.get("source") == "manual":
+                page_idx = max(0, page_idx - 1)   # 旧データに1-basedが混在する対策
+            if not (0 <= page_idx < len(doc)):
+                continue
+            page = doc[page_idx]
+            rect = self._rect_for_entity(e, page)
+            if rect is None or rect.is_empty or rect.is_infinite:
+                continue
 
-            temp_pdf_path = os.path.join(
-                upload_folder,
-                f"annotated_{uuid.uuid4()}_{os.path.basename(self.current_pdf_path)}",
-            )
-
-            # 元のドキュメントをコピーして作業する
-            shutil.copy2(self.current_pdf_path, temp_pdf_path)
-
-            new_doc = fitz.open(temp_pdf_path)
-
-            for entity in self.detection_results:
-                # ページ番号は自動検出時に0始まりで記録されているため、そのまま使用
-                page_num = entity.get("page", 0)
-                if page_num >= len(new_doc):
-                    continue
-
-                page = new_doc[page_num]
-
-                # line_rectsを優先的に使用（複数行対応）
-                line_rects = entity.get("line_rects", [])
-                if line_rects:
-                    # 複数行エンティティの場合は各行に対してハイライトを追加
-                    rects_to_process = []
-                    for line_rect in line_rects:
-                        rect_data = line_rect.get("rect")
-                        if rect_data and all(
-                            k in rect_data for k in ["x0", "y0", "x1", "y1"]
-                        ):
-                            rects_to_process.append(
-                                fitz.Rect(
-                                    rect_data["x0"],
-                                    rect_data["y0"],
-                                    rect_data["x1"],
-                                    rect_data["y1"],
-                                )
-                            )
-                else:
-                    # 単一行エンティティの場合
-                    coords = entity.get("coordinates")
-                    if coords and all(k in coords for k in ["x0", "y0", "x1", "y1"]):
-                        # 手動追加エンティティかどうかで座標変換を判断
-                        if entity.get("manual", False):
-                            # 手動追加エンティティの座標はPDF.js座標系なのでPyMuPDF座標系に変換
-                            page_height = page.rect.height
-                            converted_coords = self._convert_pdfjs_to_pymupdf_coords(
-                                coords, page_height
-                            )
-                            logger.debug(f"手動追加エンティティの座標変換: {coords} -> {converted_coords}")
-                            
-                            rects_to_process = [
-                                fitz.Rect(
-                                    converted_coords["x0"], 
-                                    converted_coords["y0"], 
-                                    converted_coords["x1"], 
-                                    converted_coords["y1"]
-                                )
-                            ]
-                        else:
-                            # 自動検出エンティティの座標は既にPyMuPDF座標系
-                            rects_to_process = [
-                                fitz.Rect(
-                                    coords["x0"], coords["y0"], coords["x1"], coords["y1"]
-                                )
-                            ]
-                    else:
-                        continue
-
-                if not rects_to_process:
-                    continue
-
-                color_map = {
-                    "PERSON": (1, 0.8, 0.8),
-                    "LOCATION": (0.8, 1, 0.8),
-                    "PHONE_NUMBER": (0.8, 0.8, 1),
-                    "DATE_TIME": (1, 1, 0.8),
-                    "INDIVIDUAL_NUMBER": (1, 0.8, 1),
-                    "YEAR": (0.8, 1, 1),
-                    "PROPER_NOUN": (1, 0.86, 0.7),
-                    "CUSTOM": (0.9, 0.9, 0.9),
-                }
-                color = color_map.get(entity["entity_type"], (0.9, 0.9, 0.9))
-
-                masking_method = self.settings.get("masking_method", "highlight")
-
-                # 全ての矩形に対してハイライト/アノテーションを適用
-                for rect_index, rect in enumerate(rects_to_process):
-                    if masking_method in ["highlight", "both"]:
-                        highlight = page.add_highlight_annot(rect)
-                        highlight.set_colors(stroke=color)
-                        # 最初の矩形のみにタイトル情報を設定（重複回避）
-                        if rect_index == 0:
-                            highlight.set_info(
-                                title=f"{self.get_entity_type_japanese(entity['entity_type'])}",
-                                content=f"テキスト: {entity['text']}",
-                            )
-                        else:
-                            highlight.set_info(
-                                title=f"{self.get_entity_type_japanese(entity['entity_type'])} (続き)",
-                                content=f"テキスト: {entity['text']} (行 {rect_index + 1})",
-                            )
-                        highlight.update()
-
-                    if masking_method in ["annotation", "both"]:
-                        # アノテーションは最初の矩形のみに追加（重複回避）
-                        if rect_index == 0:
-                            annotation = page.add_text_annot(
-                                rect.tl,
-                                f"{self.get_entity_type_japanese(entity['entity_type'])}",
-                            )
-                            annotation.set_info(
-                                title="個人情報検出",
-                                content=f"タイプ: {entity['entity_type']}\\nテキスト: {entity['text']}",
-                            )
-                            annotation.update()
-
-            new_doc.saveIncr()  # 変更を追記保存
-            new_doc.close()
-
-            if os.path.exists(temp_pdf_path):
-                file_size = os.path.getsize(temp_pdf_path)
-                logger.info(
-                    f"PDF保存用ファイル生成完了: {temp_pdf_path} (サイズ: {file_size} bytes)"
-                )
-            else:
-                raise IOError(
-                    "PDFファイルの生成に失敗しました（ファイルが作成されませんでした）"
-                )
-
-            return {
-                "success": True,
-                "message": f"PDF保存用ファイル生成完了: {os.path.basename(temp_pdf_path)}",
-                "output_path": temp_pdf_path,
-                "filename": os.path.basename(temp_pdf_path),
-                "download_filename": f"masked_{os.path.splitext(os.path.basename(self.current_pdf_path))[0]}.pdf",
+            color_map = {
+                "PERSON": (1,0,0), "LOCATION": (0,1,0), "PHONE_NUMBER": (0,0,1),
+                "DATE_TIME": (1,1,0), "INDIVIDUAL_NUMBER": (1,0,1), "YEAR": (0.5,0,1),
+                "PROPER_NOUN": (1,0.5,0), "CUSTOM": (0.5,0.5,0.5)
             }
-
-        except Exception as e:
-            logger.error(f"PDF保存用ファイル生成エラー: {e}")
-            logger.error(traceback.format_exc())
-            return {
-                "success": False,
-                "message": f"PDF保存用ファイルの生成に失敗: {str(e)}",
+            highlight_color_map = {
+                "PERSON": (1,0.8,0.8), "LOCATION": (0.8,1,0.8), "PHONE_NUMBER": (0.8,0.8,1),
+                "DATE_TIME": (1,1,0.8), "INDIVIDUAL_NUMBER": (1,0.8,1), "YEAR": (0.8,1,1),
+                "PROPER_NOUN": (1,0.86,0.7), "CUSTOM": (0.9,0.9,0.9)
             }
+            color = color_map.get(e.get("entity_type"), (0.5, 0.5, 0.5))
+            highlight_color = highlight_color_map.get(e.get("entity_type"), (0.9, 0.9, 0.9))
+
+            content = self._generate_web_annotation_content(e, text_display_mode)
+
+            if masking_method in ("annotation", "both"):
+                annot = page.add_freetext_annot(rect, content["text"], fontsize=8, text_color=color)
+                annot.set_info(title=content["title"], content=content["content"])
+                annot.update()
+
+            if masking_method in ("highlight", "both"):
+                hl = page.add_highlight_annot(rect)
+                hl.set_colors(stroke=highlight_color)
+                hl.set_opacity(0.4)
+                hl.set_info(title=content["title"], content=content["content"])
+                hl.update()
+
+        doc.save(out_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+        doc.close()
+        return {
+            "success": True,
+            "filename": os.path.basename(out_path),
+            "download_filename": f"masked_{os.path.splitext(os.path.basename(self.current_pdf_path))[0]}.pdf"
+        }
 
     def _is_duplicate_manual_addition(self, new_entity: Dict) -> bool:
         """手動追加の重複をチェック（手動同士の重複防止）"""

@@ -92,8 +92,8 @@ def detect_entities():
         logger.info(f"現在のPDFパス: {app_instance.current_pdf_path}")
         logger.info(f"プロセッサー存在確認: {app_instance.processor is not None}")
 
-        # クライアントから送信された設定を適用
-        settings_data = request.get_json()
+        # クライアントから送信された設定 + 手動エンティティを適用
+        settings_data = request.get_json() or {}
         logger.info(f"受信した設定データ: {settings_data}")
 
         if settings_data:
@@ -106,6 +106,12 @@ def detect_entities():
                 app_instance._reinitialize_processor_with_model(spacy_model)
 
             logger.info(f"セッションの設定を更新: {app_instance.settings}")
+
+        # 手動エンティティを検出前にサーバへ同期して温存
+        manual_entities = settings_data.get("manual_entities", [])
+        if manual_entities:
+            preserved = [e for e in manual_entities if e.get("manual")]
+            app_instance.detection_results = preserved
 
         logger.info("現在の検出対象エンティティ:")
         logger.info(
@@ -149,20 +155,27 @@ def delete_entity(index):
 
 @app.route("/api/generate_pdf", methods=["POST"])
 def generate_pdf():
-    """アノテーション付きPDFを生成"""
+    """アノテーション付きPDFを生成（クライアント設定も反映）"""
     try:
         app_instance = get_session_app()
-        # クライアントからの最新のエンティティリストを受け取る
-        data = request.get_json()
-        if "entities" in data:
-            app_instance.detection_results = data["entities"]
+        payload = request.get_json() or {}
+
+        # 1) エンティティ（手動含む）
+        if "entities" in payload:
+            app_instance.detection_results = payload["entities"]
+
+        # 2) 設定（masking_method / masking_text_mode など）
+        settings = payload.get("settings") or {}
+        if settings:
+            app_instance.settings.update({
+                k: v for k, v in settings.items()
+                if k in ("masking_method", "masking_text_mode", "entities", "spacy_model")
+            })
+
         result = app_instance.generate_pdf_with_annotations(app.config["UPLOAD_FOLDER"])
         return jsonify(result)
-
     except Exception as e:
-        logger.error(f"PDF生成エラー: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({"success": False, "message": f"生成エラー: {str(e)}"})
+        return jsonify({"success": False, "message": str(e)})
 
 
 @app.route("/api/download_pdf/<path:filename>")
@@ -266,82 +279,20 @@ def settings():
 
 @app.route("/api/highlights/add", methods=["POST"])
 def add_highlight():
-    """新しいハイライトを追加"""
-    try:
-        app_instance = get_session_app()
-
-        if not app_instance.current_pdf_path:
-            return jsonify({"success": False, "message": "PDFが読み込まれていません"})
-
-        data = request.get_json()
-        text = data.get("text", "").strip()
-        entity_type = data.get("entity_type", "CUSTOM")
-        page_num = data.get("page", 1)
-        coordinates = data.get("coordinates", {})
-
-        if not text:
-            return jsonify(
-                {"success": False, "message": "テキストが指定されていません"}
-            )
-
-        # フロントエンドから渡されたline_rectsを優先的に使用
-        line_rects = data.get("line_rects", [])
-
-        # line_rectsがフロントエンドから提供されない場合のフォールバック
-        if (
-            not line_rects
-            and hasattr(app_instance, "processor")
-            and app_instance.processor
-        ):
-            try:
-                pdf_doc = fitz.open(app_instance.current_pdf_path)
-                page = pdf_doc[page_num - 1]
-                # テキストの各行矩形を取得
-                line_rects = app_instance.processor._get_text_line_rects(
-                    page, text, 0, len(text)
-                )
-                pdf_doc.close()
-            except Exception as e:
-                logger.debug(f"複数行矩形取得エラー（フォールバック）: {e}")
-
-        new_entity = {
-            "entity_type": entity_type,
-            "text": text,
-            "page": page_num,
-            "start": data.get("start", 0),
-            "end": data.get("end", len(text)),
-            "coordinates": coordinates,
-            "line_rects": line_rects,  # 複数行矩形情報を追加
-            "manual": True,  # 手動追加フラグ
-            "start_page": data.get("start_page", page_num),
-            "end_page": data.get("end_page", page_num),
-            "start_line": data.get("start_line", 0),
-            "end_line": data.get("end_line", 0),
-            "start_char": data.get("start_char", 0),
-            "end_char": data.get("end_char", len(text)),
-        }
-
-        # 手動追加の重複チェック
-        if app_instance._is_duplicate_manual_addition(new_entity):
-            return jsonify(
-                {
-                    "success": False,
-                    "message": "ほぼ同じ場所に同じタイプのハイライトが既に存在します",
-                }
-            )
-
-        app_instance.detection_results.append(new_entity)
-        logger.info(f"新しいハイライトを手動追加: {text} (タイプ: {entity_type})")
-
-        return jsonify(
-            {
-                "success": True,
-                "message": f"ハイライトを追加しました: {text}",
-                "entity": new_entity,
-                "total_count": len(app_instance.detection_results),
-            }
-        )
-
-    except Exception as e:
-        logger.error(f"ハイライト追加エラー: {e}")
-        return jsonify({"success": False, "message": f"ハイライト追加エラー: {str(e)}"})
+    # 手動エンティティをサーバに保存
+    app_instance = get_session_app()
+    data = request.get_json() or {}
+    # page_num(0-based)と rect_pdf/rect_norm をそのまま保持
+    entity = {
+        "entity_type": data.get("entity_type", "CUSTOM"),
+        "text": data.get("text", ""),
+        "page_num": int(data.get("page_num", max(0, int(data.get("page", 1)) - 1))),
+        "rect_pdf": data.get("rect_pdf"),
+        "rect_norm": data.get("rect_norm"),
+        "source": "manual",
+        "manual": True,
+        "start_page": int(data.get("start_page", int(data.get("page", 1)))),
+        "end_page": int(data.get("end_page", int(data.get("page", 1))))
+    }
+    app_instance.detection_results.append(entity)
+    return jsonify({"success": True, "entity": entity})

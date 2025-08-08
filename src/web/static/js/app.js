@@ -58,6 +58,16 @@ document.addEventListener('DOMContentLoaded', () => {
             this.selectionHistory = [];
             this.maxSelectionHistory = 10;
 
+            // 追加：座標変換ユーティリティ（PDF.jsのviewportを使って相互変換）
+            this.viewportRectToPdfRect = (vp, vx0, vy0, vx1, vy1) => {
+                // CSS左上原点のviewport座標 → PDFポイント（左下原点）
+                const p0 = vp.convertToPdfPoint(vx0, vy0);
+                const p1 = vp.convertToPdfPoint(vx1, vy1);
+                return [Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]),
+                        Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1])];
+            };
+            this.normRectFromPdfRect = (W, H, r) => [r[0]/W, r[1]/H, r[2]/W, r[3]/H];
+
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN"],
                 masking_method: "highlight",
@@ -487,182 +497,97 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        /**
+         * entity に優先順で格納する座標:
+         *   - rect_pdf: [x0,y0,x1,y1]  (PDFポイント, 左下原点)
+         *   - rect_norm: [x0/W, y0/H, x1/W, y1/H]  (ページ基準の正規化)
+         *   - page_num: 0ベース
+         */
+        viewportRectToPdfRect(viewport, vx0, vy0, vx1, vy1) {
+            // viewport座標 -> PDFポイント（左下原点）
+            const [px0, py0] = viewport.convertToPdfPoint(vx0, vy0);
+            const [px1, py1] = viewport.convertToPdfPoint(vx1, vy1);
+            const x0 = Math.min(px0, px1), y0 = Math.min(py0, py1);
+            const x1 = Math.max(px0, px1), y1 = Math.max(py0, py1);
+            return [x0, y0, x1, y1];
+        }
+
+        pdfRectToViewportRect(viewport, rx) {
+            // PDFポイント -> viewport座標
+            const [vx0, vy0] = viewport.convertToViewportPoint(rx[0], rx[1]);
+            const [vx1, vy1] = viewport.convertToViewportPoint(rx[2], rx[3]);
+            const left = Math.min(vx0, vx1);
+            const top = Math.min(vy0, vy1);
+            const width = Math.abs(vx1 - vx0);
+            const height = Math.abs(vy1 - vy0);
+            return { left, top, width, height };
+        }
+
+        normRectFromPdfRect(pageWidthPt, pageHeightPt, r) {
+            return [r[0]/pageWidthPt, r[1]/pageHeightPt, r[2]/pageWidthPt, r[3]/pageHeightPt];
+        }
+
         renderHighlights() {
-            console.log('=== renderHighlights called ===');
+            if (!this.viewport) return;
             const container = this.elements.highlightOverlay;
             container.innerHTML = '';
-            container.style.width = `${this.viewport.width}px`;
-            container.style.height = `${this.viewport.height}px`;
-            
-            console.log('Highlight container:', container);
-            console.log('Container dimensions:', container.style.width, 'x', container.style.height);
-            console.log('showHighlights checked:', this.elements.showHighlights?.checked);
-            console.log('viewport exists:', !!this.viewport);
-            console.log('detectionResults length:', this.detectionResults.length);
-            console.log('currentPage:', this.currentPage);
+            const page = this.currentPage;
 
-            if (!this.elements.showHighlights.checked || !this.viewport) {
-                console.log('Early return: showHighlights=', this.elements.showHighlights?.checked, 'viewport=', !!this.viewport);
-                return;
-            }
-
-            // エンティティデータの詳細を確認
-            console.log('Sample detection results (first 3):');
-            this.detectionResults.slice(0, 3).forEach((entity, index) => {
-                console.log(`Entity ${index} - JSON:`, JSON.stringify(entity, null, 2));
-                console.log(`Entity ${index} - Fields:`, Object.keys(entity));
-                console.log(`Entity ${index} - Text:`, entity.text);
-                console.log(`Entity ${index} - Page fields:`, {
-                    page: entity.page,
-                    start_page: entity.start_page,
-                    page_number: entity.page_number,
-                    coordinates: entity.coordinates ? 'exists' : 'missing'
-                });
-            });
+            // ページ判定を統一（page_num:0-based / page:1-based の混在に対応）
+            const pageEntities = this.detectionResults.filter(e => (e.page_num + 1) === page);
             
-            // 全エンティティのページ番号分析
-            const pageFieldAnalysis = {
-                page: new Set(),
-                start_page: new Set(), 
-                page_number: new Set()
-            };
-            
-            this.detectionResults.forEach(entity => {
-                if (entity.page !== undefined) pageFieldAnalysis.page.add(entity.page);
-                if (entity.start_page !== undefined) pageFieldAnalysis.start_page.add(entity.start_page);
-                if (entity.page_number !== undefined) pageFieldAnalysis.page_number.add(entity.page_number);
-            });
-            
-            console.log('Page field analysis across all entities:');
-            console.log('- page values:', Array.from(pageFieldAnalysis.page));
-            console.log('- start_page values:', Array.from(pageFieldAnalysis.start_page)); 
-            console.log('- page_number values:', Array.from(pageFieldAnalysis.page_number));
-            
-            // ページ番号フィールドの修正: start_pageを優先使用、デフォルトを1とする
-            const pageEntities = this.detectionResults.filter(e => {
-                // バックエンドからのpage_numは0ベース、currentPageは1ベースなので調整
-                const entityPage = (e.page_num !== undefined) ? e.page_num + 1 :
-                                   (e.start_page !== undefined) ? e.start_page :
-                                   (e.page !== undefined) ? e.page :
-                                   (e.page_number !== undefined) ? e.page_number : 1;
-                return entityPage === this.currentPage;
-            });
-            console.log('Page entities for page', this.currentPage, ':', pageEntities.length);
-            
-            // 異なるページ番号フィールドで試してみる
-            const pageEntitiesAlt1 = this.detectionResults.filter(e => e.start_page === this.currentPage);
-            const pageEntitiesAlt2 = this.detectionResults.filter(e => e.page_number === this.currentPage);
-            const pageEntitiesOriginal = this.detectionResults.filter(e => e.page === this.currentPage);
-            console.log('Alternative filters:');
-            console.log('- page filter (original):', pageEntitiesOriginal.length);
-            console.log('- start_page filter:', pageEntitiesAlt1.length);
-            console.log('- page_number filter:', pageEntitiesAlt2.length);
-            
-            pageEntities.forEach((entity, localIndex) => {
-                console.log(`Processing entity ${localIndex}:`, entity);
+            pageEntities.forEach((entity) => {
                 const globalIndex = this.detectionResults.indexOf(entity);
                 const el = this.createHighlightElement(entity, globalIndex);
-                console.log(`Created highlight element:`, el);
                 if (el) {
                     container.appendChild(el);
-                    console.log(`Added highlight element to container`);
-                } else {
-                    console.log(`Failed to create highlight element for entity:`, entity);
                 }
             });
-            
-            console.log('Final container children count:', container.children.length);
         }
         
         createHighlightElement(entity, index) {
-            console.log('=== createHighlightElement called ===');
-            console.log('Entity:', entity);
-            console.log('Entity coordinates:', entity.coordinates);
-            
-            if (!entity.coordinates) {
-                console.log('No coordinates found for entity, returning null');
+            let pdfRect;
+            if (entity.rect_pdf) {
+                pdfRect = entity.rect_pdf;
+            } else if (entity.coordinates) { // 後方互換性
+                const c = entity.coordinates;
+                pdfRect = [c.x0, c.y0, c.x1, c.y1];
+            } else {
                 return null;
             }
 
-            // デバッグ情報を追加
-            console.log('Creating highlight for entity:', {
-                text: entity.text,
-                hasLineRects: !!(entity.line_rects),
-                lineRectsCount: entity.line_rects ? entity.line_rects.length : 0,
-                coordinates: entity.coordinates,
-                viewport: this.viewport ? {
-                    width: this.viewport.width,
-                    height: this.viewport.height,
-                    viewBox: this.viewport.viewBox
-                } : null
-            });
+            try {
+                const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
 
-            // 複数行矩形がある場合、または改行を含むテキストの場合は複数の矩形を作成
-            const isMultiLine = (entity.line_rects && entity.line_rects.length > 1) || 
-                               entity.text.includes('\n') || 
-                               (entity.start_line !== entity.end_line);
-            
-            if (isMultiLine) {
-                console.log('Using multi-line highlight for:', entity.text);
-                return this.createMultiLineHighlight(entity, index);
+                if (viewportRect) {
+                    const left = Math.min(viewportRect[0], viewportRect[2]);
+                    const top = Math.min(viewportRect[1], viewportRect[3]);
+                    const width = Math.abs(viewportRect[2] - viewportRect[0]);
+                    const height = Math.abs(viewportRect[3] - viewportRect[1]);
+
+                    const el = document.createElement('div');
+                    el.className = 'highlight-rect';
+                    el.classList.add(entity.entity_type.toLowerCase().replace(/_/g, '-'));
+                    if (index === this.selectedEntityIndex) {
+                        el.classList.add('selected');
+                    }
+
+                    el.style.left = `${left}px`;
+                    el.style.top = `${top}px`;
+                    el.style.width = `${width}px`;
+                    el.style.height = `${height}px`;
+                    el.dataset.index = index;
+                    el.addEventListener('click', (ev) => {
+                        ev.stopPropagation();
+                        this.selectEntity(index);
+                    });
+                    return el;
+                }
+                return null;
+            } catch (error) {
+                console.error('Error creating highlight element:', error, 'for entity:', entity);
+                return null;
             }
-
-            // 単一矩形の場合は従来通り
-            const highlightEl = document.createElement('div');
-            highlightEl.className = 'highlight-rect';
-            highlightEl.classList.add(entity.entity_type.toLowerCase().replace(/_/g, '-'));
-
-            if (index === this.selectedEntityIndex) {
-                highlightEl.classList.add('selected');
-            }
-
-            // 座標変換の修正：PyMuPDF座標系からPDF.js座標系への正確な変換
-            const coords = entity.coordinates;
-            
-            // PyMuPDF座標系（左下原点）からPDF.js座標系（左上原点）への変換
-            const pageHeight = this.viewport.viewBox[3]; // PDFページの高さ
-            const pdfRect = [
-                coords.x0,
-                pageHeight - coords.y1,  // Y軸を反転: 下端→上端
-                coords.x1,
-                pageHeight - coords.y0   // Y軸を反転: 上端→下端
-            ];
-
-            console.log('Original coordinates:', coords);
-            console.log('Page height:', pageHeight);
-            console.log('PDF rect for viewport conversion:', pdfRect);
-
-            const viewportRect = this.viewport.convertToViewportRectangle(pdfRect);
-            console.log('Converted viewport rect:', viewportRect);
-            
-            const left = Math.min(viewportRect[0], viewportRect[2]);
-            const top = Math.min(viewportRect[1], viewportRect[3]);
-            const right = Math.max(viewportRect[0], viewportRect[2]);
-            const bottom = Math.max(viewportRect[1], viewportRect[3]);
-            
-            const width = right - left;
-            const height = bottom - top;
-            
-            const minHeight = 12;
-            const adjustedHeight = Math.max(height, minHeight);
-
-            console.log('Final highlight position:', {
-                left, top, width, height: adjustedHeight
-            });
-
-            highlightEl.style.left = `${left}px`;
-            highlightEl.style.top = `${top}px`;
-            highlightEl.style.width = `${width}px`;
-            highlightEl.style.height = `${adjustedHeight}px`;
-            highlightEl.dataset.index = index;
-            
-            highlightEl.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.selectEntity(index);
-                this.scrollToEntityInList(index);
-            });
-
-            return highlightEl;
         }
 
         createMultiLineHighlight(entity, index) {
@@ -693,13 +618,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     highlightEl.classList.add('selected');
                 }
 
-                // 座標変換の修正：PyMuPDF座標系からPDF.js座標系への変換
-                const pageHeight = this.viewport.viewBox[3]; // PDFページの高さ
+                // line_rects も PDFユーザ空間（左下原点）。Y反転は不要
                 const pdfRect = [
                     lineRect.rect.x0,
-                    pageHeight - lineRect.rect.y1,  // Y軸を反転: 下端→上端
+                    lineRect.rect.y0,
                     lineRect.rect.x1,
-                    pageHeight - lineRect.rect.y0   // Y軸を反転: 上端→下端
+                    lineRect.rect.y1
                 ];
 
                 console.log(`Line ${lineIndex} conversion:`, {
@@ -786,7 +710,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 const response = await fetch('/api/detect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.settings)
+                    // 手動追加分を常にサーバへ同期してから検出
+                    body: JSON.stringify({
+                        ...this.settings,
+                        manual_entities: this.detectionResults.filter(e => e.manual)
+                    })
                 });
                 const data = await response.json();
                 if (!data.success) throw new Error(data.message);
@@ -794,7 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.detectionResults = data.entities || [];
                 this.renderEntityList();
                 this.renderHighlights();
-                this.elements.saveBtn.disabled = false;
+                this.updateSaveButtonState();   // 検出後に保存可
                 
                 const manualCount = data.manual_count || 0;
                 const newCount = data.new_count || 0;
@@ -936,14 +864,25 @@ document.addEventListener('DOMContentLoaded', () => {
         async generateAndDownloadPdf() {
             if (!this.currentPdfPath) return this.showError('PDFファイルが選択されていません');
             this.showLoading(true, 'マスキング適用中...');
-            
             try {
-                const response = await fetch('/api/generate_pdf', {
+                // クライアント側の最新レコード + 現在の設定も一緒に送る
+                const maskingTextModeEl = document.getElementById('maskingTextMode');
+                const masking_text_mode = maskingTextModeEl ? maskingTextModeEl.value : (this.settings.masking_text_mode || 'verbose');
+                const payload = {
+                    entities: this.detectionResults,
+                    settings: {
+                        masking_method: this.settings.masking_method,
+                        masking_text_mode,
+                        entities: this.settings.entities,
+                        spacy_model: this.settings.spacy_model
+                    }
+                };
+                const res = await fetch('/api/generate_pdf', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ entities: this.detectionResults })
+                    body: JSON.stringify(payload)
                 });
-                const data = await response.json();
+                const data = await res.json();
                 if (!data.success) throw new Error(data.message);
 
                 this.updateStatus('ダウンロード準備完了');
@@ -953,12 +892,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-
-            } catch (error) {
-                console.error('PDF generation/download error:', error);
-                this.showError(error.message || 'PDFの保存に失敗しました');
-            } finally {
-                this.showLoading(false);
+            } catch (e) {
+                this.showError(e.message || 'PDFの保存に失敗しました');
+            } finally { 
+                this.showLoading(false); 
             }
         }
 
@@ -966,6 +903,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
             this.settings.masking_method = document.getElementById('maskingMethod').value;
             this.settings.spacy_model = document.getElementById('spacyModel').value;
+            const mtm = document.getElementById('maskingTextMode');
+            this.settings.masking_text_mode = mtm ? mtm.value : 'verbose';
             
             // 重複除去設定を取得
             this.settings.deduplication_enabled = document.getElementById('deduplicationEnabled').checked;
@@ -992,6 +931,8 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             document.getElementById('maskingMethod').value = this.settings.masking_method;
             document.getElementById('spacyModel').value = this.settings.spacy_model;
+            const mtm = document.getElementById('maskingTextMode');
+            if (mtm) mtm.value = this.settings.masking_text_mode || 'verbose';
             
             // 重複除去設定をロード
             document.getElementById('deduplicationEnabled').checked = this.settings.deduplication_enabled || false;
@@ -1189,108 +1130,71 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         async addManualEntity(entityType) {
-            if (!this.currentSelection || !this.currentSelection.text.trim() || !this.viewport) {
-                return;
-            }
-            
-            console.log('Adding manual entity:', {
-                entityType,
-                text: this.currentSelection.text,
-                selection: this.currentSelection
-            });
+            if (!this.currentSelection || !this.currentSelection.text.trim() || !this.viewport) return;
+            const vp = this.viewport;
+            const canvasRect = this.elements.pdfCanvas.getBoundingClientRect();
+            const selectionRect = this.currentSelection.rect; // DOMRect (viewport relative)
 
-            const referenceRect = this.elements.textLayer.getBoundingClientRect();
-            const pageHeight = this.viewport.viewBox[3];
+            // DOMRect to Canvas coordinates
+            const vx0 = selectionRect.left - canvasRect.left;
+            const vy0 = selectionRect.top - canvasRect.top;
+            const vx1 = selectionRect.right - canvasRect.left;
+            const vy1 = selectionRect.bottom - canvasRect.top;
 
-            // Get all rects for the selection
-            const clientRects = Array.from(this.currentSelection.range.getClientRects());
-
-            const line_rects = clientRects.map(rect => {
-                const viewportRect = [
-                    rect.left - referenceRect.left,
-                    rect.top - referenceRect.top,
-                    rect.right - referenceRect.left,
-                    rect.bottom - referenceRect.top
-                ];
-
-                const pdfPoint1 = this.viewport.convertToPdfPoint(viewportRect[0], viewportRect[1]);
-                const pdfPoint2 = this.viewport.convertToPdfPoint(viewportRect[2], viewportRect[3]);
-
-                return {
-                    rect: {
-                        x0: Math.min(pdfPoint1[0], pdfPoint2[0]),
-                        y0: Math.min(pdfPoint1[1], pdfPoint2[1]),
-                        x1: Math.max(pdfPoint1[0], pdfPoint2[0]),
-                        y1: Math.max(pdfPoint1[1], pdfPoint2[1])
-                    },
-                    text: '', // Cannot get text per line from clientRects
-                    line_number: 0 // Cannot get line number easily
-                };
-            });
-
-            // The main 'coordinates' can be the overall bounding box
-            const mainRect = this.currentSelection.rect;
-            const mainViewportRect = [
-                mainRect.left - referenceRect.left,
-                mainRect.top - referenceRect.top,
-                mainRect.right - referenceRect.left,
-                mainRect.bottom - referenceRect.top
-            ];
-            const mainPdfPoint1 = this.viewport.convertToPdfPoint(mainViewportRect[0], mainViewportRect[1]);
-            const mainPdfPoint2 = this.viewport.convertToPdfPoint(mainViewportRect[2], mainViewportRect[3]);
-            const coordinates = {
-                x0: Math.min(mainPdfPoint1[0], mainPdfPoint2[0]),
-                y0: Math.min(mainPdfPoint1[1], mainPdfPoint2[1]),
-                x1: Math.max(mainPdfPoint1[0], mainPdfPoint2[0]),
-                y1: Math.max(mainPdfPoint1[1], mainPdfPoint2[1])
-            };
+            // Canvas coordinates to PDF coordinates
+            const rect_pdf = this.viewportRectToPdfRect(vp, vx0, vy0, vx1, vy1);
 
             const newEntity = {
                 entity_type: entityType,
                 text: this.currentSelection.text,
-                page: this.currentPage,
-                coordinates: coordinates,
-                line_rects: line_rects,
+                page_num: this.currentPage - 1, // 0-based
+                rect_pdf,                       // PDF coordinates (bottom-left origin)
+                coordinates: { x0: rect_pdf[0], y0: rect_pdf[1], x1: rect_pdf[2], y1: rect_pdf[3] }, // for compatibility
+                source: 'manual',
                 manual: true,
-                // 詳細位置情報を追加（手動追加でも表示するため）
-                start_page: this.currentPage,
-                end_page: this.currentPage,
-                start_line: 1, // デフォルト値（テキスト位置が不明な場合）
-                end_line: 1,
-                start: 0,
-                end: this.currentSelection.text.length,
+                start_page: this.currentPage, end_page: this.currentPage,
+                start: 0, end: this.currentSelection.text.length
             };
 
-            console.log('Sending entity to server:', newEntity);
+            // 楽観的UI更新（サーバ失敗でも表示は維持）
+            const idx = this.detectionResults.length;
+            this.detectionResults.push({ ...newEntity, _unsynced: true });
+            this.updateSaveButtonState(); // ★追加：ボタンの状態を更新
+            this.renderEntityList(); this.renderHighlights(); this.updateResultCount();
+            this.updateStatus(`手動追加を反映: ${this.getEntityTypeLabel(entityType)} "${newEntity.text}"（保存中）`);
 
-            // サーバーに送信（エラーが出ても無視）
             fetch('/api/highlights/add', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newEntity),
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newEntity)
             })
-            .then(response => response.json())
+            .then(async (res) => {
+                const ct = res.headers.get('content-type') || '';
+                if (!ct.includes('application/json')) throw new Error(await res.text());
+                return res.json();
+            })
             .then(data => {
-                console.log('Server response:', data);
                 if (data.success && data.entity) {
-                    // UIの更新
-                    this.detectionResults.push(data.entity);
-                    this.renderEntityList();
-                    this.renderHighlights();
-                    this.updateResultCount();
-                    this.updateStatus(`手動追加: ${this.getEntityTypeLabel(entityType)} "${this.currentSelection.text}"`);
-                    console.log('Manual entity added successfully');
+                    this.detectionResults[idx] = data.entity;
+                    this.updateSaveButtonState(); // 念のため同期後も更新
+                    this.renderEntityList(); this.renderHighlights(); this.updateResultCount();
+                    this.updateStatus('手動追加完了');
                 } else if (data.message) {
-                    this.showError(data.message);
+                    this.updateStatus(`手動追加は表示済み（サーバ保存未完了）: ${data.message}`, false);
                 }
             })
-            .catch(error => {
-                console.error('Add highlight error:', error);
-                this.showError('ハイライトの追加に失敗しました。');
-            });
+            .catch(err => console.error('Add highlight error:', err));
+        }
 
-            // 常に選択をクリア
-            this.clearTextSelection();
+        // 追加：保存ボタンの活性/非活性を一元管理
+        updateSaveButtonState() {
+            const hasPdf = !!this.currentPdfPath;
+            const hasEntities = Array.isArray(this.detectionResults) && this.detectionResults.length > 0;
+            if (this.elements && this.elements.saveBtn) {
+                this.elements.saveBtn.disabled = !(hasPdf && hasEntities);
+            }
+        }
+
+        async deleteEntity(index) {
         }
 
         getEntityTypeLabel(entityType) {
@@ -1456,6 +1360,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.renderHighlights();
                 this.updateResultCount();
                 this.updateStatus(`削除完了: ${data.deleted_entity.text}`);
+                this.updateSaveButtonState();   // 件数変化に追従
                 
             } catch (error) {
                 console.error('Delete entity error:', error);
