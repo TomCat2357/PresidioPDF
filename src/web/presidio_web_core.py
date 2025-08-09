@@ -302,7 +302,13 @@ class PresidioPDFWebApp:
                         "end_char": entity.get("position_details", {}).get("end_char"),
                         "start": int(entity.get("start", 0)),
                         "end": int(entity.get("end", 0)),
-                        "coordinates": main_coordinates,
+                        "coordinates": main_coordinates,  # Fitz系（x右向き / y下向き）
+                        "rect_pdf": [
+                            float(main_rect.x0),
+                            float(main_rect.y0),
+                            float(main_rect.x1),
+                            float(main_rect.y1),
+                        ],  # Web側はrect_pdfを優先使用（Fitz系）
                         "line_rects": line_rects,
                         "manual": False,  # 自動検出フラグ
                     }
@@ -545,6 +551,203 @@ class PresidioPDFWebApp:
             "filename": os.path.basename(out_path),
             "download_filename": f"masked_{os.path.splitext(os.path.basename(self.current_pdf_path))[0]}.pdf"
         }
+
+    def _apply_highlight_masking_with_mode(
+        self, pdf_path: str, entities: List[Dict], operation_mode: str
+    ) -> str:
+        """操作モードに対応したハイライトマスキング"""
+        logger.info(
+            f"ハイライトマスキング適用中: {pdf_path} (モード: {operation_mode})"
+        )
+
+        try:
+            doc = fitz.open(pdf_path)
+
+            if operation_mode == "clear_all":
+                self._clear_all_highlights(doc)
+                logger.info("既存の全ハイライトを削除しました")
+            elif operation_mode == "reset_and_append":
+                self._clear_all_highlights(doc)
+                logger.info("既存の全ハイライトを削除しました（リセット後追加モード）")
+
+            existing_highlights = []
+            if self.processor and self.processor.config_manager and hasattr(self.processor.config_manager, 'should_remove_identical_annotations') and self.processor.config_manager.should_remove_identical_annotations():
+                existing_highlights = self._get_existing_highlights(doc)
+
+            highlights_added = 0
+
+            for entity in entities:
+                # ★ ページ番号は 0-based（Fitz）を正とする
+                page_num = int(entity.get("page_num", entity.get("page", 0)))
+                if "page" in entity and "page_num" not in entity and entity.get("source") == "manual":
+                    page_num = max(0, page_num - 1)  # 旧1-based混在への防御
+                if not (0 <= page_num < len(doc)):
+                    continue
+
+                rects_to_highlight = entity.get("line_rects", [])
+
+                if not rects_to_highlight:
+                    # ★ 1) 手動追加は rect_pdf（Fitz座標）を最優先で使用
+                    rp = entity.get("rect_pdf")
+                    if isinstance(rp, (list, tuple)) and len(rp) == 4:
+                        rects_to_highlight = [{"rect": fitz.Rect(rp), "page_num": page_num}]
+                    else:
+                        # 2) 自動検出などの coordinates（x0..y1, page_number=1-based）を使用
+                        coords = entity.get("coordinates", {}) or {}
+                        if "page_number" in coords:
+                            page_num = int(coords.get("page_number", 1)) - 1
+                            if not (0 <= page_num < len(doc)):
+                                continue
+                        x0, y0, x1, y1 = (
+                            float(coords.get("x0", 0)),
+                            float(coords.get("y0", 0)),
+                            float(coords.get("x1", 0)),
+                            float(coords.get("y1", 0)),
+                        )
+                        if x0 >= x1 or y0 >= y1:
+                            continue
+                        rect = fitz.Rect(x0, y0, x1, y1)
+                        if rect.is_empty or rect.is_infinite:
+                            continue
+                        rects_to_highlight = [{"rect": rect, "page_num": page_num}]
+
+                for rect_info in rects_to_highlight:
+                    rect = rect_info.get("rect")
+                    page_num = rect_info.get("page_num")
+                    if not isinstance(rect, fitz.Rect):
+                        rect = fitz.Rect(rect["x0"], rect["y0"], rect["x1"], rect["y1"])
+
+                    if self._is_duplicate_highlight(
+                        rect, entity, existing_highlights, page_num
+                    ):
+                        logger.debug(
+                            f"重複ハイライトをスキップ: {entity['text']} ({entity['entity_type']})"
+                        )
+                        continue
+
+                    page = doc[page_num]
+                    self._add_single_highlight(page, rect, entity)
+                    highlights_added += 1
+
+            logger.info(f"追加されたハイライト数: {highlights_added}")
+            doc.save(pdf_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+            doc.close()
+            return pdf_path
+
+        except Exception as e:
+            logger.error(f"ハイライトマスキング中にエラー: {str(e)}")
+            raise
+
+    def _clear_all_highlights(self, doc: fitz.Document):
+        """PDFから既存の全ハイライトを削除"""
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            annotations = page.annots()
+            annotations_to_remove = []
+            
+            for annot in annotations:
+                if annot.type[1] == "Highlight":
+                    annotations_to_remove.append(annot)
+            
+            for annot in annotations_to_remove:
+                page.delete_annot(annot)
+    
+    def _get_existing_highlights(self, doc: fitz.Document) -> List[Dict]:
+        """既存のハイライトを取得"""
+        existing_highlights = []
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            annotations = page.annots()
+            
+            for annot in annotations:
+                if annot.type[1] == "Highlight":
+                    rect = annot.rect
+                    existing_highlights.append({
+                        "rect": rect,
+                        "page_num": page_num,
+                        "annotation": annot
+                    })
+        
+        return existing_highlights
+    
+    def _is_duplicate_highlight(
+        self, rect: fitz.Rect, entity: Dict, existing_highlights: List[Dict], page_num: int
+    ) -> bool:
+        """ハイライトの重複をチェック"""
+        overlap_threshold = 0.9  # 90%以上の重複で重複と判定
+        
+        for existing in existing_highlights:
+            if existing["page_num"] != page_num:
+                continue
+                
+            existing_rect = existing["rect"]
+            
+            # 矩形の重複率を計算
+            overlap_ratio = self._calculate_rect_overlap_ratio(rect, existing_rect)
+            
+            if overlap_ratio >= overlap_threshold:
+                return True
+        
+        return False
+    
+    def _calculate_rect_overlap_ratio(self, rect1: fitz.Rect, rect2: fitz.Rect) -> float:
+        """二つのfitz.Rectの重複率を計算"""
+        try:
+            # 重複領域を計算
+            overlap_x_min = max(rect1.x0, rect2.x0)
+            overlap_y_min = max(rect1.y0, rect2.y0)
+            overlap_x_max = min(rect1.x1, rect2.x1)
+            overlap_y_max = min(rect1.y1, rect2.y1)
+
+            if overlap_x_min >= overlap_x_max or overlap_y_min >= overlap_y_max:
+                return 0.0  # 重複なし
+
+            # 重複面積
+            overlap_area = (overlap_x_max - overlap_x_min) * (overlap_y_max - overlap_y_min)
+
+            # 各矩形の面積
+            area1 = (rect1.x1 - rect1.x0) * (rect1.y1 - rect1.y0)
+            area2 = (rect2.x1 - rect2.x0) * (rect2.y1 - rect2.y0)
+
+            # 小さい方の矩形に対する重複率
+            smaller_area = min(area1, area2)
+            if smaller_area == 0:
+                return 0.0
+
+            return overlap_area / smaller_area
+
+        except Exception as e:
+            logger.error(f"矩形重複率計算エラー: {e}")
+            return 0.0
+    
+    def _add_single_highlight(self, page: fitz.Page, rect: fitz.Rect, entity: Dict):
+        """単一のハイライトを追加"""
+        try:
+            # エンティティタイプに応じた色設定
+            highlight_color_map = {
+                "PERSON": (1, 0.8, 0.8), "LOCATION": (0.8, 1, 0.8), "PHONE_NUMBER": (0.8, 0.8, 1),
+                "DATE_TIME": (1, 1, 0.8), "INDIVIDUAL_NUMBER": (1, 0.8, 1), "YEAR": (0.8, 1, 1),
+                "PROPER_NOUN": (1, 0.86, 0.7), "CUSTOM": (0.9, 0.9, 0.9)
+            }
+            
+            highlight_color = highlight_color_map.get(entity.get("entity_type"), (0.9, 0.9, 0.9))
+            
+            # ハイライト注釈を追加
+            hl = page.add_highlight_annot(rect)
+            hl.set_colors(stroke=highlight_color)
+            hl.set_opacity(0.4)
+            
+            # 注釈情報を設定
+            entity_type_jp = self.get_entity_type_japanese(entity.get("entity_type", "CUSTOM"))
+            title = f"個人情報: {entity_type_jp}"
+            content = entity.get("text", "")
+            
+            hl.set_info(title=title, content=content)
+            hl.update()
+            
+        except Exception as e:
+            logger.error(f"ハイライト追加エラー: {e}")
+            raise
 
     def _is_duplicate_manual_addition(self, new_entity: Dict) -> bool:
         """手動追加の重複をチェック（手動同士の重複防止）"""

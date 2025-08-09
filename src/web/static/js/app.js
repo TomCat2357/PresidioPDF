@@ -425,7 +425,9 @@ document.addEventListener('DOMContentLoaded', () => {
             this.showLoading(true, 'ページを描画中...');
             try {
                 console.log('Getting page from PDF document...');
-                const page = await this.currentPdfDocument.getPage(pageNum);
+                // PDF.jsのPageオブジェクトを保持してページ高さ(PDFポイント)を参照できるようにする
+                this.pdfPage = await this.currentPdfDocument.getPage(pageNum);
+                const page = this.pdfPage;
                 console.log('Page object:', page);
                 
                 const scale = this.zoomLevel / 100;
@@ -523,6 +525,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return { left, top, width, height };
         }
 
+        // === 座標系ユーティリティ（Fitz<->PDF.js のY反転） ===
+        // Fitz(左上原点) -> PDF.js(左下原点)
+        fitzRectToPdfjsRect(rect, pageHeightPt) {
+            const [x0, y0, x1, y1] = rect;
+            return [x0, pageHeightPt - y1, x1, pageHeightPt - y0];
+        }
+        // PDF.js(左下原点) -> Fitz(左上原点)
+        pdfjsRectToFitzRect(rect, pageHeightPt) {
+            const [x0, y0, x1, y1] = rect;
+            return [x0, pageHeightPt - y1, x1, pageHeightPt - y0];
+        }
+
         normRectFromPdfRect(pageWidthPt, pageHeightPt, r) {
             return [r[0]/pageWidthPt, r[1]/pageHeightPt, r[2]/pageWidthPt, r[3]/pageHeightPt];
         }
@@ -547,11 +561,18 @@ document.addEventListener('DOMContentLoaded', () => {
         
         createHighlightElement(entity, index) {
             let pdfRect;
-            if (entity.rect_pdf) {
-                pdfRect = entity.rect_pdf;
-            } else if (entity.coordinates) { // 後方互換性
+            // ページ高さは pdfPage.getViewport(scale=1) を第一候補、なければ現在viewportから算出
+            const pageHeightPt =
+              (this.pdfPage && typeof this.pdfPage.getViewport === 'function'
+                ? this.pdfPage.getViewport({ scale: 1 }).height
+                : undefined) ??
+              (this.viewport ? (this.viewport.height / this.viewport.scale) : undefined);
+            if (entity.rect_pdf && pageHeightPt) {
+                // Fitz -> PDF.js にY反転してからビューポート矩形へ
+                pdfRect = this.fitzRectToPdfjsRect(entity.rect_pdf, pageHeightPt);
+            } else if (entity.coordinates && pageHeightPt) { // 後方互換性（Fitz系）
                 const c = entity.coordinates;
-                pdfRect = [c.x0, c.y0, c.x1, c.y1];
+                pdfRect = this.fitzRectToPdfjsRect([c.x0, c.y0, c.x1, c.y1], pageHeightPt);
             } else {
                 return null;
             }
@@ -1141,15 +1162,27 @@ document.addEventListener('DOMContentLoaded', () => {
             const vx1 = selectionRect.right - canvasRect.left;
             const vy1 = selectionRect.bottom - canvasRect.top;
 
-            // Canvas coordinates to PDF coordinates
-            const rect_pdf = this.viewportRectToPdfRect(vp, vx0, vy0, vx1, vy1);
+            // Canvas -> PDF.js(PDFポイント, 左下原点)
+            const rect_pdf_pdfjs = this.viewportRectToPdfRect(vp, vx0, vy0, vx1, vy1);
+            // PDF.js -> Fitz(PDFポイント, 左上原点) に正規化して保持
+            // ★FIX: viewBoxは存在しないので getViewport(scale=1) または現在のviewportから高さを取得
+            const pageHeightPt =
+              (this.pdfPage && typeof this.pdfPage.getViewport === 'function'
+                ? this.pdfPage.getViewport({ scale: 1 }).height
+                : undefined) ??
+              (vp ? (vp.height / vp.scale) : undefined);
+            if (pageHeightPt == null) {
+              console.error('pageHeightPtの取得に失敗しました');
+              return; // 安全側：追加を中断
+            }
+            const rect_pdf = this.pdfjsRectToFitzRect(rect_pdf_pdfjs, pageHeightPt);
 
             const newEntity = {
                 entity_type: entityType,
                 text: this.currentSelection.text,
                 page_num: this.currentPage - 1, // 0-based
-                rect_pdf,                       // PDF coordinates (bottom-left origin)
-                coordinates: { x0: rect_pdf[0], y0: rect_pdf[1], x1: rect_pdf[2], y1: rect_pdf[3] }, // for compatibility
+                rect_pdf,                       // Fitz系（左上原点）
+                coordinates: { x0: rect_pdf[0], y0: rect_pdf[1], x1: rect_pdf[2], y1: rect_pdf[3] }, // 後方互換（Fitz系）
                 source: 'manual',
                 manual: true,
                 start_page: this.currentPage, end_page: this.currentPage,
