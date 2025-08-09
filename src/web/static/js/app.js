@@ -104,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 entityList: document.getElementById('entityList'),
                 resultCount: document.getElementById('resultCount'),
                 saveBtn: document.getElementById('saveBtn'),
+                resetBtn: document.getElementById('resetBtn'),
                 statusMessage: document.getElementById('statusMessage'),
                 loadingOverlay: document.getElementById('loadingOverlay'),
                 pdfViewer: document.getElementById('pdfViewer'),
@@ -114,7 +115,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 highlightOverlay: document.getElementById('highlightOverlay'),
                 saveSettingsBtn: document.getElementById('saveSettingsBtn'),
                 contextMenu: document.getElementById('contextMenu'),
-                cancelSelection: document.getElementById('cancelSelection')
+                cancelSelection: document.getElementById('cancelSelection'),
+                exportSettingsBtn: document.getElementById('exportSettingsBtn'),
+                importSettingsBtn: document.getElementById('importSettingsBtn'),
+                importSettingsFile: document.getElementById('importSettingsFile'),
+                excludeWords: document.getElementById('excludeWords'),
+                additionalPersonWords: document.getElementById('additionalPersonWords'),
+                additionalLocationWords: document.getElementById('additionalLocationWords'),
+                additionalPhoneWords: document.getElementById('additionalPhoneWords'),
+                additionalDateWords: document.getElementById('additionalDateWords'),
+                additionalIndividualWords: document.getElementById('additionalIndividualWords'),
+                additionalYearWords: document.getElementById('additionalYearWords'),
+                additionalProperNounWords: document.getElementById('additionalProperNounWords')
             };
             this.pdfContext = this.elements.pdfCanvas.getContext('2d');
         }
@@ -143,7 +155,36 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.zoomSlider.addEventListener('input', (e) => this.updateZoom(parseInt(e.target.value, 10)));
             this.elements.showHighlights.addEventListener('change', () => this.renderHighlights());
             this.elements.saveBtn.addEventListener('click', () => this.generateAndDownloadPdf());
+
+            // リセットボタンのイベント
+            this.elements.resetBtn.addEventListener('click', async () => {
+                if (!this.detectionResults.length) { 
+                    this.updateStatus('リセット対象なし'); 
+                    return; 
+                }
+                if (!window.confirm('検出済みの個人情報をすべて削除します。元に戻せません。実行しますか？')) return;
+                try {
+                    this.showLoading(true, 'リセット中...');
+                    await fetch('/api/reset_entities', { method: 'POST' });
+                    this.detectionResults = [];
+                    this.selectedEntityIndex = -1;
+                    this.renderEntityList();
+                    this.renderHighlights();
+                    this.updateResultCount?.();
+                    this.updateSaveButtonState?.();
+                    this.updateStatus('検出結果をリセットしました');
+                } finally { 
+                    this.showLoading(false); 
+                }
+            });
+
+            // 個別のコピーボタンは廃止
             this.elements.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
+
+            // 設定エクスポート・インポートのイベント
+            this.elements.exportSettingsBtn.addEventListener('click', () => this.exportSettings());
+            this.elements.importSettingsBtn.addEventListener('click', () => this.elements.importSettingsFile.click());
+            this.elements.importSettingsFile.addEventListener('change', (e) => this.importSettings(e));
 
             // --- PDFビューアのインタラクティブなイベント（整理・統合済み） ---
 
@@ -172,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
             
-            this.elements.pdfViewer.addEventListener('mouseup', (e) => {
+            this.elements.pdfViewer.addEventListener('mouseup', async (e) => {
                 if (e.button === 0) { // 左クリックのみ
                     console.log('Mouse Up (Left Button)', { x: e.clientX, y: e.clientY });
                     
@@ -253,14 +294,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         // 一時的にcurrentSelectionを設定
                         this.currentSelection = currentSelection;
                         
-                        if (selectedMode && selectedMode.value) {
+                        if (selectedMode && selectedMode.value && selectedMode.value !== 'none') {
                             // エンティティタイプが選択されている場合は直接追加
                             console.log('Adding manual entity:', selectedMode.value);
                             this.addManualEntity(selectedMode.value);
                         } else {
-                            // エンティティタイプが未選択の場合はコンテキストメニューを表示
-                            console.log('Showing context menu at:', e.clientX, e.clientY);
-                            this.showContextMenu(e.clientX, e.clientY);
+                            // コピーモードは自動コピー
+                            try {
+                                await navigator.clipboard.writeText(currentSelection.text);
+                                this.updateStatus(`「${currentSelection.text}」をコピーしました`);
+                            } catch {
+                                this.updateStatus('コピーに失敗しました');
+                            }
                         }
                     } else {
                         console.log('No valid selection found, even in history');
@@ -763,10 +808,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const response = await fetch('/api/detect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    // 手動追加分を常にサーバへ同期してから検出
+                    // 手動追加分と新しい設定をサーバへ同期してから検出
                     body: JSON.stringify({
                         ...this.settings,
-                        manual_entities: this.detectionResults.filter(e => e.manual)
+                        manual_entities: this.detectionResults.filter(e => e.manual),
+                        exclude_words: this.settings.exclude_words || [],
+                        additional_words: this.settings.additional_words || {}
                     })
                 });
                 const data = await response.json();
@@ -809,7 +856,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             this.detectionResults.forEach((entity, index) => {
                 const item = document.createElement('div');
-                item.className = `list-group-item list-group-item-action d-flex justify-content-between align-items-start`;
+                item.className = `list-group-item list-group-item-action d-flex align-items-start gap-2`;
                 if (index === this.selectedEntityIndex) {
                     item.classList.add('active');
                 }
@@ -846,8 +893,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     await this.deleteEntity(index);
                 });
                 
-                item.appendChild(contentDiv);
-                item.appendChild(deleteBtn);
+                item.appendChild(deleteBtn);     // 先にボタン
+                item.appendChild(contentDiv);    // 内容を右側へ
                 listEl.appendChild(item);
             });
         }
@@ -964,6 +1011,18 @@ document.addEventListener('DOMContentLoaded', () => {
             this.settings.deduplication_method = document.getElementById('deduplicationMethod').value;
             this.settings.deduplication_priority = document.getElementById('deduplicationPriority').value;
             this.settings.deduplication_overlap_mode = document.getElementById('deduplicationOverlapMode').value;
+
+            // 除外単語と追加単語設定を取得
+            this.settings.exclude_words = this.elements.excludeWords.value.split('\n').filter(word => word.trim());
+            this.settings.additional_words = {
+                PERSON: this.elements.additionalPersonWords.value.split(',').map(w => w.trim()).filter(w => w),
+                LOCATION: this.elements.additionalLocationWords.value.split(',').map(w => w.trim()).filter(w => w),
+                PHONE_NUMBER: this.elements.additionalPhoneWords.value.split(',').map(w => w.trim()).filter(w => w),
+                DATE_TIME: this.elements.additionalDateWords.value.split(',').map(w => w.trim()).filter(w => w),
+                INDIVIDUAL_NUMBER: this.elements.additionalIndividualWords.value.split(',').map(w => w.trim()).filter(w => w),
+                YEAR: this.elements.additionalYearWords.value.split(',').map(w => w.trim()).filter(w => w),
+                PROPER_NOUN: this.elements.additionalProperNounWords.value.split(',').map(w => w.trim()).filter(w => w)
+            };
             
             console.log('重複除去設定を保存:', {
                 enabled: this.settings.deduplication_enabled,
@@ -992,6 +1051,20 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('deduplicationMethod').value = this.settings.deduplication_method || 'overlap';
             document.getElementById('deduplicationPriority').value = this.settings.deduplication_priority || 'wider_range';
             document.getElementById('deduplicationOverlapMode').value = this.settings.deduplication_overlap_mode || 'partial_overlap';
+
+            // 除外単語と追加単語設定をロード
+            if (this.settings.exclude_words) {
+                this.elements.excludeWords.value = this.settings.exclude_words.join('\n');
+            }
+            if (this.settings.additional_words) {
+                this.elements.additionalPersonWords.value = (this.settings.additional_words.PERSON || []).join(', ');
+                this.elements.additionalLocationWords.value = (this.settings.additional_words.LOCATION || []).join(', ');
+                this.elements.additionalPhoneWords.value = (this.settings.additional_words.PHONE_NUMBER || []).join(', ');
+                this.elements.additionalDateWords.value = (this.settings.additional_words.DATE_TIME || []).join(', ');
+                this.elements.additionalIndividualWords.value = (this.settings.additional_words.INDIVIDUAL_NUMBER || []).join(', ');
+                this.elements.additionalYearWords.value = (this.settings.additional_words.YEAR || []).join(', ');
+                this.elements.additionalProperNounWords.value = (this.settings.additional_words.PROPER_NOUN || []).join(', ');
+            }
             
             console.log('重複除去設定をロード:', {
                 enabled: this.settings.deduplication_enabled,
@@ -999,6 +1072,56 @@ document.addEventListener('DOMContentLoaded', () => {
                 priority: this.settings.deduplication_priority,
                 overlap_mode: this.settings.deduplication_overlap_mode
             });
+        }
+
+        exportSettings() {
+            try {
+                const settingsData = {
+                    ...this.settings,
+                    version: "1.0",
+                    exported_at: new Date().toISOString()
+                };
+                
+                const blob = new Blob([JSON.stringify(settingsData, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `presidio_settings_${new Date().toISOString().slice(0, 10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                this.updateStatus('設定をエクスポートしました');
+            } catch (error) {
+                this.showError('設定のエクスポートに失敗しました');
+            }
+        }
+
+        importSettings(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const settingsData = JSON.parse(e.target.result);
+                    
+                    // 設定をマージ
+                    this.settings = { ...this.settings, ...settingsData };
+                    
+                    // UIに反映
+                    this.loadSettings();
+                    
+                    this.updateStatus('設定をインポートしました');
+                } catch (error) {
+                    this.showError('設定ファイルの読み込みに失敗しました');
+                }
+            };
+            reader.readAsText(file);
+            
+            // ファイル選択をリセット
+            event.target.value = '';
         }
 
         getEntityTypeJapanese(entityType) {
@@ -1170,15 +1293,17 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        handleModeBasedSelection() {
+        async handleModeBasedSelection() {
             const selectedMode = document.querySelector('input[name="entityMode"]:checked');
-            if (!selectedMode || !selectedMode.value) {
-                this.updateStatus('手動追加するには、まずエンティティタイプ（人名など）を選択してください。', false);
+            const entityType = selectedMode ? selectedMode.value : '';
+            if (entityType === 'none' || entityType === '') {
+                const t = this.currentSelection?.text?.trim();
+                if (!t) { this.updateStatus('コピー対象の選択がありません'); return; }
+                try { await navigator.clipboard.writeText(t); this.updateStatus(`「${t}」をコピーしました`); }
+                catch { this.updateStatus('コピーに失敗しました'); }
                 this.clearTextSelection();
                 return;
             }
-
-            const entityType = selectedMode.value;
             this.addManualEntity(entityType);
         }
 

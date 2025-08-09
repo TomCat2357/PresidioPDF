@@ -113,6 +113,15 @@ def detect_entities():
             preserved = [e for e in manual_entities if e.get("manual")]
             app_instance.detection_results = preserved
 
+        # 除外単語と追加単語設定を適用
+        exclude_words = settings_data.get("exclude_words", [])
+        additional_words = settings_data.get("additional_words", {})
+        if exclude_words or additional_words:
+            logger.info(f"除外単語: {exclude_words}")
+            logger.info(f"追加検出単語: {additional_words}")
+            app_instance.settings["exclude_words"] = exclude_words
+            app_instance.settings["additional_words"] = additional_words
+
         logger.info("現在の検出対象エンティティ:")
         logger.info(
             f"  - app_instance.settings['entities']: {app_instance.settings.get('entities', [])}"
@@ -151,6 +160,17 @@ def delete_entity(index):
     except Exception as e:
         logger.error(f"エンティティ削除エラー: {e}")
         return jsonify({"success": False, "message": f"削除エラー: {str(e)}"})
+
+@app.route("/api/reset_entities", methods=["POST"])
+def reset_entities():
+    """PII検出結果一括リセット"""
+    try:
+        app_instance = get_session_app()
+        app_instance.detection_results = []
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"リセットエラー: {e}")
+        return jsonify({"success": False, "message": f"リセットエラー: {str(e)}"})
 
 
 @app.route("/api/generate_pdf", methods=["POST"])

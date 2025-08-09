@@ -184,6 +184,8 @@
             border: 1px solid #dee2e6;
             border-radius: 5px;
         }
+        .entity-list .list-group-item .btn-outline-danger{flex-shrink:0}
+        .entity-list .list-group-item .text-truncate{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
         
         .entity-item {
             padding: 10px;
@@ -226,6 +228,8 @@
             cursor: pointer;
             transition: border-color 0.3s;
             max-height: 120px;
+        }
+        .upload-area p{font-size:0.95rem; line-height:1.4; margin:0; word-break:break-word}
         }
         
         .upload-area:hover {
@@ -408,7 +412,10 @@
                         <div class="btn-group-vertical w-100">
                             <button class="btn btn-primary" id="detectBtn" disabled>
                                 <i class="fas fa-search"></i> 検出開始
+                            </button>                            <button class="btn btn-outline-danger" id="resetBtn">
+                                <i class="fas fa-trash-restore"></i> 検出結果リセット
                             </button>
+
                             <button class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#settingsModal">
                                 <i class="fas fa-cog"></i> 設定
                             </button>
@@ -421,10 +428,11 @@
                         <h5>手動追加ツール</h5>
                         <div class="manual-add-toolbar">
                             <div class="btn-group mb-2" role="group">
-                                <input type="radio" class="btn-check" name="entityMode" id="mode-none" value="" checked>
+                                <input type="radio" class="btn-check" name="entityMode" id="mode-none" value="none" checked>
                                 <label class="btn btn-outline-secondary btn-sm" for="mode-none">
-                                    <i class="fas fa-mouse-pointer"></i> 通常
+                                    <i class="fas fa-copy"></i> コピー
                                 </label>
+                                <!-- 個別のコピーボタンは削除 -->
                             
                                 <input type="radio" class="btn-check" name="entityMode" id="mode-person" value="PERSON">
                                 <label class="btn btn-outline-danger btn-sm" for="mode-person">
@@ -565,29 +573,50 @@
                             <input class="form-check-input" type="checkbox" id="entityPerson" value="PERSON">
                             <label class="form-check-label" for="entityPerson">人名</label>
                         </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalPersonWords" placeholder="追加で検出する人名（カンマ区切り）">
+                        </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="entityLocation" value="LOCATION">
                             <label class="form-check-label" for="entityLocation">場所</label>
+                        </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalLocationWords" placeholder="追加で検出する場所名（カンマ区切り）">
                         </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="entityPhone" value="PHONE_NUMBER">
                             <label class="form-check-label" for="entityPhone">電話番号</label>
                         </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalPhoneWords" placeholder="追加で検出する電話番号パターン（カンマ区切り）">
+                        </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="entityDate" value="DATE_TIME">
                             <label class="form-check-label" for="entityDate">日時</label>
+                        </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalDateWords" placeholder="追加で検出する日時表現（カンマ区切り）">
                         </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="entityIndividualNumber" value="INDIVIDUAL_NUMBER">
                             <label class="form-check-label" for="entityIndividualNumber">個人番号</label>
                         </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalIndividualWords" placeholder="追加で検出する個人番号パターン（カンマ区切り）">
+                        </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="entityYear" value="YEAR">
                             <label class="form-check-label" for="entityYear">年号</label>
                         </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalYearWords" placeholder="追加で検出する年号（カンマ区切り）">
+                        </div>
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="entityProperNoun" value="PROPER_NOUN">
                             <label class="form-check-label" for="entityProperNoun">固有名詞</label>
+                        </div>
+                        <div class="ms-4 mb-2">
+                            <input type="text" class="form-control form-control-sm" id="additionalProperNounWords" placeholder="追加で検出する固有名詞（カンマ区切り）">
                         </div>
                     </div>
                     <div class="mb-3">
@@ -653,8 +682,24 @@
                             重複除去を有効にすると、重複した個人情報の検出結果を統合します
                         </small>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">除外単語設定</label>
+                        <textarea class="form-control" id="excludeWords" rows="3" placeholder="検出から除外する単語を1行ずつ入力してください&#10;例：&#10;東京&#10;日本&#10;会社"></textarea>
+                        <small class="form-text text-muted">
+                            ここに入力した単語は個人情報として検出されません
+                        </small>
+                    </div>
                 </div>
                 <div class="modal-footer">
+                    <div class="me-auto">
+                        <button type="button" class="btn btn-outline-success btn-sm" id="exportSettingsBtn">
+                            <i class="fas fa-download"></i> 設定エクスポート
+                        </button>
+                        <input type="file" id="importSettingsFile" accept=".json" style="display: none;">
+                        <button type="button" class="btn btn-outline-info btn-sm ms-1" id="importSettingsBtn">
+                            <i class="fas fa-upload"></i> 設定インポート
+                        </button>
+                    </div>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
                     <button type="button" class="btn btn-primary" id="saveSettingsBtn">保存</button>
                 </div>
