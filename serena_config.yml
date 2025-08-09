@@ -1,0 +1,35 @@
+gui_log_window: False
+# whether to open a graphical window with Serena's logs.
+
+web_dashboard: True
+# whether to open the Serena web dashboard (which will be accessible through your web browser)
+
+web_dashboard_open_on_launch: False
+# whether to open a browser window with the web dashboard when Serena starts
+# Changed to False to prevent automatic browser opening
+
+log_level: 20
+# the minimum log level for the GUI log window and the dashboard (10 = debug, 20 = info, 30 = warning, 40 = error)
+
+trace_lsp_communication: False
+# whether to trace the communication between Serena and the language servers.
+
+tool_timeout: 240
+# timeout, in seconds, after which tool executions are terminated
+
+excluded_tools: []
+# list of tools to be globally excluded
+
+included_optional_tools: []
+# list of optional tools (which are disabled by default) to be included
+
+jetbrains: False
+# whether to enable JetBrains mode
+
+record_tool_usage_stats: False
+# whether to record tool usage statistics
+
+token_count_estimator: TIKTOKEN_GPT4O
+# token count estimator for tool usage statistics
+
+projects: []
