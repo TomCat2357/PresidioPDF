@@ -222,15 +222,26 @@
         .upload-area {
             border: 2px dashed #ccc;
             border-radius: 10px;
-            padding: 15px;
+            padding: 20px;
             text-align: center;
             background: #f8f9fa;
             cursor: pointer;
             transition: border-color 0.3s;
-            max-height: 120px;
+            min-height: 180px; /* 高さ不足でのはみ出しを解消 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
         }
-        .upload-area p{font-size:0.95rem; line-height:1.4; margin:0; word-break:break-word}
+        .upload-area p {
+            font-size: 1rem;
+            line-height: 1.5;
+            margin: 0;
+            word-break: break-word;
+            white-space: normal; /* 折り返し許可 */
+            text-wrap: balance;
         }
+        .upload-area small { display: block; margin-top: 6px; }
         
         .upload-area:hover {
             border-color: #007bff;
