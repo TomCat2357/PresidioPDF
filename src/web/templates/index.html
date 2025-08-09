@@ -570,7 +570,7 @@
         </div>
     </div>
 
-    <div class="modal fade" id="settingsModal" tabindex="-1">
+    <div class="modal fade" id="settingsModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false" style="z-index:2000;">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
@@ -695,9 +695,9 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">除外単語設定</label>
-                        <textarea class="form-control" id="excludeWords" rows="3" placeholder="検出から除外する単語を1行ずつ入力してください&#10;例：&#10;東京&#10;日本&#10;会社"></textarea>
+                        <textarea class="form-control" id="excludeWords" rows="3" placeholder="検出から除外するパターンを空白区切りで入力（正規表現可）&#10;例：&#10;東京 日本 ^(株式)?会社$"></textarea>
                         <small class="form-text text-muted">
-                            ここに入力した単語は個人情報として検出されません
+                            ここに入力したパターンは個人情報として検出されません。複数指定は半角/全角スペースで区切ってください。
                         </small>
                     </div>
                 </div>

@@ -19,6 +19,7 @@ import json
 import uuid
 import logging
 import traceback
+import re
 import fitz  # PyMuPDF
 
 from web.web_config import app, logger
@@ -115,11 +116,14 @@ def detect_entities():
 
         # 除外単語と追加単語設定を適用
         exclude_words = settings_data.get("exclude_words", [])
+        exclude_regex = settings_data.get("exclude_regex", [])
         additional_words = settings_data.get("additional_words", {})
-        if exclude_words or additional_words:
+        if exclude_words or exclude_regex or additional_words:
             logger.info(f"除外単語: {exclude_words}")
+            logger.info(f"除外正規表現: {exclude_regex}")
             logger.info(f"追加検出単語: {additional_words}")
             app_instance.settings["exclude_words"] = exclude_words
+            app_instance.settings["exclude_regex"] = exclude_regex
             app_instance.settings["additional_words"] = additional_words
 
         logger.info("現在の検出対象エンティティ:")

@@ -135,6 +135,20 @@ document.addEventListener('DOMContentLoaded', () => {
         // ==  イベント処理の根本的な修正  ==
         // =================================================================
         bindEvents() {
+            // 設定モーダル内の入力を外部ショートカットから保護
+            const settingsModalEl = document.getElementById('settingsModal');
+            if (settingsModalEl) {
+                const stop = (e) => { e.stopPropagation(); };
+                ['keydown','keyup','keypress','input','compositionstart','compositionupdate','compositionend',
+                 'wheel','mousedown','pointerdown','touchstart','contextmenu']
+                  .forEach(evt => settingsModalEl.addEventListener(evt, stop, true));
+                settingsModalEl.addEventListener('shown.bs.modal', () => {
+                    const first = document.getElementById('excludeWords')
+                              || settingsModalEl.querySelector('textarea, input');
+                    if (first) first.focus();
+                });
+            }
+
             // --- ファイル操作と基本的なUIボタンのイベント ---
             this.elements.uploadArea.addEventListener('click', () => this.elements.pdfFileInput.click());
             this.elements.pdfFileInput.addEventListener('change', (e) => this.handleFileSelect(e.target.files[0]));
@@ -155,6 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.zoomSlider.addEventListener('input', (e) => this.updateZoom(parseInt(e.target.value, 10)));
             this.elements.showHighlights.addEventListener('change', () => this.renderHighlights());
             this.elements.saveBtn.addEventListener('click', () => this.generateAndDownloadPdf());
+
 
             // リセットボタンのイベント
             this.elements.resetBtn.addEventListener('click', async () => {
@@ -321,6 +336,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // 5. テキストの選択範囲が変化するたびに、選択情報を更新し、ログを出力
             document.addEventListener('selectionchange', () => {
+                // モーダル内でのIME/入力は監視対象外
+                const ae = document.activeElement;
+                if (settingsModalEl && ae && settingsModalEl.contains(ae)) return;
+                
                 const selection = window.getSelection();
                 if (selection && selection.rangeCount > 0) {
                     const range = selection.getRangeAt(0);
@@ -376,7 +395,11 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // 6. PDFビューア外のクリックでコンテキストメニューを閉じる
             document.addEventListener('click', (e) => {
-                if (this.elements.contextMenu && !this.elements.contextMenu.contains(e.target)) {
+                // モーダル内クリックは無視
+                if (settingsModalEl && settingsModalEl.contains(e.target)) return;
+                
+                if (this.elements.contextMenu && 
+                    !this.elements.contextMenu.contains(e.target)) {
                     this.hideContextMenu();
                 }
             });
@@ -1013,7 +1036,8 @@ document.addEventListener('DOMContentLoaded', () => {
             this.settings.deduplication_overlap_mode = document.getElementById('deduplicationOverlapMode').value;
 
             // 除外単語と追加単語設定を取得
-            this.settings.exclude_words = this.elements.excludeWords.value.split('\n').filter(word => word.trim());
+            const raw = this.elements.excludeWords.value.trim();
+            this.settings.exclude_regex = raw ? raw.split(/[ \u3000]+/).filter(Boolean) : [];
             this.settings.additional_words = {
                 PERSON: this.elements.additionalPersonWords.value.split(',').map(w => w.trim()).filter(w => w),
                 LOCATION: this.elements.additionalLocationWords.value.split(',').map(w => w.trim()).filter(w => w),

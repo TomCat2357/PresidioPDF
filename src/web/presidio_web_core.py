@@ -165,6 +165,20 @@ class PresidioPDFWebApp:
     def run_detection(self) -> Dict:
         """個人情報検出処理を実行（オフセットベース座標特定）"""
         try:
+            # Webの除外パターン(空白区切り, 正規表現)をConfigManagerに反映
+            import re
+            cm = self.processor.config_manager
+            web_patterns = self.settings.get("exclude_regex", [])
+            # 互換: 旧キー exclude_words が来たら空白分割して利用
+            if not web_patterns:
+                legacy = self.settings.get("exclude_words", [])
+                if isinstance(legacy, list):
+                    legacy = " ".join([s for s in legacy if isinstance(s, str)])
+                web_patterns = [p for p in re.split(r"[ \u3000]+", legacy or "") if p]
+            ex = cm.get_exclusions()
+            ex["text_exclusions_regex"] = web_patterns
+            cm.config["exclusions"] = ex
+            
             logger.info(f"=== run_detection開始 ===")
             logger.info(f"PDF path: {self.current_pdf_path}")
             logger.info(f"Processor存在: {self.processor is not None}")
