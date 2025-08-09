@@ -283,6 +283,9 @@ def add_highlight():
     app_instance = get_session_app()
     data = request.get_json() or {}
     # page_num(0-based)と rect_pdf/rect_norm をそのまま保持
+    # line_rects も受け取り保持（複数行ハイライト用）
+    if 'line_rects' in data and not isinstance(data['line_rects'], list):
+        data['line_rects'] = []
     entity = {
         "entity_type": data.get("entity_type", "CUSTOM"),
         "text": data.get("text", ""),
@@ -292,7 +295,8 @@ def add_highlight():
         "source": "manual",
         "manual": True,
         "start_page": int(data.get("start_page", int(data.get("page", 1)))),
-        "end_page": int(data.get("end_page", int(data.get("page", 1))))
+        "end_page": int(data.get("end_page", int(data.get("page", 1)))),
+        "line_rects": data.get("line_rects", [])
     }
     app_instance.detection_results.append(entity)
     return jsonify({"success": True, "entity": entity})

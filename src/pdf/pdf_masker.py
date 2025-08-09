@@ -195,22 +195,33 @@ class PDFMasker:
                         continue
                     rects_to_highlight = [{"rect": rect, "page_num": page_num}]
 
+                quads_by_page = {}
                 for rect_info in rects_to_highlight:
-                    rect = rect_info.get("rect")
-                    page_num = rect_info.get("page_num")
-                    if not isinstance(rect, fitz.Rect):
-                        rect = fitz.Rect(rect["x0"], rect["y0"], rect["x1"], rect["y1"])
-
-                    if self._is_duplicate_highlight(
-                        rect, entity, existing_highlights, page_num
-                    ):
-                        logger.debug(
-                            f"重複ハイライトをスキップ: {entity['text']} ({entity['entity_type']})"
-                        )
-                        continue
-
+                    page_num = int(rect_info.get("page_num"))
                     page = doc[page_num]
-                    self._add_single_highlight(page, rect, entity)
+                    space = rect_info.get("coord_space") or rect_info.get("space") or "fitz"
+                    rdict = rect_info.get("rect") or {}
+                    try:
+                        x0 = float(rdict["x0"]); y0 = float(rdict["y0"])
+                        x1 = float(rdict["x1"]); y1 = float(rdict["y1"])
+                    except Exception:
+                        continue  # 値が欠けている / 数値化できない
+                    r = fitz.Rect(x0, y0, x1, y1)
+                    if space == "pdf":
+                        ph = page.rect.height
+                        r = fitz.Rect(r.x0, ph - r.y1, r.x1, ph - r.y0)  # Y反転
+                    r = r & page.rect
+                    if (not r) or r.width <= 0 or r.height <= 0:
+                        continue
+                    quads_by_page.setdefault(page_num, []).append(fitz.Quad(r))
+
+                for page_num, quads in quads_by_page.items():
+                    page = doc[page_num]
+                    # 既存重複チェックは代表矩形で行う（最初の行を代表）
+                    rep_rect = quads[0].rect
+                    if self._is_duplicate_highlight(rep_rect, entity, existing_highlights, page_num):
+                        continue
+                    self._add_single_highlight(page, quads, entity)  # ← quads対応版
                     highlights_added += 1
 
             doc.save(pdf_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
@@ -253,44 +264,28 @@ class PDFMasker:
         except Exception as e:
             logger.warning(f"注釈追加でエラー: {e} (エンティティ: {entity['text']})")
 
-    def _add_single_highlight(self, page: fitz.Page, rect: fitz.Rect, entity: Dict):
-        """単一のハイライトを追加"""
+    def _add_single_highlight(self, page: fitz.Page, rect_or_quads, entity: Dict):
+        """単一のハイライトを追加（Rect または list[Quad]）"""
         try:
             color = self._get_highlight_color_pymupdf(entity["entity_type"])
-
-            highlight = page.add_highlight_annot(rect)
+            # 形は Rect または list[Quad] のどちらかに限定
+            if isinstance(rect_or_quads, list):
+                quads = [q for q in rect_or_quads if isinstance(q, fitz.Quad)]
+                if not quads:
+                    return
+                highlight = page.add_highlight_annot(quads)
+            else:
+                highlight = page.add_highlight_annot(rect_or_quads)
             highlight.set_colors(stroke=color)
-
-            text_display_mode = self.config_manager.get_masking_text_display_mode()
-
-            if text_display_mode == "silent":
-                highlight.set_info(title="", content="")
-            elif text_display_mode == "minimal":
-                type_names = {
-                    "PERSON": "人名",
-                    "LOCATION": "場所",
-                    "DATE_TIME": "日時",
-                    "PHONE_NUMBER": "電話番号",
-                    "INDIVIDUAL_NUMBER": "マイナンバー",
-                    "YEAR": "年号",
-                    "PROPER_NOUN": "固有名詞",
-                }
-                type_name = type_names.get(entity["entity_type"], entity["entity_type"])
-                highlight.set_info(title=type_name, content="")
-            else:  # verbose
-                highlight.set_info(
-                    title=f"個人情報: {entity['entity_type']}", content=entity["text"]
-                )
-
+            highlight.set_opacity(0.4)
+            highlight.set_info(
+                title=str(entity.get("entity_type", "PII")),
+                content=str(entity.get("text", "")),
+            )
+            highlight.flags |= fitz.PDF_ANNOT_FLAG_PRINT
             highlight.update()
-            logger.debug(
-                f"ハイライトを追加: {entity['entity_type']} - {entity['text']}"
-            )
-
         except Exception as e:
-            logger.warning(
-                f"ハイライト追加でエラー: {e} (エンティティ: {entity['text']})"
-            )
+            logger.warning(f"add_highlight failed: {type(e).__name__}: {e}")
 
     def _get_annotation_color_pymupdf(self, entity_type: str) -> List[float]:
         """エンティティタイプに応じたPyMuPDF用注釈色を取得"""

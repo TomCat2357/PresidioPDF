@@ -8,6 +8,7 @@ import os
 import json
 import uuid
 import logging
+import math
 import traceback
 import shutil
 from datetime import datetime
@@ -44,8 +45,9 @@ class PresidioPDFWebApp:
                 "YEAR",
                 "PROPER_NOUN",
             ],
-            "masking_method": "highlight",  # highlight, annotation, both
-            "spacy_model": "ja_core_news_md",
+            "masking_method": "highlight",  # ハイライトのみ（FreeTextは作らない）
+            "masking_text_mode": "verbose",
+            "spacy_model": "ja_core_news_sm",  # CPUモードデフォルトをsmに変更
             # 重複除去設定（CLI版と同様）
             "deduplication_enabled": False,
             "deduplication_method": "overlap",  # exact, contain, overlap
@@ -71,10 +73,8 @@ class PresidioPDFWebApp:
 
                 # CPU/GPUモードの設定
                 if not self.use_gpu:
-                    # CPUモード強制のため、設定を上書き
-                    config_manager.spacy_model = getattr(
-                        config_manager, "spacy_model", "ja_core_news_sm"
-                    )
+                    # CPU強制時の確実な上書き処理
+                    config_manager.spacy_model = "ja_core_news_sm"
                     logger.info(
                         f"CPUモードで初期化中: spaCyモデル = {config_manager.spacy_model}"
                     )
@@ -272,6 +272,7 @@ class PresidioPDFWebApp:
                                     "x1": float(rect.x1),
                                     "y1": float(rect.y1),
                                 },
+                                "coord_space": "fitz",  # フロント側でY反転して描画
                                 "text": entity["text"],  # 簡略化
                                 "line_number": i + 1,
                                 "page_num": rect_data["page_num"],
@@ -502,8 +503,8 @@ class PresidioPDFWebApp:
         shutil.copy2(self.current_pdf_path, out_path)
         doc = fitz.open(out_path)
 
-        # Web UIからの設定を取得
-        masking_method = self.settings.get("masking_method", "highlight")
+        # Web UIからの設定を取得（強制的にハイライトのみに統一）
+        masking_method = "highlight"
         text_display_mode = self.settings.get("masking_text_mode", "verbose")
 
         for e in self.detection_results:
@@ -532,17 +533,83 @@ class PresidioPDFWebApp:
 
             content = self._generate_web_annotation_content(e, text_display_mode)
 
-            if masking_method in ("annotation", "both"):
-                annot = page.add_freetext_annot(rect, content["text"], fontsize=8, text_color=color)
-                annot.set_info(title=content["title"], content=content["content"])
-                annot.update()
+            # FreeText注釈は作成しない
 
-            if masking_method in ("highlight", "both"):
-                hl = page.add_highlight_annot(rect)
-                hl.set_colors(stroke=highlight_color)
-                hl.set_opacity(0.4)
-                hl.set_info(title=content["title"], content=content["content"])
-                hl.update()
+            if True:  # ハイライトのみ
+                def _to_float(v): return float(v)
+                def _fitz_rect_from_any(rect_like, space, page):
+                    # dict({x0..}) / list([x0,y0,x1,y1]) / tuple を許容
+                    if rect_like is None:
+                        return None
+                    if isinstance(rect_like, (list, tuple)) and len(rect_like) == 4:
+                        x0, y0, x1, y1 = map(_to_float, rect_like)
+                    elif isinstance(rect_like, dict) and all(k in rect_like for k in ("x0","y0","x1","y1")):
+                        x0 = _to_float(rect_like["x0"]); y0 = _to_float(rect_like["y0"])
+                        x1 = _to_float(rect_like["x1"]); y1 = _to_float(rect_like["y1"])
+                    else:
+                        return None
+                    r = fitz.Rect(x0, y0, x1, y1)
+                    if space == "pdf":
+                        ph = page.rect.height
+                        r = fitz.Rect(r.x0, ph - r.y1, r.x1, ph - r.y0)  # Y反転
+                    r = r & page.rect
+                    if (not r) or r.width <= 0 or r.height <= 0:
+                        return None
+                    return r
+
+                line_rects = e.get("line_rects") or []
+                rects_valid = []
+                for lr in line_rects:
+                    space = (lr.get("coord_space") or lr.get("space") or "fitz")
+                    r = _fitz_rect_from_any(lr.get("rect"), space, page)
+                    if r is not None:
+                        rects_valid.append(r)
+
+                # 改行またぎ: 字rect群をクレンジング
+                rects_valid = self._clean_rects(rects_valid, page)
+                if rects_valid:
+                    # 1) PyMuPDF>=1.23系は Rect[] を直接受け付ける
+                    try:
+                        hl = page.add_highlight_annot(rects_valid)
+                        hl.set_colors(stroke=highlight_color)
+                        hl.set_opacity(0.4)
+                        hl.set_info(title=content["title"], content=content["content"])
+                        hl.update()
+                    except Exception as ex_list:
+                        # 2) 互換: Quad[] を試す
+                        try:
+                            quads = self._merge_into_line_quads(rects_valid)
+                            hl = page.add_highlight_annot(quads)
+                            hl.set_colors(stroke=highlight_color)
+                            hl.set_opacity(0.4)
+                            hl.set_info(title=content["title"], content=content["content"])
+                            hl.update()
+                        except Exception as ex_quad:
+                            logger.warning(
+                                f"multi-line highlight failed: {type(ex_quad).__name__}: {ex_quad}"
+                            )
+                            # 3) 最終フォールバック: 行ごとに単発で付与
+                            for r in rects_valid:
+                                try:
+                                    _hl = page.add_highlight_annot(r)
+                                    _hl.set_colors(stroke=highlight_color)
+                                    _hl.set_opacity(0.4)
+                                    _hl.set_info(title=content['title'], content=content['content'])
+                                    _hl.update()
+                                except Exception as ex_single:
+                                    logger.warning(f"single-line highlight failed: {type(ex_single).__name__}: {ex_single}")
+                else:
+                    # フォールバック：1矩形のみ
+                    base_rect = self._rect_for_entity(e, page)
+                    if base_rect:
+                        try:
+                            hl = page.add_highlight_annot(base_rect)
+                            hl.set_colors(stroke=highlight_color)
+                            hl.set_opacity(0.4)
+                            hl.set_info(title=content["title"], content=content["content"])
+                            hl.update()
+                        except Exception as ex:
+                            logger.warning(f"base highlight failed: {type(ex).__name__}: {ex}")
 
         doc.save(out_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
         doc.close()
@@ -955,3 +1022,56 @@ class PresidioPDFWebApp:
             "CUSTOM": "カスタム",
         }
         return mapping.get(entity_type, entity_type)
+
+    # --- rectユーティリティ ---
+    @staticmethod
+    def _clean_rects(rects, page, min_w=0.8, min_h=0.8):
+        cleaned = []
+        for r in rects or []:
+            try:
+                R = fitz.Rect(r).normalize()
+            except Exception:
+                continue
+            if R.is_empty:
+                continue
+            # ページ外はクリップ
+            R = R & page.rect
+            if R.width < min_w or R.height < min_h:
+                continue
+            cleaned.append(R)
+        return cleaned
+
+    @staticmethod
+    def _merge_into_line_quads(rects, x_gap_tol=1.5):
+        """字単位rect群 -> 行単位rect群 -> Quad配列"""
+        if not rects:
+            return []
+        rects = sorted(rects, key=lambda r: (round(r.y0, 1), r.x0))
+        groups = []
+        cur = [rects[0]]
+        gy0, gy1 = rects[0].y0, rects[0].y1
+        for r in rects[1:]:
+            vov = min(gy1, r.y1) - max(gy0, r.y0)  # 縦方向オーバーラップ
+            if vov >= min(r.height, gy1 - gy0) * 0.5:
+                cur.append(r)
+                gy0, gy1 = min(gy0, r.y0), max(gy1, r.y1)
+            else:
+                groups.append(cur)
+                cur = [r]
+                gy0, gy1 = r.y0, r.y1
+        groups.append(cur)
+
+        merged = []
+        for g in groups:
+            g = sorted(g, key=lambda r: r.x0)
+            run = g[0]
+            for r in g[1:]:
+                gap = r.x0 - run.x1
+                if gap <= x_gap_tol:  # 近接は結合
+                    run = fitz.Rect(min(run.x0, r.x0), min(run.y0, r.y0),
+                                    max(run.x1, r.x1), max(run.y1, r.y1))
+                else:
+                    merged.append(run)
+                    run = r
+            merged.append(run)
+        return [fitz.Quad(r) for r in merged]

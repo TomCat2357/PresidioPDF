@@ -70,7 +70,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             this.settings = {
                 entities: ["PERSON", "LOCATION", "PHONE_NUMBER", "DATE_TIME", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN"],
-                masking_method: "highlight",
+                masking_method: "both",           // 既定をbothへ（ハイライト＋FreeText）
+                masking_text_mode: "verbose",
                 spacy_model: "ja_core_news_sm",
                 // 重複除去設定（CLI版と同様）
                 deduplication_enabled: false,
@@ -298,10 +299,17 @@ document.addEventListener('DOMContentLoaded', () => {
                             const rect = range.getBoundingClientRect();
                             const referenceRect = this.elements.textLayer.getBoundingClientRect(); 
                             
+                            // 行ごとのクライアント矩形を保持（複数行対応）
+                            const clientRects = Array.from(range.getClientRects()).map(r => ({
+                                left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+                                width: r.width, height: r.height
+                            }));
+                            
                             const selectionData = {
                                 text: selectedText,
                                 range: range.cloneRange(),
                                 rect: rect,
+                                rects: clientRects,
                                 pdfX: rect.left - referenceRect.left,
                                 pdfY: rect.top - referenceRect.top,
                                 pageNumber: this.currentPage,
@@ -396,8 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.totalPages = this.currentPdfDocument.numPages;
                 this.currentPage = 1;
                 this.elements.detectBtn.disabled = false;
-                
-                console.log('Rendering first page...');
+                console.log('Rendering first page.');
                 await this.renderPage(this.currentPage);
                 this.updateStatus(`PDF読み込み完了: ${file.name}`);
                 console.log('PDF loading completed successfully');
@@ -552,7 +559,13 @@ document.addEventListener('DOMContentLoaded', () => {
             
             pageEntities.forEach((entity) => {
                 const globalIndex = this.detectionResults.indexOf(entity);
-                const el = this.createHighlightElement(entity, globalIndex);
+                // line_rects があれば複数行ハイライト、なければ単一
+                const needMulti =
+                  (Array.isArray(entity.line_rects) && entity.line_rects.length > 0) ||
+                  (typeof entity.text === 'string' && entity.text.includes('\n'));
+                const el = needMulti
+                  ? this.createMultiLineHighlight(entity, globalIndex)
+                  : this.createHighlightElement(entity, globalIndex);
                 if (el) {
                     container.appendChild(el);
                 }
@@ -623,6 +636,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 lineRects = this.estimateLineRects(entity);
             }
 
+            // PDFページの実寸を取得（Y反転に使用）
+            const pageHeightPt =
+              (this.pdfPage && typeof this.pdfPage.getViewport === 'function'
+                ? this.pdfPage.getViewport({ scale: 1 }).height
+                : undefined) ??
+              (this.viewport ? (this.viewport.height / this.viewport.scale) : undefined);
+
             console.log('Multi-line highlight creation:', {
                 entityText: entity.text,
                 lineRectsCount: lineRects.length,
@@ -639,16 +659,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     highlightEl.classList.add('selected');
                 }
 
-                // line_rects も PDFユーザ空間（左下原点）。Y反転は不要
-                const pdfRect = [
-                    lineRect.rect.x0,
-                    lineRect.rect.y0,
-                    lineRect.rect.x1,
-                    lineRect.rect.y1
-                ];
+                // line_rects の座標系を判別してPDFユーザ空間に正規化
+                const space = (lineRect.coord_space || lineRect.space || 'fitz'); // 後方互換：未指定はfitz扱い
+                let pdfRect;
+                if (space === 'fitz') {
+                    if (!pageHeightPt) return; // 安全策
+                    pdfRect = this.fitzRectToPdfjsRect(
+                      [lineRect.rect.x0, lineRect.rect.y0, lineRect.rect.x1, lineRect.rect.y1],
+                      pageHeightPt
+                    );
+                } else {
+                    // 'pdf' はそのまま
+                    pdfRect = [
+                      lineRect.rect.x0, lineRect.rect.y0, lineRect.rect.x1, lineRect.rect.y1
+                    ];
+                }
 
                 console.log(`Line ${lineIndex} conversion:`, {
                     originalRect: lineRect.rect,
+                    coordSpace: space,
                     pdfRect: pdfRect
                 });
 
@@ -692,8 +721,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // テキストが改行を含む場合、各行の矩形を推定
             const lines = entity.text.split('\n');
             const lineRects = [];
-            
+
             if (lines.length > 1) {
+                // 旧来の推定ロジック：coordinates（Fitz）の全体矩形を行数で割る
                 const baseRect = entity.coordinates;
                 const lineHeight = (baseRect.y1 - baseRect.y0) / lines.length;
                 
@@ -706,6 +736,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 x1: baseRect.x1,
                                 y1: baseRect.y0 + ((index + 1) * lineHeight)
                             },
+                            coord_space: 'fitz',
                             text: lineText,
                             line_number: index + 1
                         });
@@ -715,6 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 単一行だが複数行として扱われている場合
                 lineRects.push({
                     rect: entity.coordinates,
+                    coord_space: 'fitz',
                     text: entity.text,
                     line_number: 1
                 });
@@ -1151,42 +1183,61 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         async addManualEntity(entityType) {
-            if (!this.currentSelection || !this.currentSelection.text.trim() || !this.viewport) return;
+            if (!this.currentSelection || !this.pdfPage || !this.viewport) return;
+
             const vp = this.viewport;
-            const canvasRect = this.elements.pdfCanvas.getBoundingClientRect();
-            const selectionRect = this.currentSelection.rect; // DOMRect (viewport relative)
+            const textLayerRect = this.elements.textLayer.getBoundingClientRect();
+            const pageHeightPt = this.pdfPage.getViewport({ scale: 1 }).height;
 
-            // DOMRect to Canvas coordinates
-            const vx0 = selectionRect.left - canvasRect.left;
-            const vy0 = selectionRect.top - canvasRect.top;
-            const vx1 = selectionRect.right - canvasRect.left;
-            const vy1 = selectionRect.bottom - canvasRect.top;
+            // 選択範囲（複数行対応）
+            const range = this.currentSelection.range;
+            const clientRects = Array.from(range.getClientRects());
 
-            // Canvas -> PDF.js(PDFポイント, 左下原点)
-            const rect_pdf_pdfjs = this.viewportRectToPdfRect(vp, vx0, vy0, vx1, vy1);
-            // PDF.js -> Fitz(PDFポイント, 左上原点) に正規化して保持
-            // ★FIX: viewBoxは存在しないので getViewport(scale=1) または現在のviewportから高さを取得
-            const pageHeightPt =
-              (this.pdfPage && typeof this.pdfPage.getViewport === 'function'
-                ? this.pdfPage.getViewport({ scale: 1 }).height
-                : undefined) ??
-              (vp ? (vp.height / vp.scale) : undefined);
-            if (pageHeightPt == null) {
-              console.error('pageHeightPtの取得に失敗しました');
-              return; // 安全側：追加を中断
-            }
-            const rect_pdf = this.pdfjsRectToFitzRect(rect_pdf_pdfjs, pageHeightPt);
+            // 各行のクライアント矩形 → viewport相対 → PDFユーザ空間（左下原点）
+            const lineRectsPdf = clientRects.map(r => {
+                const vx0 = r.left   - textLayerRect.left;
+                const vy0 = r.top    - textLayerRect.top;
+                const vx1 = r.right  - textLayerRect.left;
+                const vy1 = r.bottom - textLayerRect.top;
+                return this.viewportRectToPdfRect(vp, vx0, vy0, vx1, vy1);
+            });
+
+            // 全体のバウンディング（PDFユーザ空間）
+            const pdfRect =
+              lineRectsPdf.length
+                ? [
+                    Math.min(...lineRectsPdf.map(r => r[0])),
+                    Math.min(...lineRectsPdf.map(r => r[1])),
+                    Math.max(...lineRectsPdf.map(r => r[2])),
+                    Math.max(...lineRectsPdf.map(r => r[3]))
+                  ]
+                : null;
+
+            // Fitz系（左上原点）も保持（保存・PDF生成用）
+            const rectFitz = pdfRect ? this.pdfjsRectToFitzRect(pdfRect, pageHeightPt) : null;
 
             const newEntity = {
                 entity_type: entityType,
                 text: this.currentSelection.text,
-                page_num: this.currentPage - 1, // 0-based
-                rect_pdf,                       // Fitz系（左上原点）
-                coordinates: { x0: rect_pdf[0], y0: rect_pdf[1], x1: rect_pdf[2], y1: rect_pdf[3] }, // 後方互換（Fitz系）
-                source: 'manual',
                 manual: true,
-                start_page: this.currentPage, end_page: this.currentPage,
-                start: 0, end: this.currentSelection.text.length
+                page: this.currentPage,
+                page_num: this.currentPage - 1,
+                rect_pdf: rectFitz,          // 注意：中身はFitz（後方互換のためキー名は据え置き）
+                rect_norm: this.normRectFromPdfRect(
+                    this.pdfPage.getViewport({ scale: 1 }).width,
+                    this.pdfPage.getViewport({ scale: 1 }).height,
+                    pdfRect || [0,0,0,0]
+                ),
+                coordinates: rectFitz
+                  ? { x0: rectFitz[0], y0: rectFitz[1], x1: rectFitz[2], y1: rectFitz[3] }
+                  : undefined,
+                // 各行の"タイトな"矩形（PDFユーザ空間, 左下原点）＋座標系フラグ
+                line_rects: lineRectsPdf.map((r, i) => ({
+                    rect: { x0: r[0], y0: r[1], x1: r[2], y1: r[3] },
+                    coord_space: 'pdf',
+                    line_number: i + 1,
+                    page_num: this.currentPage - 1
+                }))
             };
 
             // 楽観的UI更新（サーバ失敗でも表示は維持）
