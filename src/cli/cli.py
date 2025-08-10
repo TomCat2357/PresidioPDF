@@ -211,6 +211,8 @@ def _export_text_pii_offsets(processor: PDFProcessor, config_manager: ConfigMana
     help="③(text_pii_offsets)でのテキスト抽出の基準（既定: 改行なし）",
 )
 @click.option("--include-text", is_flag=True, help="③で抽出テキスト自体もJSONに含める")
+@click.option("--exclude", multiple=True, help="除外ワード(部分一致)")
+@click.option("--exclude-re", multiple=True, help="除外ワード(正規表現)")
 def main(path, **kwargs):
     """PyMuPDF版 PDF個人情報検出・マスキング・読み取り・復元ツール
     
@@ -218,6 +220,15 @@ def main(path, **kwargs):
     """
     args_dict = {k: v for k, v in kwargs.items() if v is not None}
     args_dict["pdf_masking_method"] = args_dict.pop("masking_method", None)
+
+    # 除外設定を反映 (clickのmultiple=Trueはタプルを返す)
+    if args_dict.get("exclude") or args_dict.get("exclude_re"):
+        exclusions = {}
+        if args_dict.get("exclude"):
+            exclusions["text_exclusions"] = list(args_dict["exclude"])
+        if args_dict.get("exclude_re"):
+            exclusions["text_exclusions_regex"] = list(args_dict["exclude_re"])
+        args_dict["exclusions"] = exclusions
 
     config_manager = ConfigManager(config_file=args_dict.get("config"), args=args_dict)
 

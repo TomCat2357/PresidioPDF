@@ -75,7 +75,12 @@ gui = [
 ]
 
 [project.scripts]
-presidio-pdf = "src.pdf_presidio_processor:main"
+# Expose the CLI defined in src/cli/cli.py
+presidio-cli = "cli.cli:main"
+
+# Expose the Web app defined in src/web/web_main.py
+presidio-web = "web.web_main:main"
+
 
 [tool.setuptools.packages.find]
 where = ["src"]

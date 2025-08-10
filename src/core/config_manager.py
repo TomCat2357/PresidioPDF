@@ -1,6 +1,7 @@
 import os
 import yaml
 import logging
+import re
 from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
 import json
@@ -100,6 +101,7 @@ class ConfigManager:
             },
             "exclusions": {
                 "text_exclusions": [],
+                "text_exclusions_regex": [],
                 "file_exclusions": ["*_backup.*", "*_highlighted.*", "~$*"],
                 "entity_exclusions": {},
             },
@@ -425,6 +427,10 @@ class ConfigManager:
         """テキスト除外パターンを返す"""
         return self._safe_get_config("exclusions.text_exclusions", [])
 
+    def get_text_exclusions_regex(self) -> List[str]:
+        """正規表現テキスト除外パターンを返す"""
+        return self._safe_get_config("exclusions.text_exclusions_regex", [])
+
     def get_file_exclusions(self) -> List[str]:
         """ファイル除外パターンを返す"""
         return self._safe_get_config("exclusions.file_exclusions", [])
@@ -443,20 +449,35 @@ class ConfigManager:
 
         優先順位:
         1. 共通除外ワード（text_exclusions）の部分マッチチェック
-        2. エンティティ別除外ワード（entity_exclusions）の完全マッチチェック
+        2. 正規表現除外ワード（text_exclusions_regex）のチェック
+        3. エンティティ別除外ワード（entity_exclusions）の完全マッチチェック
         """
         text = text.strip()
 
         # 1. 共通除外ワードの部分マッチチェック（優先度高）
         text_exclusions = self.get_text_exclusions()
         for exclusion in text_exclusions:
-            if text in exclusion:
+            if exclusion and exclusion in text:
                 logger.debug(
                     f"共通除外ワードにより除外: '{text}' が '{exclusion}' に含まれています"
                 )
                 return True
 
-        # 2. エンティティ別除外ワードの完全マッチチェック
+        # 2. 正規表現除外ワードのチェック
+        regex_exclusions = self.get_text_exclusions_regex()
+        for pattern in regex_exclusions:
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, text):
+                    logger.debug(
+                        f"正規表現除外により除外: '{text}' がパターン '{pattern}' にマッチしました"
+                    )
+                    return True
+            except re.error as e:
+                logger.warning(f"無効な除外正規表現をスキップ: {pattern}: {e}")
+
+        # 3. エンティティ別除外ワードの完全マッチチェック
         entity_exclusions = self.get_entity_exclusions(entity_type)
         if text in entity_exclusions:
             logger.debug(f"エンティティ別除外により除外: '{text}' ({entity_type})")
