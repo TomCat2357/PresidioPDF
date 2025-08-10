@@ -213,6 +213,14 @@ def _export_text_pii_offsets(processor: PDFProcessor, config_manager: ConfigMana
 @click.option("--include-text", is_flag=True, help="③で抽出テキスト自体もJSONに含める")
 @click.option("--exclude", multiple=True, help="除外ワード(部分一致)")
 @click.option("--exclude-re", multiple=True, help="除外ワード(正規表現)")
+@click.option("--person-word", multiple=True,
+              help="人名として強制扱いする語を追加。複数可")
+@click.option("--person-pattern", multiple=True,
+              help="人名として扱う正規表現を追加。複数可")
+@click.option("--person-use-auto/--no-person-use-auto", default=True,
+              help="既存の自動認識と併用するか")
+@click.option("--custom-names", type=str,
+              help="custom_names をJSONで直接渡す。指定時は他の人名オプションより優先")
 def main(path, **kwargs):
     """PyMuPDF版 PDF個人情報検出・マスキング・読み取り・復元ツール
     
@@ -229,6 +237,33 @@ def main(path, **kwargs):
         if args_dict.get("exclude_re"):
             exclusions["text_exclusions_regex"] = list(args_dict["exclude_re"])
         args_dict["exclusions"] = exclusions
+
+    # 追加: 強制PERSONの組み立て
+    # JSON直渡しがあればそれを使う
+    if args_dict.get("custom_names"):
+        cn = args_dict["custom_names"]
+        if isinstance(cn, str):
+            import json as _json
+            try:
+                cn = _json.loads(cn)
+            except Exception:
+                raise click.BadParameter("--custom-names は有効なJSONで指定してください")
+        args_dict["custom_names"] = cn
+    else:
+        words = list(args_dict.pop("person_word", []))
+        pats  = list(args_dict.pop("person_pattern", []))
+        use_auto = args_dict.pop("person_use_auto", True)
+        if words or pats:
+            name_patterns = [
+                {"name": f"cli_person_{i+1}", "regex": p, "score": 0.9}
+                for i, p in enumerate(pats)
+            ]
+            args_dict["custom_names"] = {
+                "enabled": True,
+                "use_with_auto_detection": use_auto,
+                "name_list": words,
+                "name_patterns": name_patterns,
+            }
 
     config_manager = ConfigManager(config_file=args_dict.get("config"), args=args_dict)
 
