@@ -60,6 +60,44 @@ detect (codex-detect)
 uv run codex-detect --from outputs/read.json --out outputs/detect.json --pretty --validate
 ```
 
+Detect additions and exclusions
+- Additional entities via regex and global exclude regex are supported.
+- Priority of detections: Addition > Exclude > Auto (model)
+- When running detect, only the `detect` section in YAML is read; other command sections are ignored.
+
+CLI examples
+```bash
+# Add regex-based detections per entity (multiple --add allowed)
+uv run codex-detect --from outputs/read.json \
+  --add person:"田中.*" \
+  --add location:"(渋谷|新宿)" \
+  --out outputs/detect.json --pretty
+
+# Add and exclude (exclude applies only to auto/model results)
+uv run codex-detect --from outputs/read.json \
+  --exclude "株式会社.*" \
+  --add person:"田中太郎" \
+  --out outputs/detect.json --pretty
+
+# With shared YAML config (detect section only)
+uv run codex-detect --from outputs/read.json --config config/config.yaml --pretty
+```
+
+YAML (detect section; read-only)
+```yaml
+detect:
+  - pdf: hogehoge   # placeholder, not used by detect
+  - entities:
+      - person: "田中太郎"
+      - person: "田中健吾"
+  - exclude:
+      - "株式会社.*"
+      - "\\d{4}-\\d{2}-\\d{2}"
+```
+Notes
+- Allowed entity keys (lowercase): person, location, date_time, phone_number, individual_number, year, proper_noun
+- Unknown entity names or invalid regex cause an error and non-zero exit
+
 duplicate-process (codex-duplicate-process)
 ```bash
 # De-duplicate detections with overlap/keep policies
@@ -78,6 +116,33 @@ uv run codex-duplicate-process \
   --keep entity-order \
   --entity-priority PERSON,EMAIL,PHONE \
   --out outputs/detect_dedup.json --pretty
+```
+
+Advanced tie-break (multi-criteria)
+- You can precisely control which detection is kept when overlapping.
+- Criteria: origin (manual > addition > auto), length (long/short), entity (custom order), position (first/last)
+
+CLI examples
+```bash
+uv run codex-duplicate-process \
+  --detect outputs/detect.json \
+  --overlap overlap \
+  --tie-break origin,length,entity,position \
+  --origin-priority manual,addition,auto \
+  --length-pref long \
+  --position-pref first \
+  --entity-order INDIVIDUAL_NUMBER,PHONE_NUMBER,PERSON,LOCATION,DATE_TIME,YEAR,PROPER_NOUN \
+  --out outputs/detect_dedup.json --pretty
+```
+
+YAML (duplicate_process section; read-only)
+```yaml
+duplicate_process:
+  - tie_break: ["origin", "length", "entity", "position"]
+  - origin_priority: ["manual", "addition", "auto"]
+  - length: "long"
+  - position: "first"
+  - entity_order: ["INDIVIDUAL_NUMBER", "PHONE_NUMBER", "PERSON", "LOCATION", "DATE_TIME", "YEAR", "PROPER_NOUN"]
 ```
 
 mask (codex-mask)

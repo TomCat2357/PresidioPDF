@@ -195,7 +195,6 @@ class PDFMasker:
                         continue
                     rects_to_highlight = [{"rect": rect, "page_num": page_num}]
 
-                quads_by_page = {}
                 for rect_info in rects_to_highlight:
                     page_num = int(rect_info.get("page_num"))
                     page = doc[page_num]
@@ -213,15 +212,11 @@ class PDFMasker:
                     r = r & page.rect
                     if (not r) or r.width <= 0 or r.height <= 0:
                         continue
-                    quads_by_page.setdefault(page_num, []).append(fitz.Quad(r))
-
-                for page_num, quads in quads_by_page.items():
-                    page = doc[page_num]
-                    # 既存重複チェックは代表矩形で行う（最初の行を代表）
-                    rep_rect = quads[0].rect
-                    if self._is_duplicate_highlight(rep_rect, entity, existing_highlights, page_num):
+                    # 既存重複チェック
+                    if self._is_duplicate_highlight(r, entity, existing_highlights, page_num):
                         continue
-                    self._add_single_highlight(page, quads, entity)  # ← quads対応版
+                    # 単一Rectごとにハイライト（複数行は複数アノテーションでカバー）
+                    self._add_single_highlight(page, r, entity)
                     highlights_added += 1
 
             doc.save(pdf_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)

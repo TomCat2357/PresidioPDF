@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Duplicate processing utilities decoupled from CLI frameworks and heavy deps.
-Implements overlap grouping (exact/contain/overlap) and keep policies
-(widest/first/last/entity-order) for plain and structured detections.
+Implements overlap grouping (exact/contain/overlap) and selection policies
+1) Legacy keep: widest/first/last/entity-order
+2) New multi-criteria tie-break: origin/length/entity/position with custom orders
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -155,11 +156,86 @@ def _choose_kept(
         return max(idxs, key=lambda i: (total_area(i), -idxs.index(i)))
 
 
+def _origin_bucket(entry: Dict[str, Any]) -> str:
+    """Normalize origin into manual/addition/auto buckets."""
+    o = str(entry.get("origin", "")).strip().lower()
+    if o == "manual":
+        return "manual"
+    if o == "addition":
+        return "addition"
+    # model/auto/others -> auto
+    return "auto"
+
+
+def _choose_with_tie_break(
+    idxs: List[int],
+    items: List[Dict[str, Any]],
+    kind: str,
+    tie_break: List[str],
+    origin_priority: List[str],
+    entity_priority: List[str],
+    length_pref: Optional[str],
+    position_pref: Optional[str],
+):
+    # normalize orders and maps
+    tb = [k.strip().lower() for k in (tie_break or []) if k]
+    if not tb:
+        tb = ["origin", "length", "entity", "position"]
+    op = [x for x in [s.strip().lower() for s in (origin_priority or []) if s] if x in ("manual", "addition", "auto")]
+    # fill missing with defaults
+    for x in ["manual", "addition", "auto"]:
+        if x not in op:
+            op.append(x)
+    origin_rank = {name: i for i, name in enumerate(op)}
+    ent_rank = {name: i for i, name in enumerate(entity_priority or [])}
+
+    def length_key(i: int) -> int:
+        if kind == "plain":
+            L = _interval_len(items[i])
+        else:
+            # approximate by total area
+            L = int(sum(_rect_area(q) for q in (items[i].get("quads", []) or [])))
+        return -L if (length_pref or "long").lower() == "long" else L
+
+    def position_key(i: int) -> int:
+        # input order as proxy; smaller is earlier
+        pos = idxs.index(i)
+        return pos if (position_pref or "first").lower() == "first" else -pos
+
+    def origin_key(i: int) -> int:
+        return origin_rank.get(_origin_bucket(items[i]), 10**9)
+
+    def entity_key(i: int) -> int:
+        ent = str(items[i].get("entity", ""))
+        return ent_rank.get(ent, 10**9)
+
+    def key_tuple(i: int):
+        parts = []
+        for k in tb:
+            if k == "origin":
+                parts.append(origin_key(i))
+            elif k == "length":
+                parts.append(length_key(i))
+            elif k == "entity":
+                parts.append(entity_key(i))
+            elif k == "position":
+                parts.append(position_key(i))
+        parts.append(idxs.index(i))  # final stable tie-breaker
+        return tuple(parts)
+
+    return min(idxs, key=key_tuple)
+
+
 def dedupe_detections(
     detections: Dict[str, Any],
     overlap: str = "overlap",
-    keep: str = "widest",
+    keep: Optional[str] = "widest",
     entity_priority: Optional[List[str]] = None,
+    # new tie-break API
+    tie_break: Optional[List[str]] = None,
+    origin_priority: Optional[List[str]] = None,
+    length_pref: Optional[str] = None,
+    position_pref: Optional[str] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     plain = detections.get("plain", []) or []
     struct = detections.get("structured", []) or []
@@ -167,17 +243,30 @@ def dedupe_detections(
 
     n_p, e_p = _plain_edges(plain, overlap)
     comps_p = _components(n_p, e_p)
-    kept_plain_idx = set(
-        _choose_kept(c, plain, "plain", keep, pri_map) for c in comps_p if c
-    )
+    kept_plain_idx = set()
+    for c in comps_p:
+        if not c:
+            continue
+        if tie_break or origin_priority or length_pref or position_pref:
+            kept_plain_idx.add(
+                _choose_with_tie_break(c, plain, "plain", tie_break or [], origin_priority or [], entity_priority or [], length_pref, position_pref)
+            )
+        else:
+            kept_plain_idx.add(_choose_kept(c, plain, "plain", keep or "widest", pri_map))
     plain_out = [d for i, d in enumerate(plain) if i in kept_plain_idx]
 
     n_s, e_s = _structured_edges(struct, overlap)
     comps_s = _components(n_s, e_s)
-    kept_struct_idx = set(
-        _choose_kept(c, struct, "structured", keep, pri_map) for c in comps_s if c
-    )
+    kept_struct_idx = set()
+    for c in comps_s:
+        if not c:
+            continue
+        if tie_break or origin_priority or length_pref or position_pref:
+            kept_struct_idx.add(
+                _choose_with_tie_break(c, struct, "structured", tie_break or [], origin_priority or [], entity_priority or [], length_pref, position_pref)
+            )
+        else:
+            kept_struct_idx.add(_choose_kept(c, struct, "structured", keep or "widest", pri_map))
     struct_out = [d for i, d in enumerate(struct) if i in kept_struct_idx]
 
     return {"plain": plain_out, "structured": struct_out}
-
