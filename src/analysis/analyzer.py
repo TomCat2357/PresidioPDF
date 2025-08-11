@@ -69,81 +69,15 @@ class Analyzer:
             nlp_engine=provider.create_engine(), supported_languages=["ja"]
         )
 
-        self._add_custom_recognizers(analyzer)
+        # 既定の認識器のみを登録（追加ルールは独自パイプラインで適用）
+        self._add_default_recognizers(analyzer)
         return analyzer
 
-    def _add_custom_recognizers(self, analyzer: AnalyzerEngine):
-        """カスタム認識器を追加"""
-        # デフォルトの認識器を追加
-        self._add_default_recognizers(analyzer)
+    # 旧方式（Presidioに直接登録）を保持する場合は上記で呼び出す
+    # def _add_custom_recognizers(self, analyzer: AnalyzerEngine):
+    #     ...
 
-        # カスタム人名辞書の認識器を追加
-        self._add_custom_name_recognizers(analyzer)
-
-        # 設定ファイルからカスタム認識器を追加
-        custom_recognizers = self.config_manager.get_custom_recognizers()
-        for recognizer_name, config in custom_recognizers.items():
-            try:
-                patterns = []
-                for pattern_config in config.get("patterns", []):
-                    pattern = Pattern(
-                        name=pattern_config["name"],
-                        regex=pattern_config["regex"],
-                        score=pattern_config["score"],
-                    )
-                    patterns.append(pattern)
-
-                recognizer = PatternRecognizer(
-                    supported_entity=config["entity_type"],
-                    supported_language="ja",
-                    patterns=patterns,
-                )
-
-                analyzer.registry.add_recognizer(recognizer)
-                logger.info(f"カスタム認識器を追加: {recognizer_name}")
-            except Exception as e:
-                logger.error(f"カスタム認識器の追加でエラー ({recognizer_name}): {e}")
-
-    def _add_custom_name_recognizers(self, analyzer: AnalyzerEngine):
-        """カスタム人名辞書の認識器を追加"""
-        if not self.config_manager.is_custom_names_enabled():
-            return
-
-        patterns = []
-
-        # 辞書リスト方式の処理
-        name_list = self.config_manager.get_custom_name_list()
-        if name_list:
-            # リストの各名前に対して正規表現パターンを作成
-            name_regex = "|".join(f"({name})" for name in name_list)
-            pattern = Pattern(name="カスタム人名リスト", regex=name_regex, score=0.9)
-            patterns.append(pattern)
-            logger.info(f"カスタム人名リストを追加: {len(name_list)}個の名前")
-
-        # パターン方式の処理
-        name_patterns = self.config_manager.get_custom_name_patterns()
-        for pattern_config in name_patterns:
-            try:
-                pattern = Pattern(
-                    name=pattern_config["name"],
-                    regex=pattern_config["regex"],
-                    score=pattern_config["score"],
-                )
-                patterns.append(pattern)
-                logger.info(f"カスタム人名パターンを追加: {pattern_config['name']}")
-            except Exception as e:
-                logger.error(
-                    f"カスタム人名パターンの追加でエラー ({pattern_config.get('name', 'Unknown')}): {e}"
-                )
-
-        # パターンがある場合、認識器を追加
-        if patterns:
-            custom_name_recognizer = PatternRecognizer(
-                supported_entity="PERSON", supported_language="ja", patterns=patterns
-            )
-
-            analyzer.registry.add_recognizer(custom_name_recognizer)
-            logger.info(f"カスタム人名認識器を追加: {len(patterns)}個のパターン")
+    # カスタム人名辞書のPresidio登録は廃止し、追加パターンとして独自適用する
 
     def _add_default_recognizers(self, analyzer: AnalyzerEngine):
         """デフォルトの認識器を追加"""
@@ -210,46 +144,90 @@ class Analyzer:
         return self._analyze_text_single(text, entities)
 
     def _analyze_text_single(self, text: str, entities: List[str]) -> List[Dict]:
-        """単一テキストの個人情報解析"""
-        analyzer_results = self.analyzer.analyze(
-            text=text, language="ja", entities=entities
-        )
+        """単一テキストの個人情報解析（追加>モデル>除外）"""
+        import re
 
-        if "PROPER_NOUN" in entities:
-            proper_noun_results = self._detect_proper_nouns(text)
-            analyzer_results.extend(proper_noun_results)
-
-        results = []
-        for result in analyzer_results:
-            if result.entity_type in entities:
-                entity_text = text[result.start : result.end]
-                refined_text = self._refine_entity_text(
-                    entity_text, result.entity_type, text, result.start, result.end
+        # 1) 追加パターンの適用（右→左適用、左定義が高優先、長さ無視）
+        add_map = self.config_manager.get_additional_patterns_mapping()
+        add_candidates = []
+        priority_seq = []
+        for etype, pats in add_map.items():
+            if etype not in entities:
+                continue
+            # パターン順序: 左(0)が高優先。適用は右→左。
+            for idx, pat in enumerate(pats):
+                priority_seq.append((etype, idx, pat))
+        # 探索: 右→左
+        for etype, idx, pat in reversed(priority_seq):
+            try:
+                cre = re.compile(pat, re.MULTILINE)
+            except re.error as e:
+                logger.warning(f"無効な追加正規表現をスキップ: {pat}: {e}")
+                continue
+            for m in cre.finditer(text):
+                s, e = m.span()
+                if s == e:
+                    continue
+                add_candidates.append(
+                    {
+                        "start": s,
+                        "end": e,
+                        "entity_type": etype,
+                        "text": text[s:e],
+                        "_prio": idx,  # 低いほど高優先
+                    }
                 )
 
-                if not self.config_manager.is_entity_excluded(
-                    result.entity_type, refined_text
-                ):
-                    refined_start, refined_end = self._calculate_refined_positions(
-                        text, result.start, result.end, refined_text
-                    )
+        # 追加候補の非重複化（優先度のみで解決）
+        add_selected: List[Dict] = []
+        occupied: List[tuple] = []
+        for cand in sorted(add_candidates, key=lambda x: (x["_prio"], x["start"])):
+            s, e = cand["start"], cand["end"]
+            if any(not (e <= os or oe <= s) for (os, oe) in occupied):
+                continue
+            occupied.append((s, e))
+            add_selected.append({k: v for k, v in cand.items() if not k.startswith("_")})
 
-                    results.append(
-                        {
-                            "start": refined_start,
-                            "end": refined_end,
-                            "entity_type": result.entity_type,
-                            "text": refined_text,
-                        }
-                    )
-                else:
-                    logger.debug(
-                        f"エンティティ除外: '{refined_text}' ({result.entity_type})"
-                    )
+        # 2) モデル検出（既存Presidio + 固有名詞）
+        analyzer_results = self.analyzer.analyze(text=text, language="ja", entities=entities)
+        if "PROPER_NOUN" in entities:
+            analyzer_results.extend(self._detect_proper_nouns(text))
 
+        # 3) モデル結果に除外適用＆追加と重複するものを抑制
+        def overlaps_any(span):
+            s, e = span
+            for os, oe in occupied:
+                if not (e <= os or oe <= s):
+                    return True
+            return False
+
+        model_filtered: List[Dict] = []
+        for r in analyzer_results:
+            if r.entity_type not in entities:
+                continue
+            s, e = r.start, r.end
+            ent_text = text[s:e]
+            refined_text = self._refine_entity_text(ent_text, r.entity_type, text, s, e)
+            rs, re_ = self._calculate_refined_positions(text, s, e, refined_text)
+            # 追加と重なればスキップ（追加優先）
+            if overlaps_any((rs, re_)):
+                continue
+            # 除外はモデル結果のみに適用
+            if self.config_manager.is_entity_excluded(r.entity_type, refined_text):
+                logger.debug(f"エンティティ除外: '{refined_text}' ({r.entity_type})")
+                continue
+            model_filtered.append(
+                {
+                    "start": rs,
+                    "end": re_,
+                    "entity_type": r.entity_type,
+                    "text": refined_text,
+                }
+            )
+
+        results = add_selected + model_filtered
         if self.config_manager.is_deduplication_enabled():
             results = self._deduplicate_entities(results)
-
         return sorted(results, key=lambda x: x["start"])
 
     def _analyze_text_chunked(self, text: str, entities: List[str]) -> List[Dict]:

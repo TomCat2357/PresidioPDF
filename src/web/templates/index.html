@@ -581,54 +581,68 @@
                     <div class="mb-3">
                         <label class="form-label">検出対象エンティティ</label>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityPerson" value="PERSON">
+                            <input class="form-check-input" type="checkbox" id="entityPerson" value="PERSON" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityPerson">人名</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalPersonWords" placeholder="追加で検出する人名（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalPersonWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
+                            <small class="form-text text-muted">例: (田中[　一-龥]{2})  山田太郎</small>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityLocation" value="LOCATION">
+                            <input class="form-check-input" type="checkbox" id="entityLocation" value="LOCATION" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityLocation">場所</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalLocationWords" placeholder="追加で検出する場所名（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalLocationWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
+                            <small class="form-text text-muted">例: (東京都|道府県).+?[市区町村].+</small>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityPhone" value="PHONE_NUMBER">
+                            <input class="form-check-input" type="checkbox" id="entityPhone" value="PHONE_NUMBER" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityPhone">電話番号</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalPhoneWords" placeholder="追加で検出する電話番号パターン（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalPhoneWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
+                            <small class="form-text text-muted">例: 0\\d{1,4}-\\d{1,4}-\\d{4}</small>
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityDate" value="DATE_TIME">
+                            <input class="form-check-input" type="checkbox" id="entityDate" value="DATE_TIME" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityDate">日時</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalDateWords" placeholder="追加で検出する日時表現（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalDateWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityIndividualNumber" value="INDIVIDUAL_NUMBER">
+                            <input class="form-check-input" type="checkbox" id="entityIndividualNumber" value="INDIVIDUAL_NUMBER" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityIndividualNumber">個人番号</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalIndividualWords" placeholder="追加で検出する個人番号パターン（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalIndividualWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityYear" value="YEAR">
+                            <input class="form-check-input" type="checkbox" id="entityYear" value="YEAR" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityYear">年号</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalYearWords" placeholder="追加で検出する年号（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalYearWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
                         </div>
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="entityProperNoun" value="PROPER_NOUN">
+                            <input class="form-check-input" type="checkbox" id="entityProperNoun" value="PROPER_NOUN" data-entity-checkbox="1">
                             <label class="form-check-label" for="entityProperNoun">固有名詞</label>
                         </div>
                         <div class="ms-4 mb-2">
-                            <input type="text" class="form-control form-control-sm" id="additionalProperNounWords" placeholder="追加で検出する固有名詞（カンマ区切り）">
+                            <input type="text" class="form-control form-control-sm" id="additionalProperNounWords" placeholder="追加（正規表現）を空白/改行/カンマで複数。左が高優先">
                         </div>
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="entitySelectAll" checked>
+                            <label class="form-check-label" for="entitySelectAll">すべて選択（解除で全解除）</label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">除外文字（正規表現・モデル結果に適用）</label>
+                        <textarea class="form-control" id="excludeWords" rows="3" placeholder="例: [^ぁ-んァ-ヶ一-龠a-zA-Z0-9]  (テスト|仮)\d+"></textarea>
+                        <small class="form-text text-muted">空白/改行/カンマで複数指定。追加で検出した項目は除外の対象外（常に保持）。</small>
+                        <div id="excludeWordsFeedback" class="form-text"></div>
+                        <div id="excludeWordsPreview" class="form-text"></div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">検出モデル</label>
@@ -693,13 +707,7 @@
                             重複除去を有効にすると、重複した個人情報の検出結果を統合します
                         </small>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">除外単語設定</label>
-                        <textarea class="form-control" id="excludeWords" rows="3" placeholder="検出から除外するパターンを空白区切りで入力（正規表現可）&#10;例：&#10;東京 日本 ^(株式)?会社$"></textarea>
-                        <small class="form-text text-muted">
-                            ここに入力したパターンは個人情報として検出されません。複数指定は半角/全角スペースで区切ってください。
-                        </small>
-                    </div>
+                    
                 </div>
                 <div class="modal-footer">
                     <div class="me-auto">

@@ -217,141 +217,9 @@ class ConfigManager:
         """コマンドライン引数を設定辞書に変換"""
         config = {}
 
-        # entities引数の処理
-        if "entities" in args and args["entities"]:
-            enabled_entities = {}
-            for entity in args["entities"]:
-                enabled_entities[entity] = True
-            # 指定されていないエンティティは無効化
-            for entity in self.ENTITY_TYPES:
-                if entity not in enabled_entities:
-                    enabled_entities[entity] = False
-            config["enabled_entities"] = enabled_entities
-
-        # カスタム人名設定の引数処理
-        if "custom_names" in args and args["custom_names"]:
-            try:
-                if isinstance(args["custom_names"], str):
-                    custom_names_dict = json.loads(args["custom_names"])
-                else:
-                    custom_names_dict = args["custom_names"]
-
-                if isinstance(custom_names_dict, dict):
-                    config["custom_names"] = custom_names_dict
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse custom_names JSON: {e}")
-
-        # 除外設定の引数処理
-        if "exclusions" in args and args["exclusions"]:
-            try:
-                if isinstance(args["exclusions"], str):
-                    exclusions_dict = json.loads(args["exclusions"])
-                else:
-                    exclusions_dict = args["exclusions"]
-
-                if isinstance(exclusions_dict, dict):
-                    config["exclusions"] = exclusions_dict
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse exclusions JSON: {e}")
-
-        # PDF処理設定の引数処理
-        if "pdf_masking_method" in args and args["pdf_masking_method"]:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["masking"] = config["pdf_processing"].get(
-                "masking", {}
-            )
-            config["pdf_processing"]["masking"]["method"] = args["pdf_masking_method"]
-
-        if "masking_text_mode" in args and args["masking_text_mode"]:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["masking"] = config["pdf_processing"].get(
-                "masking", {}
-            )
-            config["pdf_processing"]["masking"]["text_display_mode"] = args[
-                "masking_text_mode"
-            ]
-
-        if "operation_mode" in args and args["operation_mode"]:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["masking"] = config["pdf_processing"].get(
-                "masking", {}
-            )
-            config["pdf_processing"]["masking"]["operation_mode"] = args[
-                "operation_mode"
-            ]
-
-        if "pdf_output_suffix" in args and args["pdf_output_suffix"]:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["output_suffix"] = args["pdf_output_suffix"]
-
-        # バックアップPDF機能は廃止: CLI引数から backup_enabled を設定しない
-
-        # 読み取りモード設定
-        if "read_mode" in args and args["read_mode"] is not None:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["read_mode"] = args["read_mode"]
-
-        if "read_report" in args and args["read_report"] is not None:
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["read_report"] = args["read_report"]
-
-        # その他の引数
-        if "verbose" in args and args["verbose"]:
-            config["features"] = {"logging": {"level": "DEBUG"}}
-
-        if "suffix" in args and args["suffix"]:
-            config["features"] = config.get("features", {})
-            config["features"]["file_handling"] = config["features"].get(
-                "file_handling", {}
-            )
-            config["features"]["file_handling"]["output_suffix"] = args["suffix"]
-
-        if "backup" in args and args["backup"] is not None:
-            config["features"] = config.get("features", {})
-            config["features"]["backup"] = {"create_backup": args["backup"]}
-
-        if "report" in args and args["report"] is not None:
-            config["features"] = config.get("features", {})
-            config["features"]["reporting"] = {"generate_report": args["report"]}
-
-        if "batch_size" in args and args["batch_size"] is not None:
-            config["features"] = config.get("features", {})
-            config["features"]["processing"] = config["features"].get("processing", {})
-            config["features"]["processing"]["batch_size"] = args["batch_size"]
-
-        if "recursive" in args and args["recursive"] is not None:
-            config["features"] = config.get("features", {})
-            config["features"]["file_handling"] = config["features"].get(
-                "file_handling", {}
-            )
-            config["features"]["file_handling"]["recursive_search"] = args["recursive"]
-
-        # spaCyモデル設定
-        if "spacy_model" in args and args["spacy_model"]:
-            config["nlp"] = config.get("nlp", {})
-            config["nlp"]["spacy_model"] = args["spacy_model"]
-
-        # 重複除去設定
-        if "deduplication_mode" in args and args["deduplication_mode"]:
-            config["deduplication"] = config.get("deduplication", {})
-            config["deduplication"]["enabled"] = True  # モード指定で自動的に有効化
-            config["deduplication"]["priority"] = args["deduplication_mode"]
-
-        if "deduplication_overlap_mode" in args and args["deduplication_overlap_mode"]:
-            config["deduplication"] = config.get("deduplication", {})
-            config["deduplication"]["enabled"] = True  # モード指定で自動的に有効化
-            config["deduplication"]["overlap_mode"] = args["deduplication_overlap_mode"]
-
-        # 出力ディレクトリ設定
-        if "output_dir" in args and args["output_dir"]:
-            config["features"] = config.get("features", {})
-            config["features"]["file_handling"] = config["features"].get(
-                "file_handling", {}
-            )
-            config["features"]["file_handling"]["output_dir"] = args["output_dir"]
-
-            config["pdf_processing"] = config.get("pdf_processing", {})
-            config["pdf_processing"]["output_dir"] = args["output_dir"]
+        # 新CLIではCLI引数からの設定注入を最小化。
+        # 旧フラグに紐づく変換は削除し、YAML設定のみで制御する。
+        # 汎用的なentitiesやcustom_recognizers等の注入は必要時に別経路で扱う。
 
         return config
 
@@ -376,6 +244,50 @@ class ConfigManager:
             for k, v in self.config["custom_recognizers"].items()
             if v.get("enabled", False)
         }
+
+    def get_additional_patterns_mapping(self) -> Dict[str, List[str]]:
+        """追加検出用の正規表現パターンをエンティティ別に取得（順序保持）
+
+        - custom_recognizers: {name: {enabled, entity_type, patterns:[{name, regex, score}]}}
+          をエンティティごとに連結
+        - custom_names: name_list/name_patterns を PERSON に統合
+        """
+        mapping: Dict[str, List[str]] = {}
+
+        # 1) custom_recognizers（辞書の順序を保持して結合）
+        try:
+            cr = self.get_custom_recognizers()
+            for _name, conf in cr.items():
+                et = conf.get("entity_type")
+                if not et:
+                    continue
+                pats = []
+                for p in conf.get("patterns", []) or []:
+                    regex = p.get("regex")
+                    if isinstance(regex, str) and regex:
+                        pats.append(regex)
+                if pats:
+                    mapping.setdefault(et, []).extend(pats)
+        except Exception as e:
+            logger.warning(f"custom_recognizersの展開に失敗: {e}")
+
+        # 2) custom_names（互換）をPERSONに統合
+        try:
+            cn = self.get_custom_names_config()
+            if cn.get("enabled", False):
+                # name_list はリテラル一致に近いのでエスケープして個別パターン化
+                for w in cn.get("name_list", []) or []:
+                    if isinstance(w, str) and w:
+                        mapping.setdefault("PERSON", []).append(re.escape(w))
+                # name_patterns は regex 文字列
+                for p in cn.get("name_patterns", []) or []:
+                    rx = p.get("regex") if isinstance(p, dict) else None
+                    if isinstance(rx, str) and rx:
+                        mapping.setdefault("PERSON", []).append(rx)
+        except Exception as e:
+            logger.warning(f"custom_namesの展開に失敗: {e}")
+
+        return mapping
 
     def get_feature_config(self, feature_name: str) -> Dict[str, Any]:
         """機能設定を返す"""
@@ -447,10 +359,10 @@ class ConfigManager:
     def is_entity_excluded(self, entity_type: str, text: str) -> bool:
         """指定されたテキストが除外対象かどうかを判定
 
-        優先順位:
-        1. 共通除外ワード（text_exclusions）の部分マッチチェック
-        2. 正規表現除外ワード（text_exclusions_regex）のチェック
-        3. エンティティ別除外ワード（entity_exclusions）の完全マッチチェック
+        新方針: 正規表現に統一（互換のため旧設定も併用）
+        - text_exclusions: 部分一致（互換）
+        - text_exclusions_regex: 正規表現
+        - entity_exclusions: 完全一致（互換）
         """
         text = text.strip()
 
@@ -477,7 +389,7 @@ class ConfigManager:
             except re.error as e:
                 logger.warning(f"無効な除外正規表現をスキップ: {pattern}: {e}")
 
-        # 3. エンティティ別除外ワードの完全マッチチェック
+        # 3. エンティティ別除外ワードの完全マッチチェック（互換）
         entity_exclusions = self.get_entity_exclusions(entity_type)
         if text in entity_exclusions:
             logger.debug(f"エンティティ別除外により除外: '{text}' ({entity_type})")

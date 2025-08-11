@@ -1,41 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PyMuPDF版 PDF個人情報検出・マスキングツール - コマンドラインインターフェース
+Subcommand-based CLI per cli_modify.md
 
-変更点:
-  - バックアップPDF出力を廃止（CLI出力からも削除）
-  - --export-mode で出力形式を制御（既定=1）
-      1 / highlight_pdf: ハイライト済みPDFを出力（従来動作）
-      2 / pdf_pii_coords: 座標情報を含むJSONを出力
-      3 / text_pii_offsets: オフセット情報のJSONを出力
+Commands:
+  - read: read PDF -> JSON (highlights/plain/structured)
+  - detect: detect PII from read JSON -> JSON (plain offsets / structured quads)
+  - mask: apply highlight annotations using detect JSON
+  - duplicate-process: de-duplicate detect JSON per simple policy
 """
 import json
 import logging
+import os
+import sys
+import hashlib
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 import fitz  # PyMuPDF
 
 from core.config_manager import ConfigManager
+from analysis.analyzer import Analyzer
 from pdf.pdf_locator import PDFTextLocator
 from pdf.pdf_processor import PDFProcessor
-
-
-def _collect_pdfs(path: str, recursive: bool = True) -> List[str]:
-    """PDFファイルを収集する"""
-    p = Path(path)
-    if p.is_file():
-        return [str(p)] if p.suffix.lower() == ".pdf" else []
-    if p.is_dir():
-        pattern = "**/*.pdf" if recursive else "*.pdf"
-        return [str(pp) for pp in p.glob(pattern)]
-    return []
+from pdf.pdf_masker import PDFMasker
+from pdf.pdf_annotator import PDFAnnotator
 
 
 def _dump_json(obj: Any, out_path: Optional[str], pretty: bool):
-    """JSONを出力する"""
     text = json.dumps(obj, ensure_ascii=False, indent=2 if pretty else None)
     if out_path:
         out = Path(out_path)
@@ -45,345 +39,386 @@ def _dump_json(obj: Any, out_path: Optional[str], pretty: bool):
         click.echo(text)
 
 
-def _export_pdf_pii_coords(processor: PDFProcessor, config_manager: ConfigManager, path: str, out_path: Optional[str], pretty: bool):
-    """座標情報を含むJSONを出力する処理"""
-    pdf_files = _collect_pdfs(path)
-    results = []
-    
-    for pdf_path in pdf_files:
-        try:
-            entities = processor.analyze_pdf(pdf_path)
-            file_result = {
-                "file_path": pdf_path,
-                "entities": []
-            }
-            
-            for entity in entities:
-                entity_data = {
-                    "entity_type": entity["entity_type"],
-                    "text": entity["text"],
-                    "start": entity["start"],
-                    "end": entity["end"],
-                    "confidence": entity.get("confidence", 0.0),
-                    "coordinates": entity.get("coordinates", {}),
-                    "line_rects": entity.get("line_rects", [])
-                }
-                file_result["entities"].append(entity_data)
-            
-            results.append(file_result)
-        except Exception as e:
-            results.append({
-                "file_path": pdf_path,
-                "error": str(e)
-            })
-    
-    output_data = {
-        "export_mode": "pdf_pii_coords",
-        "files": results
+def _sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _get_pdf_source_info(pdf_path: str) -> Dict[str, Any]:
+    p = Path(pdf_path)
+    stat = p.stat()
+    with fitz.open(pdf_path) as d:
+        page_count = d.page_count
+    return {
+        "filename": p.name,
+        "path": str(p.resolve()),
+        "size": stat.st_size,
+        "page_count": page_count,
+        "sha256": _sha256_file(pdf_path),
+        "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
     }
-    
-    _dump_json(output_data, out_path, pretty)
 
 
-def _export_text_pii_offsets(processor: PDFProcessor, config_manager: ConfigManager, path: str, out_path: Optional[str], pretty: bool, text_variant: str, include_text: bool):
-    """オフセット情報を含むJSONを出力する処理"""
-    pdf_files = _collect_pdfs(path)
-    results = []
-    
-    for pdf_path in pdf_files:
-        try:
-            doc = fitz.open(pdf_path)
-            locator = PDFTextLocator(doc)
-            
-            # テキスト抽出の基準を選択
-            if text_variant == "with_newlines":
-                full_text = locator.full_text_with_newlines
-            else:
-                full_text = locator.full_text_no_newlines
-            
-            enabled_entities = config_manager.get_enabled_entities()
-            entities = processor.analyzer.analyze_text(full_text, enabled_entities)
-            
-            file_result = {
-                "file_path": pdf_path,
-                "text_variant": text_variant,
-                "entities": []
-            }
-            
-            if include_text:
-                file_result["full_text"] = full_text
-            
-            for entity in entities:
-                entity_data = {
-                    "entity_type": entity["entity_type"],
-                    "text": entity["text"],
-                    "start": entity["start"],
-                    "end": entity["end"],
-                    "confidence": entity.get("confidence", 0.0)
-                }
-                file_result["entities"].append(entity_data)
-            
-            results.append(file_result)
-            doc.close()
-        except Exception as e:
-            results.append({
-                "file_path": pdf_path,
-                "error": str(e)
-            })
-    
-    output_data = {
-        "export_mode": "text_pii_offsets",
-        "files": results
+def _structured_from_pdf(pdf_path: str) -> Dict[str, Any]:
+    pages: List[Dict[str, Any]] = []
+    with fitz.open(pdf_path) as doc:
+        for i, page in enumerate(doc):
+            raw = page.get_text("rawdict")
+            out_blocks: List[Dict[str, Any]] = []
+            for block in raw.get("blocks", []) or []:
+                if "lines" not in block:
+                    continue
+                lines_out: List[Dict[str, Any]] = []
+                for line in block.get("lines", []) or []:
+                    spans_out: List[Dict[str, Any]] = []
+                    for span in line.get("spans", []) or []:
+                        spans_out.append(
+                            {
+                                "text": span.get("text", ""),
+                                "bbox": span.get("bbox", None),
+                            }
+                        )
+                    if spans_out:
+                        lines_out.append({"spans": spans_out})
+                if lines_out:
+                    out_blocks.append({"lines": lines_out})
+            pages.append({"page": i + 1, "blocks": out_blocks})
+    return {"pages": pages}
+
+
+def _read_highlights(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any]]:
+    annot = PDFAnnotator(cfg)
+    return annot.read_pdf_annotations(pdf_path)
+
+
+@click.group()
+@click.option("--verbose", "-v", count=True, help="詳細ログの段階的有効化 (-v, -vv)")
+@click.option("--quiet", is_flag=True, default=False, help="出力を抑制")
+@click.option("--config", type=click.Path(exists=True), help="設定ファイル")
+def main(verbose: int, quiet: bool, config: Optional[str]):
+    level = logging.WARNING if quiet else (logging.DEBUG if verbose else logging.INFO)
+    logging.getLogger().setLevel(level)
+    # store in click context if needed later
+
+
+@main.command("read", help="PDFを読み込み JSONを出力")
+@click.argument("pdf", type=click.Path(exists=True))
+@click.option("--with-highlights/--no-highlights", default=True)
+@click.option("--with-plain/--no-plain", default=True)
+@click.option("--with-structured/--no-structured", default=True)
+@click.option("--norm-coords", is_flag=True, default=False, help="将来拡張用")
+@click.option("--out", type=click.Path())
+@click.option("--pretty", is_flag=True, default=False)
+def read_cmd(pdf: str, with_highlights: bool, with_plain: bool, with_structured: bool, norm_coords: bool, out: Optional[str], pretty: bool):
+    cfg = ConfigManager()
+    result: Dict[str, Any] = {
+        "schema_version": "1.0",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "source": _get_pdf_source_info(pdf),
+        "content": {},
     }
-    
-    _dump_json(output_data, out_path, pretty)
+    # highlights
+    if with_highlights:
+        result["content"]["highlight"] = _read_highlights(pdf, cfg)
+    # texts
+    with fitz.open(pdf) as doc:
+        locator = PDFTextLocator(doc)
+        if with_plain:
+            result["content"]["plain_text"] = locator.full_text_no_newlines
+        if with_structured:
+            result["content"]["structured_text"] = _structured_from_pdf(pdf)
+    _dump_json(result, out, pretty)
 
 
-@click.command()
-@click.argument("path", type=click.Path(exists=True), required=True)
-@click.option(
-    "--config", "-c", type=click.Path(exists=True), help="YAML設定ファイルのパス"
-)
-@click.option("--verbose", "-v", is_flag=True, help="詳細なログを表示")
-@click.option("--output-dir", "-o", type=click.Path(), help="出力ディレクトリ")
-@click.option(
-    "--read-mode",
-    "-r",
-    is_flag=True,
-    help="読み取りモード: 既存の注釈・ハイライトを読み取り",
-)
-@click.option(
-    "--read-report/--no-read-report",
-    default=True,
-    help="読み取りレポートを生成 (デフォルト: True)",
-)
-@click.option(
-    "--restore-mode",
-    is_flag=True,
-    help="復元モード: レポートからPDFの注釈・ハイライトを復元",
-)
-@click.option(
-    "--report-file",
-    type=click.Path(exists=True),
-    help="復元に使用するレポートファイルのパス",
-)
-@click.option(
-    "--masking-method",
-    type=click.Choice(["annotation", "highlight", "both"]),
-    help="マスキング方式",
-)
-@click.option(
-    "--masking-text-mode",
-    type=click.Choice(["silent", "minimal", "verbose"]),
-    help="マスキング文字表示モード",
-)
-@click.option(
-    "--operation-mode",
-    type=click.Choice(["clear_all", "append", "reset_and_append"]),
-    help="操作モード",
-)
-@click.option("--spacy-model", "-m", type=str, help="使用するspaCyモデル名")
-@click.option(
-    "--deduplication-mode",
-    type=click.Choice(["wider_range", "narrower_range", "entity_type"]),
-    help="重複除去モード",
-)
-@click.option(
-    "--deduplication-overlap-mode",
-    type=click.Choice(["contain_only", "partial_overlap"]),
-    help="重複判定モード",
-)
-@click.option(
-    "--export-mode",
-    "-E",
-    type=click.Choice(["1", "2", "3", "highlight_pdf", "pdf_pii_coords", "text_pii_offsets"]),
-    default="1",
-    show_default=True,
-    help="出力形式: 1/highlight_pdf=ハイライトPDF, 2/pdf_pii_coords=座標JSON, 3/text_pii_offsets=オフセットJSON",
-)
-@click.option("--json-out", "-J", type=click.Path(), help="JSONの出力先（省略時は標準出力）")
-@click.option("--pretty", is_flag=True, help="JSONを整形して出力")
-@click.option(
-    "--text-variant",
-    type=click.Choice(["no_newlines", "with_newlines"]),
-    default="no_newlines",
-    show_default=True,
-    help="③(text_pii_offsets)でのテキスト抽出の基準（既定: 改行なし）",
-)
-@click.option("--include-text", is_flag=True, help="③で抽出テキスト自体もJSONに含める")
-@click.option("--exclude", multiple=True, help="除外ワード(部分一致)")
-@click.option("--exclude-re", multiple=True, help="除外ワード(正規表現)")
-@click.option("--person-word", multiple=True,
-              help="人名として強制扱いする語を追加。複数可")
-@click.option("--person-pattern", multiple=True,
-              help="人名として扱う正規表現を追加。複数可")
-@click.option("--person-use-auto/--no-person-use-auto", default=True,
-              help="既存の自動認識と併用するか")
-@click.option("--custom-names", type=str,
-              help="custom_names をJSONで直接渡す。指定時は他の人名オプションより優先")
-def main(path, **kwargs):
-    """PyMuPDF版 PDF個人情報検出・マスキング・読み取り・復元ツール
-    
-    PATH: 処理するPDFファイルまたはフォルダのパス
-    """
-    args_dict = {k: v for k, v in kwargs.items() if v is not None}
-    args_dict["pdf_masking_method"] = args_dict.pop("masking_method", None)
+def _detection_id(entity: str, text: str, payload: Tuple) -> str:
+    raw = json.dumps([entity, text, payload], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return _sha256_bytes(raw)
 
-    # 除外設定を反映 (clickのmultiple=Trueはタプルを返す)
-    if args_dict.get("exclude") or args_dict.get("exclude_re"):
-        exclusions = {}
-        if args_dict.get("exclude"):
-            exclusions["text_exclusions"] = list(args_dict["exclude"])
-        if args_dict.get("exclude_re"):
-            exclusions["text_exclusions_regex"] = list(args_dict["exclude_re"])
-        args_dict["exclusions"] = exclusions
 
-    # 追加: 強制PERSONの組み立て
-    # JSON直渡しがあればそれを使う
-    if args_dict.get("custom_names"):
-        cn = args_dict["custom_names"]
-        if isinstance(cn, str):
-            import json as _json
-            try:
-                cn = _json.loads(cn)
-            except Exception:
-                raise click.BadParameter("--custom-names は有効なJSONで指定してください")
-        args_dict["custom_names"] = cn
+def _validate_read_json(obj: Dict[str, Any]) -> List[str]:
+    errs = []
+    if not isinstance(obj, dict):
+        return ["root must be object"]
+    src = obj.get("source", {}) or {}
+    if not isinstance(src, dict):
+        errs.append("source must be object")
     else:
-        words = list(args_dict.pop("person_word", []))
-        pats  = list(args_dict.pop("person_pattern", []))
-        use_auto = args_dict.pop("person_use_auto", True)
-        if words or pats:
-            name_patterns = [
-                {"name": f"cli_person_{i+1}", "regex": p, "score": 0.9}
-                for i, p in enumerate(pats)
-            ]
-            args_dict["custom_names"] = {
-                "enabled": True,
-                "use_with_auto_detection": use_auto,
-                "name_list": words,
-                "name_patterns": name_patterns,
-            }
+        if not isinstance(src.get("path"), str) or not src.get("path"):
+            errs.append("source.path must be non-empty string (absolute path)")
+        for k in ["filename", "sha256"]:
+            if not isinstance(src.get(k), str):
+                errs.append(f"source.{k} must be string")
+        if not isinstance(src.get("page_count"), int):
+            errs.append("source.page_count must be int")
+    content = obj.get("content", {}) or {}
+    if not isinstance(content, dict):
+        errs.append("content must be object")
+    else:
+        if "plain_text" in content and content["plain_text"] is not None and not isinstance(content["plain_text"], str):
+            errs.append("content.plain_text must be string or null")
+        if "structured_text" in content and content["structured_text"] is not None and not isinstance(content["structured_text"], dict):
+            errs.append("content.structured_text must be object or null")
+    return errs
 
-    config_manager = ConfigManager(config_file=args_dict.get("config"), args=args_dict)
 
-    if config_manager._safe_get_config(
-        "features.logging.level"
-    ) == "DEBUG" or args_dict.get("verbose"):
-        logging.getLogger().setLevel(logging.DEBUG)
+def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
+    errs = []
+    if not isinstance(obj, dict):
+        return ["root must be object"]
+    src = obj.get("source", {}) or {}
+    if not isinstance(src, dict):
+        errs.append("source must be object")
+    else:
+        pdf = src.get("pdf", {}) or {}
+        if not isinstance(pdf, dict) or not isinstance(pdf.get("sha256"), str):
+            errs.append("source.pdf.sha256 must be string")
+    dets = obj.get("detections", {}) or {}
+    if not isinstance(dets, dict):
+        errs.append("detections must be object")
+    else:
+        # plain validations
+        if "plain" in dets and dets["plain"] is not None:
+            if not isinstance(dets["plain"], list):
+                errs.append("detections.plain must be array")
+            else:
+                for i, item in enumerate(dets["plain"]):
+                    if not isinstance(item, dict):
+                        errs.append(f"detections.plain[{i}] must be object"); continue
+                    for k in ["detection_id", "text", "entity", "unit", "origin"]:
+                        if not isinstance(item.get(k), str):
+                            errs.append(f"detections.plain[{i}].{k} must be string")
+                    for k in ["start", "end"]:
+                        if not isinstance(item.get(k), int):
+                            errs.append(f"detections.plain[{i}].{k} must be int")
+                    s, e = item.get("start"), item.get("end")
+                    if isinstance(s, int) and isinstance(e, int) and not (s < e):
+                        errs.append(f"detections.plain[{i}] start must be < end")
+        # structured validations
+        if "structured" in dets and dets["structured"] is not None:
+            if not isinstance(dets["structured"], list):
+                errs.append("detections.structured must be array")
+            else:
+                for i, item in enumerate(dets["structured"]):
+                    if not isinstance(item, dict):
+                        errs.append(f"detections.structured[{i}] must be object"); continue
+                    for k in ["detection_id", "text", "entity"]:
+                        if not isinstance(item.get(k), str):
+                            errs.append(f"detections.structured[{i}].{k} must be string")
+                    if not isinstance(item.get("page"), int) or item.get("page", 0) < 1:
+                        errs.append(f"detections.structured[{i}].page must be int >= 1")
+                    quads = item.get("quads")
+                    if not isinstance(quads, list) or not quads:
+                        errs.append(f"detections.structured[{i}].quads must be non-empty array")
+                    else:
+                        for j, q in enumerate(quads):
+                            if not (isinstance(q, (list, tuple)) and len(q) == 4 and all(isinstance(x, (int, float)) for x in q)):
+                                errs.append(f"detections.structured[{i}].quads[{j}] must be [x0,y0,x1,y1] numbers")
+    return errs
 
-    processor = PDFProcessor(config_manager)
 
+@main.command("detect", help="read JSONからPIIを検出しJSON出力")
+@click.option("--from", "src", type=click.Path(), help="read JSONファイル（省略でstdin）")
+@click.option("--from-stdin", is_flag=True, default=False)
+@click.option("--use-plain", is_flag=True, help="plain_textで検出を実行")
+@click.option("--use-structured", is_flag=True, help="structured_textで検出を実行")
+@click.option("--model", multiple=True, help="モデルID（未使用・将来拡張）")
+@click.option("--add-entities", type=click.Path(exists=True), help="追加エンティティ定義ファイル（未実装）")
+@click.option("--append-highlights/--no-append-highlights", default=True)
+@click.option("--out", type=click.Path())
+@click.option("--pretty", is_flag=True, default=False)
+@click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
+def detect_cmd(src: Optional[str], from_stdin: bool, use_plain: bool, use_structured: bool, model: Tuple[str, ...], add_entities: Optional[str], append_highlights: bool, out: Optional[str], pretty: bool, validate: bool):
+    # load input JSON
+    data_txt = None
+    if src:
+        data_txt = Path(src).read_text(encoding="utf-8")
+    else:
+        data_txt = sys.stdin.read()
     try:
-        if args_dict.get("restore_mode"):
-            if not args_dict.get("report_file"):
-                click.echo("エラー: 復元モードでは --report-file オプションが必要です")
-                return
-
-            click.echo("\n=== PDF復元モード ===")
-            click.echo(f"復元対象: {path}")
-            click.echo(f"レポートファイル: {args_dict['report_file']}")
-
-            import fitz
-
-            doc = fitz.open(path)
-            # A new output path is needed, or we modify in place.
-            output_path = processor.masker._generate_output_path(
-                path
-            )  # Use masker's helper
-            processor.annotator.restore_pdf_from_report(doc, args_dict["report_file"])
-            doc.save(output_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
-            doc.close()
-            click.echo(f"\n復元成功: {output_path}")
-
-        elif config_manager.is_read_mode_enabled():
-            click.echo("\n=== PDF注釈読み取り結果 ===")
-            results = processor.process_files(path)
-            display_read_results(results)
-
-        else:
-            # 出力形式を解釈（デフォルト=1=ハイライトPDF）
-            export_mode = args_dict.get("export_mode", "1")
-            if export_mode in ("1", "highlight_pdf"):
-                click.echo("\n=== PyMuPDF PDF処理結果（ハイライトPDF） ===")
-                results = processor.process_files(path, args_dict.get("pdf_masking_method"))
-                display_masking_results(results, config_manager)
-                return
-            elif export_mode in ("2", "pdf_pii_coords"):
-                _export_pdf_pii_coords(
-                    processor, config_manager, path, 
-                    args_dict.get("json_out"), 
-                    bool(args_dict.get("pretty", False))
-                )
-                return
-            elif export_mode in ("3", "text_pii_offsets"):
-                _export_text_pii_offsets(
-                    processor, config_manager, path,
-                    args_dict.get("json_out"),
-                    bool(args_dict.get("pretty", False)),
-                    args_dict.get("text_variant", "no_newlines"),
-                    bool(args_dict.get("include_text", False)),
-                )
-                return
-
+        data = json.loads(data_txt)
     except Exception as e:
-        logging.error(f"処理中にエラーが発生しました: {e}", exc_info=True)
-        click.echo(f"エラー: {e}")
+        raise click.ClickException(f"入力JSONの読み込みに失敗: {e}")
+
+    if validate:
+        errors = _validate_read_json(data)
+        if errors:
+            raise click.ClickException("read JSON validation failed: " + "; ".join(errors))
+
+    pdf_path = data.get("source", {}).get("path")
+    if not pdf_path or not os.path.exists(pdf_path):
+        raise click.ClickException("source.path にPDFの絶対パスが必要です（readの出力を使用してください）")
+
+    plain_text = (data.get("content", {}) or {}).get("plain_text")
+    use_plain = use_plain or (plain_text is not None and not use_structured)
+    use_structured = use_structured or (plain_text is not None and not use_plain)
+    # default: if neither specified, use both when available
+    if not (use_plain or use_structured):
+        use_plain = plain_text is not None
+        use_structured = True
+
+    cfg = ConfigManager()
+    analyzer = Analyzer(cfg)
+
+    detections_plain: List[Dict[str, Any]] = []
+    detections_struct: List[Dict[str, Any]] = []
+
+    with fitz.open(pdf_path) as doc:
+        locator = PDFTextLocator(doc)
+        target_text = plain_text if isinstance(plain_text, str) else locator.full_text_no_newlines
+        enabled_entities = cfg.get_enabled_entities()
+        model_results = analyzer.analyze_text(target_text, enabled_entities)
+
+        for r in model_results:
+            ent = r.get("entity_type") or r.get("entity")
+            s = int(r["start"]); e = int(r["end"])  # codepoint offsets (no newlines)
+            txt = target_text[s:e]
+            did = _detection_id(ent, txt, (s, e))
+            entry_plain = {
+                "detection_id": did,
+                "text": txt,
+                "entity": ent,
+                "start": s,
+                "end": e,
+                "unit": "codepoint",
+                "origin": "model",
+                "model_id": None,
+                "confidence": r.get("confidence"),
+            }
+            if use_plain:
+                detections_plain.append(entry_plain)
+            if use_structured:
+                quads = []
+                for lr in locator.get_pii_line_rects(s, e):
+                    rect = lr.get("rect") or {}
+                    quads.append([rect.get("x0", 0.0), rect.get("y0", 0.0), rect.get("x1", 0.0), rect.get("y1", 0.0)])
+                detections_struct.append({
+                    "detection_id": did,
+                    "text": txt,
+                    "entity": ent,
+                    "page": (locator.locate_pii_by_offset_no_newlines(s, e)[0]["page_num"] + 1) if locator.locate_pii_by_offset_no_newlines(s, e) else 1,
+                    "quads": quads,
+                    "origin": "model",
+                    "model_id": None,
+                    "confidence": r.get("confidence"),
+                })
+
+    out_obj = {
+        "schema_version": "1.0",
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "source": {
+            "pdf": {"sha256": _sha256_file(pdf_path)},
+            "read_json_sha256": _sha256_bytes(data_txt.encode("utf-8")),
+        },
+        "detections": {
+            "plain": detections_plain,
+            "structured": detections_struct,
+        },
+    }
+    if append_highlights:
+        out_obj["highlights"] = (data.get("content", {}) or {}).get("highlight", [])
+    _dump_json(out_obj, out, pretty)
 
 
-def display_read_results(results):
-    """読み取りモードの結果を表示"""
-    if not results:
-        click.echo("処理対象のファイルが見つかりませんでした。")
-        return
+@main.command("mask", help="検出JSONを使ってPDFにハイライト注釈を追加")
+@click.argument("pdf", type=click.Path(exists=True))
+@click.option("--detect", "detect_file", type=click.Path(exists=True), required=True)
+@click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
+@click.option("--label-only", is_flag=True, default=False, help="注釈に生テキストを含めない")
+@click.option("--out", type=click.Path(), help="出力PDFパス（省略で規定出力名）")
+@click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
+def mask_cmd(pdf: str, detect_file: str, force: bool, label_only: bool, out: Optional[str], validate: bool):
+    cfg = ConfigManager()
+    # hash validation
+    det = json.loads(Path(detect_file).read_text(encoding="utf-8"))
+    if validate:
+        errors = _validate_detect_json(det)
+        if errors:
+            raise click.ClickException("detect JSON validation failed: " + "; ".join(errors))
+    pdf_sha = _sha256_file(pdf)
+    ref_sha = ((det.get("source", {}) or {}).get("pdf", {}) or {}).get("sha256")
+    if ref_sha and ref_sha != pdf_sha and not force:
+        raise click.ClickException("PDFと検出JSONのsha256が一致しません (--force で無視)")
 
-    total_annotations = sum(
-        r.get("total_annotations", 0) for r in results if "error" not in r
-    )
-    click.echo(f"読み取った注釈総数: {total_annotations}")
-
-    for result in results:
-        if "error" in result:
-            click.echo(f"\n❌ エラー: {result['input_file']}\n   {result['error']}")
-        elif "skipped" in result:
-            click.echo(
-                f"\n[スキップ] {result['input_file']} - 理由: {result.get('reason', '不明')}"
+    # build entities in expected structure for PDFMasker (line_rects)
+    entities: List[Dict[str, Any]] = []
+    for st in (det.get("detections", {}) or {}).get("structured", []) or []:
+        for q in st.get("quads", []) or []:
+            entities.append(
+                {
+                    "entity_type": st.get("entity", "PII"),
+                    "text": ("" if label_only else st.get("text", "")),
+                    "line_rects": [
+                        {
+                            "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
+                            "page_num": max(0, int(st.get("page", 1)) - 1),
+                        }
+                    ],
+                }
             )
-        else:
-            click.echo(f"\n[読み取り成功] {result['input_file']}")
-            click.echo(f"   注釈数: {result['total_annotations']}")
-            if result.get("report_file"):
-                click.echo(f"   レポート: {result['report_file']}")
+
+    masker = PDFMasker(cfg)
+    # If out specified, temporarily override output_dir by environment
+    output_path = None
+    if out:
+        # Write to a copy at `out`
+        tmp = masker._generate_output_path(pdf)
+        output_path = out
+        # copy source to exact out path first
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        with open(pdf, "rb") as r, open(out, "wb") as w:
+            w.write(r.read())
+        # now apply highlights in-place on out
+        masker._apply_highlight_masking_with_mode(out, entities, cfg.get_operation_mode())
+    else:
+        output_path = masker.apply_masking(pdf, entities, masking_method="highlight")
+    click.echo(output_path)
 
 
-def display_masking_results(results, config_manager):
-    """マスキングモードの結果を表示"""
-    if not results:
-        click.echo("処理対象のファイルが見つかりませんでした。")
-        return
+def _dedupe_list(items: List[Dict[str, Any]], key_fn) -> List[Dict[str, Any]]:
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        k = key_fn(it)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(it)
+    return out
 
-    total_entities = sum(
-        r.get("total_entities_found", 0) for r in results if "error" not in r
+
+@main.command("duplicate-process", help="検出結果の重複を処理して正規化")
+@click.option("--detect", "detect_file", type=click.Path(exists=True), required=True)
+@click.option("--policy", type=click.Path(exists=True), help="未実装: ポリシーファイル")
+@click.option("--entity-priority", type=str, help="未実装: エンティティ優先順")
+@click.option("--keep", type=click.Choice(["origin", "longest", "highest-priority"]), default="origin")
+@click.option("--out", type=click.Path())
+@click.option("--pretty", is_flag=True, default=False)
+def dedupe_cmd(detect_file: str, policy: Optional[str], entity_priority: Optional[str], keep: str, out: Optional[str], pretty: bool):
+    data = json.loads(Path(detect_file).read_text(encoding="utf-8"))
+    dets = data.get("detections", {}) or {}
+    plain = dets.get("plain", []) or []
+    struct = dets.get("structured", []) or []
+
+    plain_dedup = _dedupe_list(
+        plain,
+        key_fn=lambda d: (d.get("entity"), d.get("text"), int(d.get("start", -1)), int(d.get("end", -1))),
     )
-    click.echo(f"検出された個人情報総数: {total_entities}")
-    click.echo(f"検出対象: {', '.join(config_manager.get_enabled_entities())}")
-    click.echo(f"マスキング方式: {config_manager.get_pdf_masking_method()}")
+    struct_dedup = _dedupe_list(
+        struct,
+        key_fn=lambda d: (d.get("entity"), d.get("text"), int(d.get("page", 0)), tuple(tuple(map(float, q)) for q in (d.get("quads", []) or []))),
+    )
 
-    for result in results:
-        if "error" in result:
-            click.echo(f"\n❌ エラー: {result['input_file']}\n   {result['error']}")
-        elif "skipped" in result:
-            click.echo(
-                f"\n[スキップ] {result['input_file']} - 理由: {result.get('reason', '不明')}"
-            )
-        else:
-            click.echo(f"\n[成功] {result['input_file']}")
-            click.echo(f"   出力: {result['output_file']}")
-            # バックアップ出力は廃止したため表示しない
-            click.echo(f"   検出数: {result['total_entities_found']}")
-            if result["entities_by_type"]:
-                for entity_type, count in result["entities_by_type"].items():
-                    click.echo(f"     {entity_type}: {count}件")
+    out_obj = data.copy()
+    out_obj["detections"] = {"plain": plain_dedup, "structured": struct_dedup}
+    _dump_json(out_obj, out, pretty)
 
 
 if __name__ == "__main__":

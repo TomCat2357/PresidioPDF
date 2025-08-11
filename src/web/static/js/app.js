@@ -85,6 +85,54 @@ document.addEventListener('DOMContentLoaded', () => {
             this.loadSettings();
         }
 
+        tokenizeWithQuotes(input, options = { separator: 'whitespace' }) {
+            const sepMode = options.separator || 'whitespace';
+            const s = String(input || '');
+            const tokens = [];
+            let buf = [];
+            let inQuote = null;
+            let escapeNext = false;
+
+            const isWhitespace = (ch) => /\s/.test(ch) || ch === '\u3000';
+            const isCommaSep = (ch) => ch === ',' || ch === '，' || ch === '、';
+
+            const flush = () => {
+                if (buf.length === 0) return;
+                const t = buf.join('').trim();
+                if (t) tokens.push(t);
+                buf = [];
+            };
+
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+
+                if (escapeNext) {
+                    buf.push(ch);
+                    escapeNext = false;
+                    continue;
+                }
+
+                if (ch === '\\') { escapeNext = true; continue; }
+
+                if (inQuote) { if (ch === inQuote) { inQuote = null; } else { buf.push(ch); } continue; }
+
+                if (ch === '"' || ch === '\'') { inQuote = ch; continue; }
+
+                if (sepMode === 'whitespace') { if (isWhitespace(ch)) { flush(); continue; } }
+                else if (sepMode === 'comma') { if (isCommaSep(ch)) { flush(); continue; } }
+
+                buf.push(ch);
+            }
+
+            if (inQuote !== null) {
+                const t = (inQuote + buf.join('')).trim();
+                if (t) tokens.push(t);
+            } else {
+                flush();
+            }
+            return tokens;
+        }
+
         initializeElements() {
             this.elements = {
                 uploadArea: document.getElementById('uploadArea'),
@@ -146,6 +194,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const first = document.getElementById('excludeWords')
                               || settingsModalEl.querySelector('textarea, input');
                     if (first) first.focus();
+                    // モーダル表示時に親チェックの状態を再計算
+                    this.updateEntitySelectAllState?.();
                 });
             }
 
@@ -200,6 +250,41 @@ document.addEventListener('DOMContentLoaded', () => {
             this.elements.exportSettingsBtn.addEventListener('click', () => this.exportSettings());
             this.elements.importSettingsBtn.addEventListener('click', () => this.elements.importSettingsFile.click());
             this.elements.importSettingsFile.addEventListener('change', (e) => this.importSettings(e));
+
+            // エンティティ「すべて選択（解除で全解除）」のトグル
+            const entitySelectAll = document.getElementById('entitySelectAll');
+            if (entitySelectAll) {
+                entitySelectAll.addEventListener('change', (e) => {
+                    const checked = e.target.checked;
+                    // 親操作時は中間状態を解除
+                    e.target.indeterminate = false;
+                    document.querySelectorAll('#settingsModal .form-check-input[data-entity-checkbox="1"]').forEach(cb => {
+                        cb.checked = checked;
+                    });
+                    // 子の変更後に親の状態を再評価（全選択/全解除になっている想定）
+                    this.updateEntitySelectAllState?.();
+                });
+            }
+
+            // 子チェックの変更時に中間表示を反映
+            document.querySelectorAll('#settingsModal .form-check-input[data-entity-checkbox="1"]').forEach(cb => {
+                cb.addEventListener('change', () => this.updateEntitySelectAllState());
+            });
+
+            // 除外正規表現入力のバリデーションとプレビュー
+            const excludeInput = this.elements.excludeWords;
+            const saveSettingsBtn = this.elements.saveSettingsBtn;
+            const feedbackEl = document.getElementById('excludeWordsFeedback');
+            const previewEl = document.getElementById('excludeWordsPreview');
+            if (excludeInput && feedbackEl && previewEl) {
+                const handler = () => this.validateAndPreviewExcludeRegex();
+                excludeInput.addEventListener('input', handler);
+                // モーダル表示時にも最新の状態を反映
+                const settingsModalEl = document.getElementById('settingsModal');
+                if (settingsModalEl) {
+                    settingsModalEl.addEventListener('shown.bs.modal', handler);
+                }
+            }
 
             // --- PDFビューアのインタラクティブなイベント（整理・統合済み） ---
 
@@ -1023,7 +1108,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         saveSettings() {
-            this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input:checked')).map(cb => cb.value);
+            this.settings.entities = Array.from(document.querySelectorAll('#settingsModal .form-check-input[data-entity-checkbox="1"]:checked')).map(cb => cb.value);
             this.settings.masking_method = document.getElementById('maskingMethod').value;
             this.settings.spacy_model = document.getElementById('spacyModel').value;
             const mtm = document.getElementById('maskingTextMode');
@@ -1035,17 +1120,17 @@ document.addEventListener('DOMContentLoaded', () => {
             this.settings.deduplication_priority = document.getElementById('deduplicationPriority').value;
             this.settings.deduplication_overlap_mode = document.getElementById('deduplicationOverlapMode').value;
 
-            // 除外単語と追加単語設定を取得
-            const raw = this.elements.excludeWords.value.trim();
-            this.settings.exclude_regex = raw ? raw.split(/[ \u3000]+/).filter(Boolean) : [];
+            // 除外単語と追加単語設定を取得（クオート対応）
+            const raw = (this.elements.excludeWords.value || '').trim();
+            this.settings.exclude_regex = raw ? this.tokenizeWithQuotes(raw, { separator: 'whitespace' }) : [];
             this.settings.additional_words = {
-                PERSON: this.elements.additionalPersonWords.value.split(',').map(w => w.trim()).filter(w => w),
-                LOCATION: this.elements.additionalLocationWords.value.split(',').map(w => w.trim()).filter(w => w),
-                PHONE_NUMBER: this.elements.additionalPhoneWords.value.split(',').map(w => w.trim()).filter(w => w),
-                DATE_TIME: this.elements.additionalDateWords.value.split(',').map(w => w.trim()).filter(w => w),
-                INDIVIDUAL_NUMBER: this.elements.additionalIndividualWords.value.split(',').map(w => w.trim()).filter(w => w),
-                YEAR: this.elements.additionalYearWords.value.split(',').map(w => w.trim()).filter(w => w),
-                PROPER_NOUN: this.elements.additionalProperNounWords.value.split(',').map(w => w.trim()).filter(w => w)
+                PERSON: this.tokenizeWithQuotes(this.elements.additionalPersonWords.value || '', { separator: 'comma' }),
+                LOCATION: this.tokenizeWithQuotes(this.elements.additionalLocationWords.value || '', { separator: 'comma' }),
+                PHONE_NUMBER: this.tokenizeWithQuotes(this.elements.additionalPhoneWords.value || '', { separator: 'comma' }),
+                DATE_TIME: this.tokenizeWithQuotes(this.elements.additionalDateWords.value || '', { separator: 'comma' }),
+                INDIVIDUAL_NUMBER: this.tokenizeWithQuotes(this.elements.additionalIndividualWords.value || '', { separator: 'comma' }),
+                YEAR: this.tokenizeWithQuotes(this.elements.additionalYearWords.value || '', { separator: 'comma' }),
+                PROPER_NOUN: this.tokenizeWithQuotes(this.elements.additionalProperNounWords.value || '', { separator: 'comma' })
             };
             
             console.log('重複除去設定を保存:', {
@@ -1076,9 +1161,10 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('deduplicationPriority').value = this.settings.deduplication_priority || 'wider_range';
             document.getElementById('deduplicationOverlapMode').value = this.settings.deduplication_overlap_mode || 'partial_overlap';
 
-            // 除外単語と追加単語設定をロード
-            if (this.settings.exclude_words) {
-                this.elements.excludeWords.value = this.settings.exclude_words.join('\n');
+            // 除外正規表現と追加単語設定をロード
+            if (this.settings.exclude_regex) {
+                // 空白区切りで表示（そのまま正規表現として扱う）
+                this.elements.excludeWords.value = (this.settings.exclude_regex || []).join(' ');
             }
             if (this.settings.additional_words) {
                 this.elements.additionalPersonWords.value = (this.settings.additional_words.PERSON || []).join(', ');
@@ -1089,13 +1175,85 @@ document.addEventListener('DOMContentLoaded', () => {
                 this.elements.additionalYearWords.value = (this.settings.additional_words.YEAR || []).join(', ');
                 this.elements.additionalProperNounWords.value = (this.settings.additional_words.PROPER_NOUN || []).join(', ');
             }
-            
+
             console.log('重複除去設定をロード:', {
                 enabled: this.settings.deduplication_enabled,
                 method: this.settings.deduplication_method,
                 priority: this.settings.deduplication_priority,
                 overlap_mode: this.settings.deduplication_overlap_mode
             });
+
+            // 設定のロード後に親チェック状態を更新
+            this.updateEntitySelectAllState?.();
+
+            // 除外正規表現のプレビュー/検証を初期化
+            this.validateAndPreviewExcludeRegex?.();
+        }
+
+        updateEntitySelectAllState() {
+            const parent = document.getElementById('entitySelectAll');
+            if (!parent) return;
+            const children = Array.from(document.querySelectorAll('#settingsModal .form-check-input[data-entity-checkbox="1"]'));
+            if (children.length === 0) {
+                parent.checked = false;
+                parent.indeterminate = false;
+                return;
+            }
+            const checkedCount = children.filter(cb => cb.checked).length;
+            if (checkedCount === 0) {
+                parent.checked = false;
+                parent.indeterminate = false;
+            } else if (checkedCount === children.length) {
+                parent.checked = true;
+                parent.indeterminate = false;
+            } else {
+                parent.checked = false;
+                parent.indeterminate = true;
+            }
+        }
+
+        validateAndPreviewExcludeRegex() {
+            const input = (this.elements.excludeWords?.value || '').trim();
+            const feedbackEl = document.getElementById('excludeWordsFeedback');
+            const previewEl = document.getElementById('excludeWordsPreview');
+            const saveBtn = this.elements.saveSettingsBtn;
+            if (!feedbackEl || !previewEl) return;
+
+            const patterns = this.tokenizeWithQuotes(input, { separator: 'whitespace' });
+            const errors = [];
+            const compiled = [];
+            for (const p of patterns) {
+                try {
+                    // JS側の簡易検証としてRegExpを試す（Pythonと完全互換ではありません）
+                    compiled.push(new RegExp(p));
+                } catch (e) {
+                    errors.push(`${p}: ${e.message}`);
+                }
+            }
+
+            if (errors.length) {
+                feedbackEl.classList.remove('text-muted');
+                feedbackEl.classList.add('text-danger');
+                feedbackEl.textContent = `無効な正規表現があります: ${errors[0]}`;
+                if (saveBtn) saveBtn.disabled = true;
+            } else {
+                feedbackEl.classList.remove('text-danger');
+                feedbackEl.classList.add('text-muted');
+                feedbackEl.textContent = patterns.length ? `有効なパターン数: ${patterns.length}` : '（未指定）';
+                if (saveBtn) saveBtn.disabled = false;
+            }
+
+            // プレビュー（例文に対してどれだけヒットするか）
+            const sample = '東京都 太郎 090-1234-5678 2024年4月1日 sample@example.com';
+            let hits = 0;
+            try {
+                for (const r of compiled) {
+                    const m = sample.match(r);
+                    if (m) hits += 1;
+                }
+            } catch (_) {}
+            previewEl.classList.add('text-muted');
+            previewEl.textContent = `プレビュー: サンプルに ${hits} パターンがマッチ（除外対象）`;
         }
 
         exportSettings() {

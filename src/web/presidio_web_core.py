@@ -178,6 +178,29 @@ class PresidioPDFWebApp:
             ex = cm.get_exclusions()
             ex["text_exclusions_regex"] = web_patterns
             cm.config["exclusions"] = ex
+
+            # Webの追加パターンを共通ロジック（Analyzer）へ委譲するため custom_recognizers に反映
+            try:
+                add = self.settings.get("additional_words", {}) or {}
+                cr = cm.config.get("custom_recognizers", {}) or {}
+                # 既存のweb_定義を削除して再構築
+                cr = {k: v for k, v in cr.items() if not str(k).startswith("web_")}
+                for etype, patterns in add.items():
+                    if not isinstance(patterns, list):
+                        continue
+                    conf = {
+                        "enabled": True,
+                        "entity_type": etype,
+                        "patterns": [
+                            {"name": f"web_{etype}_{i}", "regex": p, "score": 1.0}
+                            for i, p in enumerate(patterns)
+                            if isinstance(p, str) and p
+                        ],
+                    }
+                    cr[f"web_{etype}"] = conf
+                cm.config["custom_recognizers"] = cr
+            except Exception as e:
+                logger.warning(f"web追加パターンの適用に失敗: {e}")
             
             logger.info(f"=== run_detection開始 ===")
             logger.info(f"PDF path: {self.current_pdf_path}")
@@ -202,7 +225,7 @@ class PresidioPDFWebApp:
             logger.info("Presidio解析実行開始...")
             logger.info(f"検出設定エンティティ: {self.settings['entities']}")
 
-            # Presidioで解析を実行
+            # Presidioで解析を実行（モデル検出）
             entities = self.processor.analyze_pdf(self.current_pdf_path)
             logger.info(f"Presidio解析完了: {len(entities)}件のエンティティを検出")
 
@@ -230,7 +253,6 @@ class PresidioPDFWebApp:
             for entity in entities:
                 # エンティティタイプでフィルタリング
                 if entity["entity_type"] in self.settings["entities"]:
-
                     # 単一文字記号の除外フィルタリング
                     entity_text = entity.get("text", "")
                     entity_type = entity.get("entity_type", "")
@@ -358,7 +380,7 @@ class PresidioPDFWebApp:
                 )
                 logger.info(f"CLI版重複除去完了: {len(new_detection_results)}件")
 
-            # 手動追加エンティティと新しい自動検出結果を統合
+            # Analyzer側で追加>モデル>除外を適用済み。ここでは手動分を先頭に結合。
             self.detection_results = manual_entities + new_detection_results
 
             total_count = len(self.detection_results)
@@ -384,6 +406,107 @@ class PresidioPDFWebApp:
             logger.error(f"検出処理エラー: {ex}")
             logger.error(traceback.format_exc())
             return {"success": False, "message": f"検出処理に失敗: {str(ex)}"}
+
+    def _apply_additional_patterns(self, locator, full_text_no_newlines: str) -> List[Dict]:
+        """追加エンティティ正規表現を全文に適用（追加 > 除外、左高優先・右から適用）。
+
+        - 設定: self.settings["additional_words"] は {ENTITY_TYPE: [regex, ...]} 形式
+        - 除外: 追加は除外の影響を受けない（常に保持）
+        - 競合: 左（最初）定義が高優先。長さは考慮しない。
+        - 座標: PDFTextLocator.locate_pii_by_offset_no_newlines で矩形算出
+        """
+        import re
+        additional = self.settings.get("additional_words", {}) or {}
+
+        # 右→左で探索し、左定義（高優先）順に非重複化
+        raw_matches: List[Dict] = []
+        order_map: List[tuple] = []  # (entity, idx, pattern)
+        for etype, patterns in additional.items():
+            if not isinstance(patterns, list):
+                continue
+            for idx, pat in enumerate(patterns):
+                order_map.append((etype, idx, pat))
+
+        for etype, idx, pat in reversed(order_map):
+            if not pat:
+                continue
+            try:
+                compiled = re.compile(pat)
+            except re.error as e:
+                logger.warning(f"無効な追加エンティティ正規表現をスキップ: {pat}: {e}")
+                continue
+            max_hits = 10000
+            hit_count = 0
+            for m in compiled.finditer(full_text_no_newlines):
+                s, e = m.span()
+                if s == e:
+                    continue
+                raw_matches.append({
+                    "start": s,
+                    "end": e,
+                    "entity_type": etype,
+                    "text": full_text_no_newlines[s:e],
+                    "_prio": idx,
+                })
+                hit_count += 1
+                if hit_count >= max_hits:
+                    logger.warning(f"追加エンティティパターンのヒットが上限({max_hits})に達しました: {pat}")
+                    break
+
+        if not raw_matches:
+            return []
+
+        # 優先度（idx低い=高優先）で非重複化。長さは無視。
+        selected: List[Dict] = []
+        occupied: List[tuple] = []
+        for m in sorted(raw_matches, key=lambda x: (x["_prio"], x["start"])):
+            s, e = m["start"], m["end"]
+            if any(not (e <= os or oe <= s) for (os, oe) in occupied):
+                continue
+            occupied.append((s, e))
+            selected.append({k: v for k, v in m.items() if not k.startswith("_")})
+
+        # 位置（矩形）情報の付与
+        results: List[Dict] = []
+        for ent in selected:
+            spans = locator.locate_pii_by_offset_no_newlines(ent["start"], ent["end"])
+            if not spans:
+                continue
+            main = spans[0]
+            rect = main["rect"]
+            line_rects = []
+            for i, r in enumerate(spans):
+                rr = r["rect"]
+                line_rects.append({
+                    "rect": {"x0": float(rr.x0), "y0": float(rr.y0), "x1": float(rr.x1), "y1": float(rr.y1)},
+                    "coord_space": "fitz",
+                    "text": ent["text"],
+                    "line_number": i + 1,
+                    "page_num": r["page_num"],
+                })
+
+            results.append({
+                "entity_type": str(ent.get("entity_type", "UNKNOWN")),
+                "text": str(ent.get("text", "")),
+                "score": 1.0,
+                "page": main["page_num"],
+                "page_num": main["page_num"],
+                "recognition_metadata": {"recognizer_name": "CustomRegex"},
+                "analysis_explanation": {"pattern": "additional_words"},
+                "location_info": {},
+                "start_char": None,
+                "end_char": None,
+                "start": int(ent.get("start", 0)),
+                "end": int(ent.get("end", 0)),
+                "coordinates": {"x0": float(rect.x0), "y0": float(rect.y0), "x1": float(rect.x1), "y1": float(rect.y1)},
+                "rect_pdf": [float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)],
+                "line_rects": line_rects,
+                "manual": False,
+                "custom": True,
+            })
+
+        # 昇順（開始位置）で返す
+        return sorted(results, key=lambda x: x.get("start", 0))
 
     def _is_duplicate_auto_detection(
         self, new_entity: Dict, existing_entities: List[Dict]
