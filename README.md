@@ -32,41 +32,58 @@ uv sync --extra minimal    # Minimal installation
 Note: This project exclusively uses `uv` for dependency management. Do not use `pip`.
 
 CLI Usage
-This project now uses subcommands. Run `presidio-cli --help` for an overview, or `presidio-cli <subcommand> --help` for details.
+This project provides both a legacy subcommand CLI and new split commands. Prefer the new split commands for piping and tooling.
 
-Subcommands
-- `read`: Read a PDF and output JSON with highlights, plain text, and structured text.
-- `detect`: Read the JSON from `read` and produce PII detections JSON (plain offsets and structured quads).
-- `duplicate-process`: De-duplicate detections JSON.
-- `mask`: Apply highlight annotations to the PDF using detections JSON.
+New commands (recommended)
+- `codex-read`: Read a PDF and output JSON with highlights, plain text, and structured text.
+- `codex-detect`: Read the JSON from `codex-read` and produce PII detections JSON (plain offsets and structured quads).
+- `codex-duplicate-process`: De-duplicate detections JSON with configurable overlap/keep policies.
+- `codex-mask`: Apply highlight annotations to the PDF using detections JSON.
+
+Legacy aggregated CLI (deprecated)
+- `presidio-cli <subcommand>` remains available for backward compatibility but is deprecated. Use the split commands above.
 
 Common options
 - `-v, --verbose`            Increase verbosity (repeatable)
 - `--quiet`                  Suppress non-critical output
 - `--config PATH`            YAML config path (default: `config/config.yaml`)
 
-read
+read (codex-read)
 ```bash
 # Read a PDF into JSON (includes source, highlights, plain_text, structured_text)
-uv run presidio-cli read test_pdfs/sample.pdf --out outputs/read.json --pretty
+uv run codex-read test_pdfs/sample.pdf --out outputs/read.json --pretty
 ```
 
-detect
+detect (codex-detect)
 ```bash
 # Detect from read JSON; writes detections with offsets/quads
-uv run presidio-cli detect --from outputs/read.json --out outputs/detect.json --pretty --validate
+uv run codex-detect --from outputs/read.json --out outputs/detect.json --pretty --validate
 ```
 
-duplicate-process
+duplicate-process (codex-duplicate-process)
 ```bash
-# Remove duplicate detections (simple first-wins policy)
-uv run presidio-cli duplicate-process --detect outputs/detect.json --out outputs/detect_dedup.json --pretty
+# De-duplicate detections with overlap/keep policies
+# Overlap modes: exact (完全一致), contain (包含), overlap (一部重なり; default)
+# Keep policies: widest (範囲最大; default), first, last, entity-order
+uv run codex-duplicate-process \
+  --detect outputs/detect.json \
+  --overlap overlap \
+  --keep widest \
+  --out outputs/detect_dedup.json --pretty
+
+# Entity-priority example
+uv run codex-duplicate-process \
+  --detect outputs/detect.json \
+  --overlap overlap \
+  --keep entity-order \
+  --entity-priority PERSON,EMAIL,PHONE \
+  --out outputs/detect_dedup.json --pretty
 ```
 
-mask
+mask (codex-mask)
 ```bash
 # Add highlight annotations to the PDF from detections JSON
-uv run presidio-cli mask test_pdfs/sample.pdf --detect outputs/detect_dedup.json --out outputs/sample_annotated.pdf --validate
+uv run codex-mask test_pdfs/sample.pdf --detect outputs/detect_dedup.json --out outputs/sample_annotated.pdf --validate
 ```
 
 Notes
@@ -74,6 +91,12 @@ Notes
 - Structured detection quads are in PDF user units (points).
 - The previous single-command flags (e.g., `--export-mode`, `--read-mode`, `--restore-mode`, etc.) have been removed.
 - `--validate` performs basic schema checks. For detections, each structured `quad` must be a 4-number array `[x0, y0, x1, y1]` and `page >= 1`.
+
+Migration guide (legacy → split)
+- `uv run presidio-cli read ...` → `uv run codex-read ...`
+- `uv run presidio-cli detect ...` → `uv run codex-detect ...`
+- `uv run presidio-cli duplicate-process ...` → `uv run codex-duplicate-process ...`
+- `uv run presidio-cli mask ...` → `uv run codex-mask ...`
 
 JSON Schemas (concise)
 - `read` output

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Subcommand-based CLI per cli_modify.md
-
-Commands:
-  - read: read PDF -> JSON (highlights/plain/structured)
-  - detect: detect PII from read JSON -> JSON (plain offsets / structured quads)
-  - mask: apply highlight annotations using detect JSON
-  - duplicate-process: de-duplicate detect JSON per simple policy
+Legacy subcommand-based CLI.
+Note: New separate entrypoints exist: cli.read_main, cli.detect_main,
+cli.duplicate_main, cli.mask_main. This module remains for backward
+compatibility and delegates to the same implementations.
 """
 import json
 import logging
@@ -19,14 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import click
-import fitz  # PyMuPDF
-
 from core.config_manager import ConfigManager
-from analysis.analyzer import Analyzer
-from pdf.pdf_locator import PDFTextLocator
-from pdf.pdf_processor import PDFProcessor
-from pdf.pdf_masker import PDFMasker
-from pdf.pdf_annotator import PDFAnnotator
 
 
 def _dump_json(obj: Any, out_path: Optional[str], pretty: bool):
@@ -54,6 +44,8 @@ def _sha256_file(path: str) -> str:
 def _get_pdf_source_info(pdf_path: str) -> Dict[str, Any]:
     p = Path(pdf_path)
     stat = p.stat()
+    # Lazy import for fitz to avoid requiring it for unrelated subcommands
+    import fitz  # PyMuPDF
     with fitz.open(pdf_path) as d:
         page_count = d.page_count
     return {
@@ -69,6 +61,8 @@ def _get_pdf_source_info(pdf_path: str) -> Dict[str, Any]:
 
 def _structured_from_pdf(pdf_path: str) -> Dict[str, Any]:
     pages: List[Dict[str, Any]] = []
+    # Lazy import
+    import fitz  # PyMuPDF
     with fitz.open(pdf_path) as doc:
         for i, page in enumerate(doc):
             raw = page.get_text("rawdict")
@@ -95,6 +89,8 @@ def _structured_from_pdf(pdf_path: str) -> Dict[str, Any]:
 
 
 def _read_highlights(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any]]:
+    # Lazy import to decouple from fitz when not needed
+    from pdf.pdf_annotator import PDFAnnotator
     annot = PDFAnnotator(cfg)
     return annot.read_pdf_annotations(pdf_path)
 
@@ -109,7 +105,7 @@ def main(verbose: int, quiet: bool, config: Optional[str]):
     # store in click context if needed later
 
 
-@main.command("read", help="PDFを読み込み JSONを出力")
+@main.command("read", help="PDFを読み込み JSONを出力 (deprecated; use codex-read)")
 @click.argument("pdf", type=click.Path(exists=True))
 @click.option("--with-highlights/--no-highlights", default=True)
 @click.option("--with-plain/--no-plain", default=True)
@@ -129,6 +125,9 @@ def read_cmd(pdf: str, with_highlights: bool, with_plain: bool, with_structured:
     if with_highlights:
         result["content"]["highlight"] = _read_highlights(pdf, cfg)
     # texts
+    # Lazy imports
+    import fitz  # PyMuPDF
+    from pdf.pdf_locator import PDFTextLocator
     with fitz.open(pdf) as doc:
         locator = PDFTextLocator(doc)
         if with_plain:
@@ -224,7 +223,7 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
     return errs
 
 
-@main.command("detect", help="read JSONからPIIを検出しJSON出力")
+@main.command("detect", help="read JSONからPIIを検出しJSON出力 (deprecated; use codex-detect)")
 @click.option("--from", "src", type=click.Path(), help="read JSONファイル（省略でstdin）")
 @click.option("--from-stdin", is_flag=True, default=False)
 @click.option("--use-plain", is_flag=True, help="plain_textで検出を実行")
@@ -265,11 +264,16 @@ def detect_cmd(src: Optional[str], from_stdin: bool, use_plain: bool, use_struct
         use_structured = True
 
     cfg = ConfigManager()
+    # Lazy import to avoid heavy dependencies unless needed
+    from analysis.analyzer import Analyzer
     analyzer = Analyzer(cfg)
 
     detections_plain: List[Dict[str, Any]] = []
     detections_struct: List[Dict[str, Any]] = []
 
+    # Lazy imports
+    import fitz  # PyMuPDF
+    from pdf.pdf_locator import PDFTextLocator
     with fitz.open(pdf_path) as doc:
         locator = PDFTextLocator(doc)
         target_text = plain_text if isinstance(plain_text, str) else locator.full_text_no_newlines
@@ -327,7 +331,7 @@ def detect_cmd(src: Optional[str], from_stdin: bool, use_plain: bool, use_struct
     _dump_json(out_obj, out, pretty)
 
 
-@main.command("mask", help="検出JSONを使ってPDFにハイライト注釈を追加")
+@main.command("mask", help="検出JSONを使ってPDFにハイライト注釈を追加 (deprecated; use codex-mask)")
 @click.argument("pdf", type=click.Path(exists=True))
 @click.option("--detect", "detect_file", type=click.Path(exists=True), required=True)
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
@@ -364,6 +368,7 @@ def mask_cmd(pdf: str, detect_file: str, force: bool, label_only: bool, out: Opt
                 }
             )
 
+    from pdf.pdf_masker import PDFMasker  # Lazy import
     masker = PDFMasker(cfg)
     # If out specified, temporarily override output_dir by environment
     output_path = None
@@ -394,30 +399,204 @@ def _dedupe_list(items: List[Dict[str, Any]], key_fn) -> List[Dict[str, Any]]:
     return out
 
 
-@main.command("duplicate-process", help="検出結果の重複を処理して正規化")
+@main.command("duplicate-process", help="検出結果の重複を処理して正規化 (deprecated; use codex-duplicate-process)")
 @click.option("--detect", "detect_file", type=click.Path(exists=True), required=True)
-@click.option("--policy", type=click.Path(exists=True), help="未実装: ポリシーファイル")
-@click.option("--entity-priority", type=str, help="未実装: エンティティ優先順")
-@click.option("--keep", type=click.Choice(["origin", "longest", "highest-priority"]), default="origin")
+@click.option(
+    "--overlap",
+    type=click.Choice(["exact", "contain", "overlap"]),
+    default="overlap",
+    show_default=True,
+    help="重複の定義: exact=完全一致 / contain=包含 / overlap=一部重なり",
+)
+@click.option(
+    "--keep",
+    type=click.Choice(["widest", "first", "last", "entity-order"]),
+    default="widest",
+    show_default=True,
+    help="グループから残す基準: widest=最も広い範囲 / first=先頭 / last=末尾 / entity-order=エンティティ優先順",
+)
+@click.option(
+    "--entity-priority",
+    type=str,
+    help="entity-order用の優先順（CSV）。例: PERSON,EMAIL,PHONE",
+)
 @click.option("--out", type=click.Path())
 @click.option("--pretty", is_flag=True, default=False)
-def dedupe_cmd(detect_file: str, policy: Optional[str], entity_priority: Optional[str], keep: str, out: Optional[str], pretty: bool):
+def dedupe_cmd(
+    detect_file: str,
+    overlap: str,
+    keep: str,
+    entity_priority: Optional[str],
+    out: Optional[str],
+    pretty: bool,
+):
     data = json.loads(Path(detect_file).read_text(encoding="utf-8"))
     dets = data.get("detections", {}) or {}
     plain = dets.get("plain", []) or []
     struct = dets.get("structured", []) or []
 
-    plain_dedup = _dedupe_list(
-        plain,
-        key_fn=lambda d: (d.get("entity"), d.get("text"), int(d.get("start", -1)), int(d.get("end", -1))),
-    )
-    struct_dedup = _dedupe_list(
-        struct,
-        key_fn=lambda d: (d.get("entity"), d.get("text"), int(d.get("page", 0)), tuple(tuple(map(float, q)) for q in (d.get("quads", []) or []))),
-    )
+    # 準備: エンティティ優先順マップ
+    pri_map: Dict[str, int] = {}
+    if entity_priority:
+        pri = [p.strip() for p in entity_priority.split(",") if p.strip()]
+        pri_map = {name: i for i, name in enumerate(pri)}
+
+    # ヘルパー: 連結成分抽出
+    def components(n: int, edges: List[Tuple[int, int]]):
+        g = [[] for _ in range(n)]
+        for a, b in edges:
+            g[a].append(b); g[b].append(a)
+        seen = [False] * n
+        comps = []
+        from collections import deque
+        for i in range(n):
+            if seen[i]:
+                continue
+            q = deque([i])
+            seen[i] = True
+            cur = []
+            while q:
+                v = q.popleft()
+                cur.append(v)
+                for w in g[v]:
+                    if not seen[w]:
+                        seen[w] = True
+                        q.append(w)
+            comps.append(cur)
+        return comps
+
+    # 判定: plain
+    def interval_len(d):
+        return max(0, int(d.get("end", 0)) - int(d.get("start", 0)))
+
+    def plain_edges(items: List[Dict[str, Any]]):
+        n = len(items)
+        edges: List[Tuple[int, int]] = []
+        if overlap == "exact":
+            # 完全一致はキーでグルーピング
+            sig_map: Dict[Tuple[int, int], List[int]] = {}
+            for i, d in enumerate(items):
+                key = (int(d.get("start", -1)), int(d.get("end", -1)))
+                sig_map.setdefault(key, []).append(i)
+            for idxs in sig_map.values():
+                if len(idxs) > 1:
+                    base = idxs[0]
+                    for j in idxs[1:]:
+                        edges.append((base, j))
+            return n, edges
+        # contain/overlap: O(n^2) 比較（典型投入は小規模想定）
+        for i in range(n):
+            si, ei = int(items[i].get("start", -1)), int(items[i].get("end", -1))
+            for j in range(i + 1, n):
+                sj, ej = int(items[j].get("start", -1)), int(items[j].get("end", -1))
+                if overlap == "contain":
+                    dup = (si <= sj and ej <= ei) or (sj <= si and ei <= ej)
+                else:  # overlap
+                    dup = (si <= ej) and (sj <= ei)
+                if dup:
+                    edges.append((i, j))
+        return n, edges
+
+    # 判定: structured
+    from math import isclose
+
+    def rect_area(q):
+        x0, y0, x1, y1 = map(float, q)
+        return max(0.0, (x1 - x0)) * max(0.0, (y1 - y0))
+
+    def rect_intersects(a, b):
+        ax0, ay0, ax1, ay1 = map(float, a)
+        bx0, by0, bx1, by1 = map(float, b)
+        ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+        ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+        return (ix1 - ix0) > 0 and (iy1 - iy0) > 0
+
+    def rect_contains(outer, inner, eps=0.01):
+        ox0, oy0, ox1, oy1 = map(float, outer)
+        ix0, iy0, ix1, iy1 = map(float, inner)
+        return (ix0 >= ox0 - eps and iy0 >= oy0 - eps and ix1 <= ox1 + eps and iy1 <= oy1 + eps)
+
+    def norm_quads(quads: List[List[float]]):
+        # 2桁丸め＋安定ソート
+        rounded = [tuple(round(float(v), 2) for v in q) for q in (quads or [])]
+        return tuple(sorted(rounded))
+
+    def structured_edges(items: List[Dict[str, Any]]):
+        n = len(items)
+        edges: List[Tuple[int, int]] = []
+        # ページ単位で比較を限定
+        by_page: Dict[int, List[int]] = {}
+        for i, d in enumerate(items):
+            by_page.setdefault(int(d.get("page", 0)), []).append(i)
+        for page, idxs in by_page.items():
+            if overlap == "exact":
+                sig_map: Dict[Tuple, List[int]] = {}
+                for i in idxs:
+                    sig = (page, norm_quads(items[i].get("quads", [])))
+                    sig_map.setdefault(sig, []).append(i)
+                for group in sig_map.values():
+                    if len(group) > 1:
+                        base = group[0]
+                        for j in group[1:]:
+                            edges.append((base, j))
+                continue
+            # contain / overlap: 任意ペアで条件を満たすと重複
+            m = len(idxs)
+            for a in range(m):
+                ia = idxs[a]
+                qa = items[ia].get("quads", []) or []
+                for b in range(a + 1, m):
+                    ib = idxs[b]
+                    qb = items[ib].get("quads", []) or []
+                    dup = False
+                    if overlap == "contain":
+                        # AがBに内包 または BがAに内包
+                        def a_in_b(A, B):
+                            return all(any(rect_contains(bq, aq) for bq in B) for aq in A)
+                        dup = a_in_b(qa, qb) or a_in_b(qb, qa)
+                    else:  # overlap
+                        dup = any(rect_intersects(aq, bq) for aq in qa for bq in qb)
+                    if dup:
+                        edges.append((ia, ib))
+        return n, edges
+
+    # keepポリシー
+    def choose_kept(idxs: List[int], items: List[Dict[str, Any]], kind: str) -> int:
+        # kind: "plain" / "structured"
+        if keep == "first":
+            return idxs[0]
+        if keep == "last":
+            return idxs[-1]
+        if keep == "entity-order":
+            # 小さいpriorityが優先。未定義は大きな値。
+            def prio(i):
+                ent = str(items[i].get("entity", ""))
+                return pri_map.get(ent, 10**9)
+            best = min(idxs, key=lambda i: (prio(i), idxs.index(i)))
+            return best
+        # widest
+        if kind == "plain":
+            best = max(idxs, key=lambda i: (interval_len(items[i]), -idxs.index(i)))
+        else:
+            def total_area(i):
+                return sum(rect_area(q) for q in (items[i].get("quads", []) or []))
+            best = max(idxs, key=lambda i: (total_area(i), -idxs.index(i)))
+        return best
+
+    # 実行: plain
+    n_p, e_p = plain_edges(plain)
+    comps_p = components(n_p, e_p)
+    kept_plain_idx = set(choose_kept(c, plain, "plain") for c in comps_p if c)
+    plain_out = [d for i, d in enumerate(plain) if i in kept_plain_idx]
+
+    # 実行: structured
+    n_s, e_s = structured_edges(struct)
+    comps_s = components(n_s, e_s)
+    kept_struct_idx = set(choose_kept(c, struct, "structured") for c in comps_s if c)
+    struct_out = [d for i, d in enumerate(struct) if i in kept_struct_idx]
 
     out_obj = data.copy()
-    out_obj["detections"] = {"plain": plain_dedup, "structured": struct_dedup}
+    out_obj["detections"] = {"plain": plain_out, "structured": struct_out}
     _dump_json(out_obj, out, pretty)
 
 

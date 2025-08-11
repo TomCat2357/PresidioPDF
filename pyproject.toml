@@ -75,10 +75,16 @@ gui = [
 ]
 
 [project.scripts]
-# Expose the CLI defined in src/cli/cli.py
+# Legacy aggregated CLI (kept for compatibility)
 presidio-cli = "cli.cli:main"
 
-# Expose the Web app defined in src/web/web_main.py
+# New split command entrypoints
+codex-read = "cli.read_main:main"
+codex-detect = "cli.detect_main:main"
+codex-duplicate-process = "cli.duplicate_main:main"
+codex-mask = "cli.mask_main:main"
+
+# Web app
 presidio-web = "web.web_main:main"
 
 
