@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import sys
 
 import click
 import yaml
@@ -45,8 +46,8 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 
 
 @click.command(help="read JSONからPIIを検出しJSON出力")
-@click.option("--from", "src", type=click.Path(), help="read JSONファイル（省略でstdin）")
-@click.option("--from-stdin", is_flag=True, default=False)
+@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力read JSONファイル（未指定でstdin）")
+@click.option("--pdf", type=click.Path(), required=False, help="IF統一のためのダミー（未使用）")
 @click.option("--use-plain", is_flag=True, help="plain_textで検出を実行")
 @click.option("--use-structured", is_flag=True, help="structured_textで検出を実行")
 @click.option("--model", multiple=True, help="モデルID（未使用・将来拡張）")
@@ -59,9 +60,9 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--out", type=click.Path())
 @click.option("--pretty", is_flag=True, default=False)
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
-def main(src: Optional[str], from_stdin: bool, use_plain: bool, use_structured: bool, model: Tuple[str, ...], shared_config: Optional[str], adds: Tuple[str, ...], excludes: Tuple[str, ...], append_highlights: bool, out: Optional[str], pretty: bool, validate: bool):
-    # load input JSON
-    data_txt = Path(src).read_text(encoding="utf-8") if src else input()
+def main(json_file: Optional[str], pdf: Optional[str], use_plain: bool, use_structured: bool, model: Tuple[str, ...], shared_config: Optional[str], adds: Tuple[str, ...], excludes: Tuple[str, ...], append_highlights: bool, out: Optional[str], pretty: bool, validate: bool):
+    # load input JSON (-j指定時はファイル、未指定時はstdin)
+    data_txt = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
     try:
         data = json.loads(data_txt)
     except Exception as e:

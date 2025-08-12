@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
+import sys
 from pathlib import Path
 from typing import Optional, Tuple, List
 
@@ -8,12 +9,13 @@ import click
 import yaml
 
 from cli.common import dump_json
-from cli.duplicate_utils import dedupe_detections
+from core.dedupe import dedupe_detections
 from core.config_manager import ConfigManager
 
 
 @click.command(help="検出結果の重複を処理して正規化")
-@click.option("--detect", "detect_file", type=click.Path(exists=True), required=True)
+@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力detect JSONファイル（未指定でstdin）")
+@click.option("--pdf", type=click.Path(), required=False, help="IF統一のためのダミー（未使用）")
 # 共有YAML（duplicate_processセクションのみ参照）
 @click.option("--config", "shared_config", type=click.Path(exists=True), help="共通設定YAMLのパス（duplicate_processセクションのみ参照）")
 @click.option(
@@ -65,7 +67,8 @@ from core.config_manager import ConfigManager
 @click.option("--out", type=click.Path())
 @click.option("--pretty", is_flag=True, default=False)
 def main(
-    detect_file: str,
+    json_file: Optional[str],
+    pdf: Optional[str],
     shared_config: Optional[str],
     overlap: str,
     keep: str,
@@ -78,7 +81,8 @@ def main(
     out: Optional[str],
     pretty: bool,
 ):
-    data = json.loads(Path(detect_file).read_text(encoding="utf-8"))
+    raw = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
+    data = json.loads(raw)
 
     # 共有YAMLから duplicate_process セクションを読み取り（引数で上書き）
     conf_tb: List[str] = []

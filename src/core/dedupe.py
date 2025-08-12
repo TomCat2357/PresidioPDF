@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Duplicate processing utilities decoupled from CLI frameworks and heavy deps.
+Core duplicate processing utilities decoupled from CLI/Web/Analyzer.
 Implements overlap grouping (exact/contain/overlap) and selection policies
 1) Legacy keep: widest/first/last/entity-order
 2) New multi-criteria tie-break: origin/length/entity/position with custom orders
@@ -270,3 +270,4 @@ def dedupe_detections(
     struct_out = [d for i, d in enumerate(struct) if i in kept_struct_idx]
 
     return {"plain": plain_out, "structured": struct_out}
+

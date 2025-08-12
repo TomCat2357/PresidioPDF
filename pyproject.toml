@@ -75,9 +75,6 @@ gui = [
 ]
 
 [project.scripts]
-# Legacy aggregated CLI (kept for compatibility)
-presidio-cli = "cli.cli:main"
-
 # New split command entrypoints
 codex-read = "cli.read_main:main"
 codex-detect = "cli.detect_main:main"

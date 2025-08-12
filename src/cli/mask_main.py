@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,15 +32,16 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
 
 
 @click.command(help="検出JSONを使ってPDFにハイライト注釈を追加")
-@click.argument("pdf", type=click.Path(exists=True))
-@click.option("--detect", "detect_file", type=click.Path(exists=True), required=True)
+@click.option("--pdf", "pdf", type=click.Path(exists=True), required=True, help="入力PDFファイルのパス")
+@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力detect JSONファイル（未指定でstdin）")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
 @click.option("--label-only", is_flag=True, default=False, help="注釈に生テキストを含めない")
 @click.option("--out", type=click.Path(), help="出力PDFパス（省略で規定出力名）")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
-def main(pdf: str, detect_file: str, force: bool, label_only: bool, out: Optional[str], validate: bool):
+def main(pdf: str, json_file: Optional[str], force: bool, label_only: bool, out: Optional[str], validate: bool):
     cfg = ConfigManager()
-    det = json.loads(Path(detect_file).read_text(encoding="utf-8"))
+    raw = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
+    det = json.loads(raw)
     if validate:
         errors = _validate_detect_json(det)
         if errors:
@@ -88,4 +90,3 @@ def main(pdf: str, detect_file: str, force: bool, label_only: bool, out: Optiona
 
 if __name__ == "__main__":
     main()
-

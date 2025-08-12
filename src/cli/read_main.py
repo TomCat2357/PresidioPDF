@@ -61,14 +61,15 @@ def _read_highlights(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any]]:
 
 
 @click.command(help="PDFを読み込み JSONを出力")
-@click.argument("pdf", type=click.Path(exists=True))
+@click.option("--pdf", "pdf", type=click.Path(exists=True), required=True, help="入力PDFファイルのパス")
+@click.option("-j", "--json", is_flag=True, default=False, help="互換のためのダミーフラグ（効果なし）")
 @click.option("--with-highlights/--no-highlights", default=True)
 @click.option("--with-plain/--no-plain", default=True)
 @click.option("--with-structured/--no-structured", default=True)
 @click.option("--norm-coords", is_flag=True, default=False, help="将来拡張用")
 @click.option("--out", type=click.Path())
 @click.option("--pretty", is_flag=True, default=False)
-def main(pdf: str, with_highlights: bool, with_plain: bool, with_structured: bool, norm_coords: bool, out: Optional[str], pretty: bool):
+def main(pdf: str, json: bool, with_highlights: bool, with_plain: bool, with_structured: bool, norm_coords: bool, out: Optional[str], pretty: bool):
     cfg = ConfigManager()
     result: Dict[str, Any] = {
         "schema_version": "1.0",
@@ -94,4 +95,3 @@ def main(pdf: str, with_highlights: bool, with_plain: bool, with_structured: boo
 
 if __name__ == "__main__":
     main()
-

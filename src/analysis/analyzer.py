@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PresidioエンジンによるPII分析と重複除去
+PresidioエンジンによるPII分析（重複除去はCLI共通ユーティリティへ委譲）
 """
 
 import logging
@@ -226,9 +226,8 @@ class Analyzer:
             )
 
         results = add_selected + model_filtered
-        if self.config_manager.is_deduplication_enabled():
-            results = self._deduplicate_entities(results)
-        return sorted(results, key=lambda x: x["start"])
+        # Analyzer系の重複除去は廃止（Web/CLIで実施）
+        return sorted(results, key=lambda x: x["start"]) 
 
     def _analyze_text_chunked(self, text: str, entities: List[str]) -> List[Dict]:
         """チャンク分割による大容量テキスト解析"""
@@ -344,127 +343,7 @@ class Analyzer:
 
         return chunks
 
-    def _deduplicate_entities(self, entities: List[Dict]) -> List[Dict]:
-        """重複するエンティティを除去"""
-        if not entities:
-            return entities
-
-        priority = self.config_manager.get_deduplication_priority()
-
-        sorted_entities = sorted(entities, key=lambda x: x["start"])
-        deduplicated = []
-
-        for current_entity in sorted_entities:
-            should_add = True
-            entities_to_remove = []
-
-            for i, existing_entity in enumerate(deduplicated):
-                if self._has_overlap(current_entity, existing_entity):
-                    current_should_win = self._should_current_entity_win(
-                        current_entity, existing_entity, priority
-                    )
-
-                    if current_should_win:
-                        entities_to_remove.append(i)
-                    else:
-                        should_add = False
-                        break
-
-            for i in sorted(entities_to_remove, reverse=True):
-                removed_entity = deduplicated.pop(i)
-                logger.debug(
-                    f"重複除去: '{removed_entity['text']}' ({removed_entity['entity_type']}) を除去"
-                )
-
-            if should_add:
-                deduplicated.append(current_entity)
-            else:
-                logger.debug(
-                    f"重複除去: '{current_entity['text']}' ({current_entity['entity_type']}) を除去"
-                )
-
-        original_count = len(entities)
-        deduplicated_count = len(deduplicated)
-        if original_count != deduplicated_count:
-            logger.info(
-                f"重複除去: {original_count}件 → {deduplicated_count}件 ({original_count - deduplicated_count}件を除去)"
-            )
-
-        return deduplicated
-
-    def _has_overlap(self, entity1: Dict, entity2: Dict) -> bool:
-        """2つのエンティティが重複しているかを判定"""
-        method = self.config_manager.get_deduplication_method()
-
-        start1, end1 = entity1["start"], entity1["end"]
-        start2, end2 = entity2["start"], entity2["end"]
-
-        if method == "exact":
-            return start1 == start2 and end1 == end2
-        elif method == "contain":
-            return (start1 <= start2 and end1 >= end2) or (
-                start2 <= start1 and end2 >= end1
-            )
-        elif method == "overlap":
-            overlap_mode = self.config_manager.get_deduplication_overlap_mode()
-
-            if overlap_mode == "contain_only":
-                return (start1 <= start2 and end1 >= end2) or (
-                    start2 <= start1 and end2 >= end1
-                )
-            elif overlap_mode == "partial_overlap":
-                return not (end1 <= start2 or end2 <= start1)
-            else:
-                logger.warning(
-                    f"不明な重複モード: {overlap_mode}. デフォルトのpartial_overlapを使用します。"
-                )
-                return not (end1 <= start2 or end2 <= start1)
-        else:
-            logger.warning(
-                f"不明な重複判定方法: {method}. デフォルトのoverlapを使用します。"
-            )
-            return not (end1 <= start2 or end2 <= start1)
-
-    def _should_current_entity_win(
-        self, current_entity: Dict, existing_entity: Dict, priority: str
-    ) -> bool:
-        """2つのエンティティを比較して、現在のエンティティが優先されるべきかを判定"""
-        if priority == "wider_range":
-            current_range = current_entity["end"] - current_entity["start"]
-            existing_range = existing_entity["end"] - existing_entity["start"]
-            if current_range != existing_range:
-                return current_range > existing_range
-            return current_entity["start"] < existing_entity["start"]
-
-        elif priority == "narrower_range":
-            current_range = current_entity["end"] - current_entity["start"]
-            existing_range = existing_entity["end"] - existing_entity["start"]
-            if current_range != existing_range:
-                return current_range < existing_range
-            return current_entity["start"] < existing_entity["start"]
-
-        elif priority == "entity_type":
-            entity_order = self.config_manager.get_entity_priority_order()
-            try:
-                current_priority = entity_order.index(current_entity["entity_type"])
-            except ValueError:
-                current_priority = len(entity_order)
-
-            try:
-                existing_priority = entity_order.index(existing_entity["entity_type"])
-            except ValueError:
-                existing_priority = len(entity_order)
-
-            if current_priority != existing_priority:
-                return current_priority < existing_priority
-            return current_entity["start"] < existing_entity["start"]
-
-        else:
-            current_range = current_entity["end"] - current_entity["start"]
-            existing_range = existing_entity["end"] - existing_entity["start"]
-            if current_range != existing_range:
-                return current_range > existing_range
-            return current_entity["start"] < existing_entity["start"]
+    # Analyzer系の独自重複除去実装は廃止（共通ユーティリティへ移行）
 
     def _refine_entity_text(
         self, entity_text: str, entity_type: str, full_text: str, start: int, end: int
