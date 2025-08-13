@@ -46,21 +46,17 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 
 
 @click.command(help="read JSONからPIIを検出しJSON出力")
-@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力read JSONファイル（未指定でstdin）")
-@click.option("--pdf", type=click.Path(), required=False, help="IF統一のためのダミー（未使用）")
-@click.option("--use-plain", is_flag=True, help="plain_textで検出を実行")
-@click.option("--use-structured", is_flag=True, help="structured_textで検出を実行")
-@click.option("--model", multiple=True, help="モデルID（未使用・将来拡張）")
-# 共有YAML（detectセクションのみを使用）
-@click.option("--config", "shared_config", type=click.Path(exists=True), help="共通設定YAMLのパス（detectセクションのみ参照）")
-# 追加/除外（正規表現）
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
+@click.option("--config", "shared_config", type=click.Path(exists=True), help="共通設定YAMLのパス（detectセクションのみ参照）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
-@click.option("--append-highlights/--no-append-highlights", default=True)
-@click.option("--out", type=click.Path())
-@click.option("--pretty", is_flag=True, default=False)
+@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力read JSONファイル（未指定でstdin）")
+@click.option("--model", multiple=True, help="モデルID（未使用・将来拡張）")
+@click.option("--out", type=click.Path(), help="出力先（未指定時は標準出力）")
+@click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
+@click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="検出対象の選択")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
-def main(json_file: Optional[str], pdf: Optional[str], use_plain: bool, use_structured: bool, model: Tuple[str, ...], shared_config: Optional[str], adds: Tuple[str, ...], excludes: Tuple[str, ...], append_highlights: bool, out: Optional[str], pretty: bool, validate: bool):
+@click.option("--append-highlights/--no-append-highlights", default=True, help="追加ハイライトを付与／抑止")
+def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, append_highlights: bool):
     # load input JSON (-j指定時はファイル、未指定時はstdin)
     data_txt = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
     try:
@@ -78,9 +74,14 @@ def main(json_file: Optional[str], pdf: Optional[str], use_plain: bool, use_stru
         raise click.ClickException("source.path にPDFの絶対パスが必要です（readの出力を使用してください）")
 
     plain_text = (data.get("content", {}) or {}).get("plain_text")
-    use_plain = use_plain or (plain_text is not None and not use_structured)
-    use_structured = use_structured or (plain_text is not None and not use_plain)
-    if not (use_plain or use_structured):
+    # --useオプションによる処理対象の決定
+    if use == "plain":
+        use_plain, use_structured = True, False
+    elif use == "structured":
+        use_plain, use_structured = False, True
+    elif use == "both":
+        use_plain, use_structured = True, True
+    else:  # auto
         use_plain = plain_text is not None
         use_structured = True
 

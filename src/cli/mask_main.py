@@ -32,13 +32,14 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
 
 
 @click.command(help="検出JSONを使ってPDFにハイライト注釈を追加")
-@click.option("--pdf", "pdf", type=click.Path(exists=True), required=True, help="入力PDFファイルのパス")
-@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力detect JSONファイル（未指定でstdin）")
+@click.option("--config", type=click.Path(), help="設定ファイル（maskセクションのみ参照）")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
-@click.option("--label-only", is_flag=True, default=False, help="注釈に生テキストを含めない")
-@click.option("--out", type=click.Path(), help="出力PDFパス（省略で規定出力名）")
+@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力detect JSONファイル（未指定でstdin）")
+@click.option("--out", type=click.Path(), required=True, help="出力PDFパス（指定必須）")
+@click.option("--pdf", "pdf", type=click.Path(exists=True), required=True, help="入力PDFファイルのパス")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
-def main(pdf: str, json_file: Optional[str], force: bool, label_only: bool, out: Optional[str], validate: bool):
+def main(config: Optional[str], force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool):
+        
     cfg = ConfigManager()
     raw = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
     det = json.loads(raw)
@@ -62,7 +63,7 @@ def main(pdf: str, json_file: Optional[str], force: bool, label_only: bool, out:
             entities.append(
                 {
                     "entity_type": st.get("entity", "PII"),
-                    "text": ("" if label_only else st.get("text", "")),
+                    "text": st.get("text", ""),
                     "line_rects": [
                         {
                             "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
@@ -75,17 +76,13 @@ def main(pdf: str, json_file: Optional[str], force: bool, label_only: bool, out:
     from pdf.pdf_masker import PDFMasker  # Lazy import
 
     masker = PDFMasker(cfg)
-    output_path = None
-    if out:
-        Path(out).parent.mkdir(parents=True, exist_ok=True)
-        with open(pdf, "rb") as r, open(out, "wb") as w:
-            w.write(r.read())
-        masker._apply_highlight_masking_with_mode(out, entities, cfg.get_operation_mode())
-        output_path = out
-    else:
-        output_path = masker.apply_masking(pdf, entities, masking_method="highlight")
-
-    print(output_path)
+    # --outは必須なので常にファイル出力
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    with open(pdf, "rb") as r, open(out, "wb") as w:
+        w.write(r.read())
+    masker._apply_highlight_masking_with_mode(out, entities, cfg.get_operation_mode())
+    
+    print(out)
 
 
 if __name__ == "__main__":
