@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import click
 
 from core.config_manager import ConfigManager
-from cli.common import dump_json, sha256_file
+from cli.common import dump_json, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
 
 
 def _get_pdf_source_info(pdf_path: str) -> Dict[str, Any]:
@@ -61,15 +61,22 @@ def _read_highlights(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any]]:
 
 
 @click.command(help="PDFを読み込み JSONを出力")
-@click.option("--pdf", "pdf", type=click.Path(exists=True), required=True, help="入力PDFファイルのパス")
-@click.option("--config", type=click.Path(), help="設定ファイル（readセクションのみ参照）")
-@click.option("--out", type=click.Path(), help="出力先（未指定時は標準出力）")
+@click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
+@click.option("--config", type=str, help="設定ファイル（readセクションのみ参照）")
+@click.option("--out", type=str, help="出力先（未指定時は標準出力）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option("--validate", is_flag=True, default=False, help="入力の検証を実施")
 @click.option("--with-highlights/--no-highlights", default=True, help="ハイライト情報を含める")
 @click.option("--with-plain/--no-plain", default=True, help="プレーンテキストを含める")
 @click.option("--with-structured/--no-structured", default=True, help="構造化テキストを含める")
 def main(pdf: str, config: Optional[str], out: Optional[str], pretty: bool, validate: bool, with_highlights: bool, with_plain: bool, with_structured: bool):
+    # ファイル存在確認
+    validate_input_file_exists(pdf)
+    if config:
+        validate_input_file_exists(config)
+    if out:
+        validate_output_parent_exists(out)
+    
     cfg = ConfigManager()
     result: Dict[str, Any] = {
         "schema_version": "1.0",

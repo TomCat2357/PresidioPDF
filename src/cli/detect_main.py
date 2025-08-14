@@ -11,7 +11,7 @@ import click
 import yaml
 
 from core.config_manager import ConfigManager
-from cli.common import dump_json, sha256_bytes, sha256_file
+from cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
 
 
 def _validate_read_json(obj: Dict[str, Any]) -> List[str]:
@@ -47,16 +47,24 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 
 @click.command(help="read JSONからPIIを検出しJSON出力")
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
-@click.option("--config", "shared_config", type=click.Path(exists=True), help="共通設定YAMLのパス（detectセクションのみ参照）")
+@click.option("--config", "shared_config", type=str, help="共通設定YAMLのパス（detectセクションのみ参照）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
-@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力read JSONファイル（未指定でstdin）")
-@click.option("--model", multiple=True, help="モデルID（未使用・将来拡張）")
-@click.option("--out", type=click.Path(), help="出力先（未指定時は標準出力）")
+@click.option("-j", "--json", "json_file", type=str, help="入力read JSONファイル（未指定でstdin）")
+@click.option("--model", multiple=True, default=["ja_core_news_sm"], show_default=True, help="spaCyモデルID（複数可）")
+@click.option("--out", type=str, help="出力先（未指定時は標準出力）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="検出対象の選択")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
 @click.option("--append-highlights/--no-append-highlights", default=True, help="追加ハイライトを付与／抑止")
 def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, append_highlights: bool):
+    # ファイル存在確認
+    if json_file:
+        validate_input_file_exists(json_file)
+    if shared_config:
+        validate_input_file_exists(shared_config)
+    if out:
+        validate_output_parent_exists(out)
+    
     # load input JSON (-j指定時はファイル、未指定時はstdin)
     data_txt = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
     try:

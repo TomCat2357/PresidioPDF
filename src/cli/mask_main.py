@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import click
 
 from core.config_manager import ConfigManager
+from cli.common import validate_input_file_exists, validate_output_parent_exists
 
 
 def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
@@ -32,13 +33,20 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
 
 
 @click.command(help="検出JSONを使ってPDFにハイライト注釈を追加")
-@click.option("--config", type=click.Path(), help="設定ファイル（maskセクションのみ参照）")
+@click.option("--config", type=str, help="設定ファイル（maskセクションのみ参照）")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
-@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力detect JSONファイル（未指定でstdin）")
-@click.option("--out", type=click.Path(), required=True, help="出力PDFパス（指定必須）")
-@click.option("--pdf", "pdf", type=click.Path(exists=True), required=True, help="入力PDFファイルのパス")
+@click.option("-j", "--json", "json_file", type=str, help="入力detect JSONファイル（未指定でstdin）")
+@click.option("--out", type=str, required=True, help="出力PDFパス（指定必須）")
+@click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
 def main(config: Optional[str], force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool):
+    # ファイル存在確認
+    validate_input_file_exists(pdf)
+    if json_file:
+        validate_input_file_exists(json_file)
+    if config:
+        validate_input_file_exists(config)
+    validate_output_parent_exists(out)
         
     cfg = ConfigManager()
     raw = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()

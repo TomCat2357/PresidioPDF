@@ -8,22 +8,22 @@ from typing import Optional, Tuple, List
 import click
 import yaml
 
-from cli.common import dump_json
+from cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
 from core.dedupe import dedupe_detections
 from core.config_manager import ConfigManager
 
 
 @click.command(help="検出結果の重複を処理して正規化")
-@click.option("--config", "shared_config", type=click.Path(exists=True), help="共通設定YAMLのパス（duplicateセクションのみ参照）")
-@click.option("--entity-order", type=str, help="エンティティ優先順（カンマ区切り）")
-@click.option("-j", "--json", "json_file", type=click.Path(exists=True), help="入力detect JSONファイル（未指定でstdin）")
+@click.option("--config", "shared_config", type=str, help="共通設定YAMLのパス（duplicateセクションのみ参照）")
+@click.option("--entity-order", type=str, default="PERSON,PHONE_NUMBER,EMAIL_ADDRESS,ADDRESS,DATE_OF_BIRTH,CREDIT_CARD,PASSPORT,DRIVER_LICENSE,MYNUMBER,BANK_ACCOUNT", show_default=True, help="エンティティ優先順（カンマ区切り）")
+@click.option("-j", "--json", "json_file", type=str, help="入力detect JSONファイル（未指定でstdin）")
 @click.option("--length-pref", type=click.Choice(["long", "short"]), help="長短の優先: long/short")
-@click.option("--origin-priority", type=str, help="検出由来の優先順（カンマ区切り）")
-@click.option("--out", type=click.Path(), help="出力先（未指定時は標準出力）")
+@click.option("--origin-priority", type=str, default="manual,custom,auto", show_default=True, help="検出由来の優先順（カンマ区切り）")
+@click.option("--out", type=str, help="出力先（未指定時は標準出力）")
 @click.option("--overlap", type=click.Choice(["exact", "contain", "overlap"]), default="overlap", show_default=True, help="重複の定義: exact/contain/overlap")
-@click.option("--position-pref", type=click.Choice(["first", "last"]), help="位置の優先: first/last（入力順ベース）")
+@click.option("--position-pref", type=click.Choice(["first", "last"]), default="first", show_default=True, help="位置の優先: first/last（入力順ベース）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
-@click.option("--tie-break", "tie_break", type=str, help="タイブレーク順（カンマ区切り）: origin,length,entity,position の並びで指定")
+@click.option("--tie-break", "tie_break", type=str, default="origin,length,position,entity", show_default=True, help="タイブレーク順（カンマ区切り）: origin,length,entity,position の並びで指定")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONの検証を実施")
 def main(
     shared_config: Optional[str],
@@ -38,6 +38,13 @@ def main(
     tie_break: Optional[str],
     validate: bool,
 ):
+    # ファイル存在確認
+    if json_file:
+        validate_input_file_exists(json_file)
+    if shared_config:
+        validate_input_file_exists(shared_config)
+    if out:
+        validate_output_parent_exists(out)
         
     raw = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
     data = json.loads(raw)
