@@ -45,18 +45,18 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
     return sha256_bytes(raw)
 
 
-@click.command(help="read JSONからPIIを検出しJSON出力")
+@click.command(help="read出力(JSON)からPIIを検出し統一スキーマでファイル出力")
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
 @click.option("--config", "shared_config", type=str, help="共通設定YAMLのパス（detectセクションのみ参照）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
-@click.option("-j", "--json", "json_file", type=str, help="入力read JSONファイル（未指定でstdin）")
+@click.option("-j", "--json", "json_file", type=str, required=True, help="入力read JSONファイル（必須。標準入力は不可）")
 @click.option("--model", multiple=True, default=["ja_core_news_sm"], show_default=True, help="spaCyモデルID（複数可）")
-@click.option("--out", type=str, help="出力先（未指定時は標準出力）")
+@click.option("--out", type=str, required=True, help="出力先（必須。標準出力は不可）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="検出対象の選択")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
-@click.option("--append-highlights/--no-append-highlights", default=True, help="追加ハイライトを付与／抑止")
-def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, append_highlights: bool):
+@click.option("--highlights-merge", type=click.Choice(["append", "replace"]), default="append", show_default=True, help="入力のdetect.structured（ハイライト）と検出結果の統合方法")
+def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, highlights_merge: str):
     # ファイル存在確認
     if json_file:
         validate_input_file_exists(json_file)
@@ -65,23 +65,28 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
     if out:
         validate_output_parent_exists(out)
     
-    # load input JSON (-j指定時はファイル、未指定時はstdin)
-    data_txt = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
+    # 入力JSONはファイル必須
+    data_txt = Path(json_file).read_text(encoding="utf-8")
     try:
         data = json.loads(data_txt)
     except Exception as e:
         raise click.ClickException(f"入力JSONの読み込みに失敗: {e}")
 
-    if validate:
-        errors = _validate_read_json(data)
-        if errors:
-            raise click.ClickException("read JSON validation failed: " + "; ".join(errors))
-
-    pdf_path = data.get("source", {}).get("path")
+    # 簡易検証（新スキーマ）
+    meta = data.get("metadata", {}) or {}
+    pdf_path = (meta.get("pdf", {}) or {}).get("path")
     if not pdf_path or not Path(pdf_path).exists():
-        raise click.ClickException("source.path にPDFの絶対パスが必要です（readの出力を使用してください）")
+        raise click.ClickException("metadata.pdf.path にPDFの絶対パスが必要です（readの出力を使用してください）")
 
-    plain_text = (data.get("content", {}) or {}).get("plain_text")
+    # readのtext.plain（ブロック配列）を結合して使用。なければPDFから抽出。
+    text_plain_blocks = ((data.get("text", {}) or {}).get("plain") or None)
+    plain_text = None
+    if isinstance(text_plain_blocks, list) and text_plain_blocks:
+        try:
+            plain_text = "".join(str(x) for x in text_plain_blocks)
+        except Exception:
+            plain_text = None
+
     # --useオプションによる処理対象の決定
     if use == "plain":
         use_plain, use_structured = True, False
@@ -90,7 +95,7 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
     elif use == "both":
         use_plain, use_structured = True, True
     else:  # auto
-        use_plain = plain_text is not None
+        use_plain = text_plain_blocks is not None
         use_structured = True
 
     cfg = ConfigManager()
@@ -293,17 +298,24 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
             plain_ids_after = {d["detection_id"] for d in detections_plain}
             detections_struct = [d for d in detections_struct if (d.get("origin") != "model") or (d.get("detection_id") in plain_ids_after)]
 
+    # detect.structured の統合（append / replace）
+    existing_struct = ((data.get("detect", {}) or {}).get("structured") or [])
+    if highlights_merge == "append":
+        merged_struct = list(existing_struct) + detections_struct
+    else:
+        merged_struct = detections_struct
+
+    # metadataは入力を踏襲しつつ、generated_atを更新
+    metadata = dict(meta)
+    metadata["generated_at"] = datetime.utcnow().isoformat() + "Z"
+
     out_obj = {
-        "schema_version": "1.0",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-        "source": {
-            "pdf": {"sha256": sha256_file(pdf_path)},
-            "read_json_sha256": sha256_bytes(data_txt.encode("utf-8")),
+        "metadata": metadata,
+        "detect": {
+            "plain": detections_plain,
+            "structured": merged_struct,
         },
-        "detections": {"plain": detections_plain, "structured": detections_struct},
     }
-    if append_highlights:
-        out_obj["highlights"] = (data.get("content", {}) or {}).get("highlight", [])
     dump_json(out_obj, out, pretty)
 
 

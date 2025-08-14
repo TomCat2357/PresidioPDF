@@ -15,27 +15,27 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
     errs = []
     if not isinstance(obj, dict):
         return ["root must be object"]
-    src = obj.get("source", {}) or {}
-    if not isinstance(src, dict):
-        errs.append("source must be object")
+    meta = obj.get("metadata", {}) or {}
+    if not isinstance(meta, dict):
+        errs.append("metadata must be object")
     else:
-        pdf = src.get("pdf", {}) or {}
+        pdf = meta.get("pdf", {}) or {}
         if not isinstance(pdf, dict) or not isinstance(pdf.get("sha256"), str):
-            errs.append("source.pdf.sha256 must be string")
-    dets = obj.get("detections", {}) or {}
+            errs.append("metadata.pdf.sha256 must be string")
+    dets = obj.get("detect", {}) or {}
     if not isinstance(dets, dict):
-        errs.append("detections must be object")
+        errs.append("detect must be object")
     else:
         if "structured" in dets and dets["structured"] is not None:
             if not isinstance(dets["structured"], list):
-                errs.append("detections.structured must be array")
+                errs.append("detect.structured must be array")
     return errs
 
 
-@click.command(help="検出JSONを使ってPDFにハイライト注釈を追加")
+@click.command(help="検出JSON(detect.structured)を使ってPDFにハイライト注釈を追加（入力はファイル必須）")
 @click.option("--config", type=str, help="設定ファイル（maskセクションのみ参照）")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
-@click.option("-j", "--json", "json_file", type=str, help="入力detect JSONファイル（未指定でstdin）")
+@click.option("-j", "--json", "json_file", type=str, required=True, help="入力detect JSONファイル（必須。標準入力は不可）")
 @click.option("--out", type=str, required=True, help="出力PDFパス（指定必須）")
 @click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
@@ -49,7 +49,8 @@ def main(config: Optional[str], force: bool, json_file: Optional[str], out: str,
     validate_output_parent_exists(out)
         
     cfg = ConfigManager()
-    raw = Path(json_file).read_text(encoding="utf-8") if json_file else sys.stdin.read()
+    # 入力JSONはファイル必須
+    raw = Path(json_file).read_text(encoding="utf-8")
     det = json.loads(raw)
     if validate:
         errors = _validate_detect_json(det)
@@ -60,13 +61,13 @@ def main(config: Optional[str], force: bool, json_file: Optional[str], out: str,
     from cli.common import sha256_file
 
     pdf_sha = sha256_file(pdf)
-    ref_sha = ((det.get("source", {}) or {}).get("pdf", {}) or {}).get("sha256")
+    ref_sha = ((det.get("metadata", {}) or {}).get("pdf", {}) or {}).get("sha256")
     if ref_sha and ref_sha != pdf_sha and not force:
         raise click.ClickException("PDFと検出JSONのsha256が一致しません (--force で無視)")
 
-    # Build entities from structured detections
+    # Build entities from detect.structured
     entities: List[Dict[str, Any]] = []
-    for st in (det.get("detections", {}) or {}).get("structured", []) or []:
+    for st in (det.get("detect", {}) or {}).get("structured", []) or []:
         for q in st.get("quads", []) or []:
             entities.append(
                 {

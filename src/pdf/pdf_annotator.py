@@ -30,7 +30,8 @@ class PDFAnnotator:
             all_annotations = []
 
             for page_num, page in enumerate(doc):
-                for annot in page.annots():
+                annots = page.annots() or []
+                for annot in annots:
                     try:
                         annot_info = self._extract_annotation_info(
                             annot, page_num + 1, page
@@ -87,12 +88,11 @@ class PDFAnnotator:
             logger.error(f"PDF復元エラー: {e}")
             raise
 
-    def _restore_single_annotation(
-        self, doc: fitz.Document, annotation_data: Dict
-    ) -> bool:
+    def _restore_single_annotation(self, doc: fitz.Document, annotation_data: Dict) -> bool:
         """単一の注釈・ハイライトを復元"""
         try:
-            page_num = annotation_data.get("coordinates", {}).get("page_number", 1) - 1
+            # page_numberはトップレベルで保持
+            page_num = int(annotation_data.get("page_number", 1)) - 1
 
             if not (0 <= page_num < len(doc)):
                 logger.warning(f"無効なページ番号: {page_num + 1}")
@@ -100,42 +100,68 @@ class PDFAnnotator:
 
             page = doc[page_num]
             annotation_type = annotation_data.get("annotation_type", "")
-            coordinates = annotation_data.get("coordinates", {})
-
             if annotation_type == "Highlight":
-                return self._restore_highlight_from_data(
-                    page, annotation_data, coordinates
-                )
+                return self._restore_highlight_from_data(page, annotation_data)
             else:
-                return self._restore_annotation_from_data(
-                    page, annotation_data, coordinates
-                )
+                return self._restore_annotation_from_data(page, annotation_data)
 
         except Exception as e:
             logger.error(f"単一注釈復元エラー: {e}")
             return False
 
     def _extract_annotation_info(self, annot, page_number: int, page) -> Optional[Dict]:
-        """注釈から詳細情報を抽出"""
+        """注釈から詳細情報を抽出（正規化矩形は出力しない）"""
         try:
-            rect = annot.rect
             annot_type = annot.type[1]
 
-            coordinates = {
-                "page_number": page_number,
-                "x0": float(rect.x0),
-                "y0": float(rect.y0),
-                "x1": float(rect.x1),
-                "y1": float(rect.y1),
-                "width": float(rect.width),
-                "height": float(rect.height),
-            }
+            # ハイライト等テキストマークアップは頂点群（vertices）からクアッド座標を抽出
+            quads: Optional[list] = None
+            try:
+                verts = getattr(annot, "vertices", None)
+                if verts:
+                    # vertsは [x0, y0, x1, y1, x2, y2, x3, y3, ...] または Point の列
+                    pts: list[float] = []
+                    for v in verts:
+                        # vがPointなら (x,y) を取り出す
+                        try:
+                            pts.extend([float(v.x), float(v.y)])
+                        except Exception:
+                            # 数値配列とみなす
+                            pts.append(float(v))
+                    if len(pts) % 8 == 0 and len(pts) >= 8:
+                        quads = [pts[i:i+8] for i in range(0, len(pts), 8)]
+            except Exception as e:
+                logger.debug(f"クアッド抽出エラー: {e}")
 
-            covered_text = self._extract_covered_text(rect, page)
+            # カバーテキストはクアッドの外接矩形で近似抽出（任意・失敗時は空文字）
+            covered_text = ""
+            try:
+                if quads:
+                    rects = [self._rect_from_quad_list(q) for q in quads]
+                    rects = [r for r in rects if r]
+                    if rects:
+                        # 複数クアッドの結合矩形
+                        union = rects[0]
+                        for r in rects[1:]:
+                            union = union | r
+                        covered_text = self._extract_covered_text(union, page)
+                else:
+                    # フォールバック：annot.rect（出力には含めない）
+                    covered_text = self._extract_covered_text(annot.rect, page)
+            except Exception:
+                pass
 
-            return {
+            # フォールバック: quadsが無ければrectから１クアッド生成
+            try:
+                if not quads:
+                    r = annot.rect
+                    quads = [[float(r.x0), float(r.y0), float(r.x1), float(r.y0), float(r.x0), float(r.y1), float(r.x1), float(r.y1)]]
+            except Exception:
+                pass
+
+            out = {
                 "annotation_type": annot_type,
-                "coordinates": coordinates,
+                "page_number": page_number,
                 "covered_text": covered_text,
                 "title": annot.info.get("title", ""),
                 "content": annot.info.get("content", ""),
@@ -145,6 +171,9 @@ class PDFAnnotator:
                 "modification_date": annot.info.get("modDate", ""),
                 "author": annot.info.get("subject", ""),
             }
+            if quads:
+                out["quads"] = quads
+            return out
 
         except Exception as e:
             logger.debug(f"注釈情報抽出エラー: {e}")
@@ -207,29 +236,51 @@ class PDFAnnotator:
             logger.debug(f"透明度抽出エラー: {e}")
             return 1.0
 
-    def _restore_highlight_from_data(
-        self, page: fitz.Page, data: Dict, coords: Dict
-    ) -> bool:
-        """データからハイライトを復元"""
-        rect = self._extract_rect_from_coordinates(coords)
-        if not rect:
-            return False
+    def _restore_highlight_from_data(self, page: fitz.Page, data: Dict) -> bool:
+        """データからハイライトを復元（クアッド座標を使用）"""
+        quads = data.get("quads") or []
+        if not quads:
+            # フォールバック：rectがあれば単一矩形として復元（互換）。ただし出力ではrectは扱わない。
+            try:
+                rect = getattr(data, "rect", None)
+                if rect:
+                    highlight = page.add_highlight_annot(rect)
+                    highlight.update()
+                    return True
+            except Exception:
+                return False
 
-        highlight = page.add_highlight_annot(rect)
-        color = self._extract_color_from_report(
-            data.get("color_info", {}), "stroke_color"
-        )
-        if color:
-            highlight.set_colors(stroke=color)
-        highlight.set_info(title=data.get("title", ""), content=data.get("content", ""))
-        highlight.update()
-        return True
+        restored = 0
+        for q in quads:
+            try:
+                if not (isinstance(q, (list, tuple)) and len(q) == 8):
+                    continue
+                p = [float(x) for x in q]
+                quad = fitz.Quad(fitz.Point(p[0], p[1]), fitz.Point(p[2], p[3]), fitz.Point(p[4], p[5]), fitz.Point(p[6], p[7]))
+                highlight = page.add_highlight_annot(quad)
+                color = self._extract_color_from_report(data.get("color_info", {}), "stroke_color")
+                if color:
+                    highlight.set_colors(stroke=color)
+                highlight.set_info(title=data.get("title", ""), content=data.get("content", ""))
+                highlight.update()
+                restored += 1
+            except Exception as e:
+                logger.debug(f"ハイライト復元失敗: {e}")
+                continue
+        return restored > 0
 
-    def _restore_annotation_from_data(
-        self, page: fitz.Page, data: Dict, coords: Dict
-    ) -> bool:
-        """データから注釈を復元"""
-        rect = self._extract_rect_from_coordinates(coords)
+    def _restore_annotation_from_data(self, page: fitz.Page, data: Dict) -> bool:
+        """データから注釈を復元（rectは内部計算、出力では保持しない）"""
+        quads = data.get("quads") or []
+        rect = None
+        if quads:
+            # クアッドの外接矩形を用いて復元
+            rects = [self._rect_from_quad_list(q) for q in quads if isinstance(q, (list, tuple)) and len(q) == 8]
+            rects = [r for r in rects if r]
+            if rects:
+                rect = rects[0]
+                for r in rects[1:]:
+                    rect = rect | r
         if not rect:
             return False
 
@@ -241,11 +292,9 @@ class PDFAnnotator:
         elif "Square" in annot_type:
             annot = page.add_square_annot(rect)
         else:
-            annot = page.add_freetext_annot(rect, content)  # Default
+            annot = page.add_freetext_annot(rect, content)
 
-        stroke = self._extract_color_from_report(
-            data.get("color_info", {}), "stroke_color"
-        )
+        stroke = self._extract_color_from_report(data.get("color_info", {}), "stroke_color")
         fill = self._extract_color_from_report(data.get("color_info", {}), "fill_color")
         annot.set_colors(stroke=stroke, fill=fill)
         annot.set_info(title=data.get("title", ""), content=content)
@@ -253,20 +302,17 @@ class PDFAnnotator:
         annot.update()
         return True
 
-    def _extract_rect_from_coordinates(self, coords: Dict) -> Optional[fitz.Rect]:
-        """座標辞書からfitz.Rectオブジェクトを生成"""
+    def _rect_from_quad_list(self, quad_list: list) -> Optional[fitz.Rect]:
+        """8要素のクアッド配列から外接矩形を生成"""
         try:
-            x0, y0, x1, y1 = (
-                float(coords["x0"]),
-                float(coords["y0"]),
-                float(coords["x1"]),
-                float(coords["y1"]),
-            )
-            if x0 >= x1 or y0 >= y1:
+            p = [float(x) for x in quad_list]
+            if len(p) != 8:
                 return None
-            return fitz.Rect(x0, y0, x1, y1)
-        except (ValueError, TypeError, KeyError) as e:
-            logger.warning(f"座標抽出エラー: {e}")
+            xs = p[0::2]
+            ys = p[1::2]
+            return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+        except Exception as e:
+            logger.debug(f"クアッド矩形化エラー: {e}")
             return None
 
     def _extract_color_from_report(
@@ -283,9 +329,7 @@ class PDFAnnotator:
             logger.debug(f"色情報抽出エラー: {e}")
             return None
 
-    def generate_annotations_report(
-        self, annotations: List[Dict], pdf_path: str
-    ) -> Optional[str]:
+    def generate_annotations_report(self, annotations: List[Dict], pdf_path: str) -> Optional[str]:
         """読み取った注釈のレポートを生成"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_filename = f"annotations_report_{timestamp}.json"
@@ -307,15 +351,11 @@ class PDFAnnotator:
             }
 
             for annot in annotations:
-                annot_type = annot["annotation_type"]
-                report_data["annotations_by_type"][annot_type] = (
-                    report_data["annotations_by_type"].get(annot_type, 0) + 1
-                )
+                annot_type = annot.get("annotation_type", "Unknown")
+                report_data["annotations_by_type"][annot_type] = report_data["annotations_by_type"].get(annot_type, 0) + 1
 
-                page_num = annot["coordinates"]["page_number"]
-                report_data["annotations_by_page"][page_num] = (
-                    report_data["annotations_by_page"].get(page_num, 0) + 1
-                )
+                page_num = annot.get("page_number", 1)
+                report_data["annotations_by_page"][page_num] = report_data["annotations_by_page"].get(page_num, 0) + 1
 
             with open(report_filename, "w", encoding="utf-8") as f:
                 json.dump(report_data, f, indent=2, ensure_ascii=False)

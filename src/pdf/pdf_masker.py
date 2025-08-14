@@ -277,8 +277,20 @@ class PDFMasker:
                 title=str(entity.get("entity_type", "PII")),
                 content=str(entity.get("text", "")),
             )
-            highlight.flags |= fitz.PDF_ANNOT_FLAG_PRINT
-            highlight.update()
+            # 一部のPyMuPDFバージョンではPDF_ANNOT_FLAG_PRINTが存在しない
+            flag_const = getattr(fitz, "PDF_ANNOT_FLAG_PRINT", None)
+            try:
+                if flag_const is not None:
+                    # flags属性またはset_flagsメソッドのどちらかに対応
+                    if hasattr(highlight, "flags"):
+                        highlight.flags |= flag_const
+                    elif hasattr(highlight, "set_flags"):
+                        highlight.set_flags(flag_const)
+                # フラグ設定の可否に関わらず更新を試みる
+                highlight.update()
+            except Exception:
+                # フラグ設定やupdate失敗は致命的ではないため継続
+                pass
         except Exception as e:
             logger.warning(f"add_highlight failed: {type(e).__name__}: {e}")
 

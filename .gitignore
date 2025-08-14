@@ -168,3 +168,4 @@ update_20240531/*
 *.cache
 uv.lock
 *.pkl
+*test*
