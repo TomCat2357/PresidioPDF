@@ -180,6 +180,8 @@ The application uses YAML configuration files with CLI override support:
 - `src/templates/index.html`: Main web UI template
 
 ## Common Commands
+
+### Project Setup
 ```bash
 # Project initialization
 uv sync
@@ -189,40 +191,119 @@ uv sync --extra dev        # Development tools
 uv sync --extra gpu        # GPU-optimized models
 uv sync --extra web        # Web application
 uv sync --extra gui        # Desktop GUI
+```
 
-# Run the CLI application (various modes)
+### New CLI Commands (Specification Format)
+```bash
+# Read PDF and extract text with coordinate mapping
+uv run python -m src.cli.read_main --pdf input.pdf --out read_output.json --with-map --pretty
+
+# Read existing highlights from PDF
+uv run python -m src.cli.read_main --pdf input.pdf --out read_output.json --with-highlights --pretty
+
+# Detect PII from read output with specification format
+uv run python -m src.cli.detect_main -j read_output.json --out detect_output.json --with-predetect --pretty
+
+# Process duplicates with entity-aware mode
+uv run python -m src.cli.duplicate_main -j detect_output.json --out final_output.json --entity-overlap-mode same --pretty
+
+# Apply masking with coordinate map embedding
+uv run python -m src.cli.mask_main --pdf input.pdf --json final_output.json --out masked.pdf --embed-coordinates
+```
+
+### Legacy CLI (Deprecated)
+```bash
+# Legacy unified CLI (still available but deprecated)
 uv run python -m src.cli path/to/file.pdf
 uv run python -m src.cli path/to/file.pdf --read-mode
 uv run python -m src.cli path/to/file.pdf --restore-mode --report-file report.json
 uv run python -m src.cli path/to/file.pdf --config config/config.yaml --spacy-model ja-core-news-lg
+```
 
+### Web Application
+```bash
 # Run web application
 uv run python src/web_main.py
 uv run python src/web_main.py --gpu --port 8080
+```
 
-# Testing
+### Testing
+```bash
 uv run pytest                    # Run all tests
 uv run pytest tests/test_*.py   # Run specific test files
 uv run pytest -v               # Verbose test output
 uv run pytest --cov=src       # Run with coverage
 
-# Code quality
+# Test new features
+uv run pytest tests/test_new_spec_format.py      # Test new JSON format
+uv run pytest tests/test_new_cli_options.py      # Test new CLI options
+uv run pytest tests/test_coordinate_mapping.py   # Test coordinate mapping
+uv run pytest tests/test_pdf_embedding.py        # Test PDF embedding
+```
+
+### Code Quality
+```bash
 uv run black .                  # Format all code
 uv run black src/              # Format specific directory
 uv run mypy src/               # Type check source code
 uv run mypy src/pdf_processor.py  # Type check specific file
+```
 
-# Dependency management
+### Dependency Management
+```bash
 uv tree                        # Show dependency tree
 uv sync                        # Sync dependencies
 uv sync --extra dev           # Install with dev dependencies
 uv sync --extra gpu           # Install with GPU support
 uv add package-name           # Add new dependency
 uv add --dev pytest-mock      # Add dev dependency
+```
 
-# Environment management
+### Environment Management
+```bash
 uv shell                       # Enter virtual environment shell
 ```
+
+## New Specification Features
+
+### JSON Format Changes
+The specification introduces a new simplified JSON format:
+
+**Key Changes:**
+- `text`: Now 2D array format `[["page0_block0", "page0_block1"], ["page1_block0"]]`
+- `detect`: Flat array with `start`/`end` as `{page_num, block_num, offset}` objects
+- `offset2coordsMap`: Maps page/block positions to coordinate arrays
+- `coords2offsetMap`: Maps coordinates to position tuples
+
+### New CLI Options
+
+**read_main.py:**
+- `--with-map/--no-map`: Include coordinate mapping data (default: True)
+- `--with-highlights`: Include existing PDF highlights in detect field
+
+**detect_main.py:**
+- `--with-predetect/--no-predetect`: Include existing detect information from input (default: True)
+
+**duplicate_main.py:**
+- `--entity-overlap-mode`: Control entity type consideration in duplicate processing
+  - `same`: Only same entity types are considered for overlap (default)
+  - `any`: Different entity types can also be considered for overlap
+
+**mask_main.py:**
+- `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
+
+### Coordinate Map Embedding
+The new specification supports embedding coordinate maps directly in PDFs:
+
+```bash
+# Embed coordinate maps during masking
+uv run python -m src.cli.mask_main --pdf input.pdf --json detect.json --out output.pdf --embed-coordinates
+
+# Read embedded coordinate maps
+uv run python -m src.cli.read_main --pdf output.pdf --out result.json --with-map
+```
+
+This allows processed PDFs to carry their coordinate mapping data for later use.
 
 ## Automated Web Testing
 

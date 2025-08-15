@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-from core.config_manager import ConfigManager
-from cli.common import validate_input_file_exists, validate_output_parent_exists
+from src.core.config_manager import ConfigManager
+from src.cli.common import validate_input_file_exists, validate_output_parent_exists
 
 
 def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
@@ -32,6 +32,34 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
     return errs
 
 
+def _embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
+    """座標マップを出力PDFに埋め込む"""
+    try:
+        from src.pdf.pdf_coordinate_mapper import PDFCoordinateMapper  # Lazy import
+        
+        mapper = PDFCoordinateMapper()
+        
+        # 元のPDFから座標マップを生成または読み込み
+        if not mapper.load_or_create_coordinate_map(original_pdf_path):
+            print(f"警告: 座標マップの生成に失敗しました: {original_pdf_path}", file=sys.stderr)
+            return False
+        
+        # 出力PDFに座標マップを埋め込み（一時ファイルを経由）
+        temp_path = output_pdf_path + ".temp"
+        if mapper.save_pdf_with_coordinate_map(output_pdf_path, temp_path):
+            # 一時ファイルを元のファイルに置き換え
+            Path(temp_path).replace(output_pdf_path)
+            print(f"座標マップを埋め込みました: {output_pdf_path}", file=sys.stderr)
+            return True
+        else:
+            print(f"警告: 座標マップの埋め込みに失敗しました: {output_pdf_path}", file=sys.stderr)
+            return False
+            
+    except Exception as e:
+        print(f"座標マップ埋め込みエラー: {e}", file=sys.stderr)
+        return False
+
+
 @click.command(help="検出JSON(detect.structured)を使ってPDFにハイライト注釈を追加（入力はファイル必須）")
 @click.option("--config", type=str, help="設定ファイル（maskセクションのみ参照）")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
@@ -39,7 +67,8 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
 @click.option("--out", type=str, required=True, help="出力PDFパス（指定必須）")
 @click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
-def main(config: Optional[str], force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool):
+@click.option("--embed-coordinates/--no-embed-coordinates", default=False, help="座標マップをPDFに埋め込む")
+def main(config: Optional[str], force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool, embed_coordinates: bool):
     # ファイル存在確認
     validate_input_file_exists(pdf)
     if json_file:
@@ -58,7 +87,7 @@ def main(config: Optional[str], force: bool, json_file: Optional[str], out: str,
             raise click.ClickException("detect JSON validation failed: " + "; ".join(errors))
 
     # Validate hash against JSON reference when present
-    from cli.common import sha256_file
+    from src.cli.common import sha256_file
 
     pdf_sha = sha256_file(pdf)
     ref_sha = ((det.get("metadata", {}) or {}).get("pdf", {}) or {}).get("sha256")
@@ -82,7 +111,7 @@ def main(config: Optional[str], force: bool, json_file: Optional[str], out: str,
                 }
             )
 
-    from pdf.pdf_masker import PDFMasker  # Lazy import
+    from src.pdf.pdf_masker import PDFMasker  # Lazy import
 
     masker = PDFMasker(cfg)
     # --outは必須なので常にファイル出力
@@ -90,6 +119,10 @@ def main(config: Optional[str], force: bool, json_file: Optional[str], out: str,
     with open(pdf, "rb") as r, open(out, "wb") as w:
         w.write(r.read())
     masker._apply_highlight_masking_with_mode(out, entities, cfg.get_operation_mode())
+    
+    # 座標マップ埋め込み処理
+    if embed_coordinates:
+        _embed_coordinate_map(pdf, out)
     
     print(out)
 

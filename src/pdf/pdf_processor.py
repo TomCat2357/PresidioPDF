@@ -114,7 +114,7 @@ class PDFProcessor:
             ),
         )
 
-    def process_pdf_file(self, input_path: str, masking_method: str = None) -> Dict:
+    def process_pdf_file(self, input_path: str, masking_method: str = None, embed_coordinates: bool = False) -> Dict:
         """単一PDFファイルを処理"""
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"ファイルが見つかりません: {input_path}")
@@ -135,6 +135,11 @@ class PDFProcessor:
             output_path = self.masker.apply_masking(
                 input_path, entities, masking_method
             )
+            
+            # 座標マップ埋め込み処理
+            if embed_coordinates:
+                self._embed_coordinate_map(input_path, output_path)
+            
             logger.info(
                 f"PDF処理完了: {output_path} ({len(entities)}件の個人情報を処理)"
             )
@@ -150,7 +155,7 @@ class PDFProcessor:
             self.processing_stats["files_failed"] += 1
             raise
 
-    def process_files(self, path: str, masking_method: str = None) -> List[Dict]:
+    def process_files(self, path: str, masking_method: str = None, embed_coordinates: bool = False) -> List[Dict]:
         """ファイルまたはフォルダを処理"""
         if self.config_manager.is_read_mode_enabled():
             return self._process_files_read_mode(path)
@@ -159,7 +164,7 @@ class PDFProcessor:
         results = []
         for file_path in files_to_process:
             try:
-                result = self.process_pdf_file(file_path, masking_method)
+                result = self.process_pdf_file(file_path, masking_method, embed_coordinates)
                 results.append(result)
             except Exception as e:
                 logger.error(f"ファイル処理エラー ({file_path}): {e}")
@@ -312,6 +317,33 @@ class PDFProcessor:
             logger.info(f"レポートを生成: {report_filename}")
         except Exception as e:
             logger.error(f"レポート生成でエラー: {e}")
+
+    def _embed_coordinate_map(self, original_pdf_path: str, output_pdf_path: str) -> bool:
+        """座標マップを出力PDFに埋め込む"""
+        try:
+            from pdf.pdf_coordinate_mapper import PDFCoordinateMapper  # Lazy import
+            
+            mapper = PDFCoordinateMapper()
+            
+            # 元のPDFから座標マップを生成または読み込み
+            if not mapper.load_or_create_coordinate_map(original_pdf_path):
+                logger.warning(f"座標マップの生成に失敗しました: {original_pdf_path}")
+                return False
+            
+            # 出力PDFに座標マップを埋め込み（一時ファイルを経由）
+            temp_path = output_pdf_path + ".temp"
+            if mapper.save_pdf_with_coordinate_map(output_pdf_path, temp_path):
+                # 一時ファイルを元のファイルに置き換え
+                Path(temp_path).replace(output_pdf_path)
+                logger.info(f"座標マップを埋め込みました: {output_pdf_path}")
+                return True
+            else:
+                logger.warning(f"座標マップの埋め込みに失敗しました: {output_pdf_path}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"座標マップ埋め込みエラー: {e}")
+            return False
 
     def _create_backup(self, file_path: str) -> Optional[str]:
         """ファイルのバックアップ出力は廃止（常にNone）"""

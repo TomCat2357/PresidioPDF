@@ -35,10 +35,10 @@ CLI Usage
 This project provides both a legacy subcommand CLI and new split commands. Prefer the new split commands for piping and tooling.
 
 New commands (recommended)
-- `codex-read`: Read a PDF and output JSON with highlights, plain text, and structured text.
-- `codex-detect`: Read the JSON from `codex-read` and produce PII detections JSON (plain offsets and structured quads).
-- `codex-duplicate-process`: De-duplicate detections JSON with configurable overlap/keep policies.
-- `codex-mask`: Apply highlight annotations to the PDF using detections JSON.
+- `codex-read`: Read a PDF and output JSON with text and coordinate mapping data.
+- `codex-detect`: Read the JSON from `codex-read` and produce PII detections JSON in specification format.
+- `codex-duplicate-process`: De-duplicate detections JSON with configurable overlap/keep policies including entity-aware processing.
+- `codex-mask`: Apply highlight annotations to the PDF using detections JSON with optional coordinate map embedding.
 
 Legacy aggregated CLI (deprecated)
 - `presidio-cli <subcommand>` remains available for backward compatibility but is deprecated. Use the split commands above.
@@ -50,15 +50,34 @@ Common options
 
 read (codex-read)
 ```bash
-# Read a PDF into JSON (includes source, highlights, plain_text, structured_text)
-uv run codex-read test_pdfs/sample.pdf --out outputs/read.json --pretty
+# Read a PDF into JSON (specification format: text as 2D array, optional coordinate maps)
+uv run codex-read test_pdfs/sample.pdf --out outputs/read.json --pretty --with-map
+
+# Read with embedded coordinate maps from processed PDFs
+uv run codex-read processed.pdf --out outputs/read.json --pretty --with-map
+
+# Read existing highlights from PDF
+uv run codex-read test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
 ```
+
+New options:
+- `--with-map/--no-map`: Include coordinate mapping data (default: True)
+- `--with-highlights`: Include existing PDF highlights in detect field
 
 detect (codex-detect)
 ```bash
-# Detect from read JSON; writes detections with offsets/quads
-uv run codex-detect --from outputs/read.json --out outputs/detect.json --pretty --validate
+# Detect from read JSON; writes detections in specification format (page_num/block_num/offset)
+uv run codex-detect -j outputs/read.json --out outputs/detect.json --pretty --validate
+
+# Include existing detections from read result
+uv run codex-detect -j outputs/read.json --out outputs/detect.json --with-predetect
+
+# Exclude existing detections (replace mode)
+uv run codex-detect -j outputs/read.json --out outputs/detect.json --no-predetect
 ```
+
+New options:
+- `--with-predetect/--no-predetect`: Include existing detect information from input (default: True)
 
 Detect additions and exclusions
 - Additional entities via regex and global exclude regex are supported.
@@ -68,20 +87,55 @@ Detect additions and exclusions
 CLI examples
 ```bash
 # Add regex-based detections per entity (multiple --add allowed)
-uv run codex-detect --from outputs/read.json \
+uv run codex-detect -j outputs/read.json \
   --add person:"田中.*" \
   --add location:"(渋谷|新宿)" \
   --out outputs/detect.json --pretty
 
 # Add and exclude (exclude applies only to auto/model results)
-uv run codex-detect --from outputs/read.json \
+uv run codex-detect -j outputs/read.json \
   --exclude "株式会社.*" \
   --add person:"田中太郎" \
   --out outputs/detect.json --pretty
 
 # With shared YAML config (detect section only)
-uv run codex-detect --from outputs/read.json --config config/config.yaml --pretty
+uv run codex-detect -j outputs/read.json --config config/config.yaml --pretty
 ```
+
+duplicate (codex-duplicate-process)
+```bash
+# Basic duplicate processing
+uv run codex-duplicate-process -j outputs/detect.json --out outputs/deduped.json --pretty
+
+# Entity-aware duplicate processing (same entity types only)
+uv run codex-duplicate-process -j outputs/detect.json --out outputs/deduped.json \
+  --entity-overlap-mode same --pretty
+
+# Cross-entity duplicate processing (different entity types can be duplicates)
+uv run codex-duplicate-process -j outputs/detect.json --out outputs/deduped.json \
+  --entity-overlap-mode any --pretty
+```
+
+New options:
+- `--entity-overlap-mode`: Control entity type consideration in duplicate processing
+  - `same`: Only same entity types are considered for overlap (default)
+  - `any`: Different entity types can also be considered for overlap
+
+mask (codex-mask)
+```bash
+# Basic PDF masking
+uv run codex-mask --pdf input.pdf --json outputs/detect.json --out masked.pdf
+
+# Embed coordinate maps in output PDF
+uv run codex-mask --pdf input.pdf --json outputs/detect.json --out masked.pdf \
+  --embed-coordinates
+
+# Read embedded coordinate maps from the masked PDF
+uv run codex-read masked.pdf --out extracted.json --with-map
+```
+
+New options:
+- `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
 
 YAML (detect section; read-only)
 ```yaml
@@ -98,20 +152,89 @@ Notes
 - Allowed entity keys (lowercase): person, location, date_time, phone_number, individual_number, year, proper_noun
 - Unknown entity names or invalid regex cause an error and non-zero exit
 
-duplicate-process (codex-duplicate-process)
+JSON Output Format
+
+The new specification uses a simplified JSON format:
+
+**read output:**
+```json
+{
+  "metadata": {
+    "pdf": {
+      "filename": "document.pdf",
+      "path": "/absolute/path/to/document.pdf",
+      "size": 12345,
+      "page_count": 3,
+      "sha256": "abc123...",
+      "created_at": "2023-01-01T00:00:00",
+      "modified_at": "2023-01-01T00:00:00"
+    },
+    "generated_at": "2023-01-01T00:00:00Z"
+  },
+  "text": [
+    ["page0_block0_text", "page0_block1_text"],
+    ["page1_block0_text", "page1_block1_text"],
+    ["page2_block0_text"]
+  ],
+  "detect": [
+    {
+      "start": {"page_num": 0, "block_num": 0, "offset": 5},
+      "end": {"page_num": 0, "block_num": 0, "offset": 8},
+      "entity": "PERSON",
+      "word": "田中太郎",
+      "origin": "manual"
+    }
+  ],
+  "offset2coordsMap": {
+    "0": {
+      "0": [[100, 200, 150, 220], [160, 200, 200, 220]]
+    }
+  },
+  "coords2offsetMap": {
+    "(100,200,150,220)": "(0,0,0)",
+    "(160,200,200,220)": "(0,0,4)"
+  }
+}
+```
+
+**detect output:**
+```json
+{
+  "metadata": { /* same as read */ },
+  "detect": [
+    {
+      "start": {"page_num": 0, "block_num": 0, "offset": 5},
+      "end": {"page_num": 0, "block_num": 0, "offset": 8},
+      "entity": "PERSON",
+      "word": "田中太郎", 
+      "origin": "auto"
+    }
+  ],
+  "offset2coordsMap": { /* inherited from read */ },
+  "coords2offsetMap": { /* inherited from read */ }
+}
+```
+
+Key changes:
+- `text`: 2D array format `[["block1", "block2"], ["page2_block1"]]`
+- `detect`: Flat array with `start`/`end` as `{page_num, block_num, offset}` objects
+- `offset2coordsMap`: Maps page/block positions to coordinate arrays
+- `coords2offsetMap`: Maps coordinates to position tuples
+
+Legacy duplicate-process (codex-duplicate-process)
 ```bash
-# De-duplicate detections with overlap/keep policies
+# De-duplicate detections with overlap/keep policies  
 # Overlap modes: exact (完全一致), contain (包含), overlap (一部重なり; default)
 # Keep policies: widest (範囲最大; default), first, last, entity-order
 uv run codex-duplicate-process \
-  --detect outputs/detect.json \
+  -j outputs/detect.json \
   --overlap overlap \
   --keep widest \
   --out outputs/detect_dedup.json --pretty
 
 # Entity-priority example
 uv run codex-duplicate-process \
-  --detect outputs/detect.json \
+  -j outputs/detect.json \
   --overlap overlap \
   --keep entity-order \
   --entity-priority PERSON,EMAIL,PHONE \

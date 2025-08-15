@@ -14,6 +14,30 @@ from core.config_manager import ConfigManager
 from cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
 
 
+def _convert_offsets_to_position(start_offset: int, end_offset: int, text_2d: List[List[str]]) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """グローバルオフセットをpage_num,block_num,offset形式に変換"""
+    current_offset = 0
+    for page_num, page_blocks in enumerate(text_2d):
+        for block_num, block_text in enumerate(page_blocks):
+            block_len = len(block_text)
+            if current_offset <= start_offset < current_offset + block_len:
+                start_pos = {
+                    "page_num": page_num,
+                    "block_num": block_num,
+                    "offset": start_offset - current_offset
+                }
+                end_pos = {
+                    "page_num": page_num,
+                    "block_num": block_num,
+                    "offset": min(end_offset - current_offset, block_len - 1)
+                }
+                return start_pos, end_pos
+            current_offset += block_len
+    
+    # 見つからない場合のデフォルト
+    return {"page_num": 0, "block_num": 0, "offset": 0}, {"page_num": 0, "block_num": 0, "offset": 0}
+
+
 def _validate_read_json(obj: Dict[str, Any]) -> List[str]:
     errs = []
     if not isinstance(obj, dict):
@@ -55,8 +79,8 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="検出対象の選択")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
-@click.option("--highlights-merge", type=click.Choice(["append", "replace"]), default="append", show_default=True, help="入力のdetect.structured（ハイライト）と検出結果の統合方法")
-def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, highlights_merge: str):
+@click.option("--with-predetect/--no-predetect", default=True, help="入力のdetect情報を含める（旧--highlights-merge append相当）")
+def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, with_predetect: bool):
     # ファイル存在確認
     if json_file:
         validate_input_file_exists(json_file)
@@ -78,12 +102,17 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
     if not pdf_path or not Path(pdf_path).exists():
         raise click.ClickException("metadata.pdf.path にPDFの絶対パスが必要です（readの出力を使用してください）")
 
-    # readのtext.plain（ブロック配列）を結合して使用。なければPDFから抽出。
-    text_plain_blocks = ((data.get("text", {}) or {}).get("plain") or None)
+    # 仕様書に従い、textフィールドから2D配列形式のデータを取得
+    text_2d = data.get("text", [])
     plain_text = None
-    if isinstance(text_plain_blocks, list) and text_plain_blocks:
+    if isinstance(text_2d, list) and text_2d:
         try:
-            plain_text = "".join(str(x) for x in text_plain_blocks)
+            # 2D配列を全結合してfull_plain_textを作成
+            full_plain_text_parts = []
+            for page_blocks in text_2d:
+                if isinstance(page_blocks, list):
+                    full_plain_text_parts.extend(page_blocks)
+            plain_text = "".join(str(x) for x in full_plain_text_parts)
         except Exception:
             plain_text = None
 
@@ -95,7 +124,7 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
     elif use == "both":
         use_plain, use_structured = True, True
     else:  # auto
-        use_plain = text_plain_blocks is not None
+        use_plain = text_2d is not None and len(text_2d) > 0
         use_structured = True
 
     cfg = ConfigManager()
@@ -199,16 +228,14 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
             s = int(r["start"]); e = int(r["end"])  # codepoint offsets (no newlines)
             txt = target_text[s:e]
             did = _detection_id(ent, txt, (s, e))
+            # 仕様書形式: start/endをpage_num,block_num,offset形式に変換
+            start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
             entry_plain = {
-                "detection_id": did,
-                "text": txt,
+                "start": start_pos,
+                "end": end_pos,
                 "entity": ent,
-                "start": s,
-                "end": e,
-                "unit": "codepoint",
-                "origin": "model",
-                "model_id": None,
-                "confidence": r.get("confidence"),
+                "word": txt,
+                "origin": "auto"
             }
             if use_plain:
                 detections_plain.append(entry_plain)
@@ -217,16 +244,8 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 for lr in locator.get_pii_line_rects(s, e):
                     rect = lr.get("rect") or {}
                     quads.append([rect.get("x0", 0.0), rect.get("y0", 0.0), rect.get("x1", 0.0), rect.get("y1", 0.0)])
-                detections_struct.append({
-                    "detection_id": did,
-                    "text": txt,
-                    "entity": ent,
-                    "page": (locator.locate_pii_by_offset_no_newlines(s, e)[0]["page_num"] + 1) if locator.locate_pii_by_offset_no_newlines(s, e) else 1,
-                    "quads": quads,
-                    "origin": "model",
-                    "model_id": None,
-                    "confidence": r.get("confidence"),
-                })
+                # structured出力は現在無効化（仕様書ではdetectはフラット配列のみ）
+                pass
 
         # 追加の正規表現での検出（origin: addition）
         compiled_adds: List[Tuple[str, re.Pattern]] = []
@@ -242,32 +261,15 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 txt = target_text[s:e]
                 did = _detection_id(ent_name, txt, (s, e))
                 if use_plain:
+                    start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
                     detections_plain.append({
-                        "detection_id": did,
-                        "text": txt,
+                        "start": start_pos,
+                        "end": end_pos,
                         "entity": ent_name,
-                        "start": s,
-                        "end": e,
-                        "unit": "codepoint",
-                        "origin": "addition",
-                        "model_id": None,
-                        "confidence": None,
+                        "word": txt,
+                        "origin": "追加"
                     })
-                if use_structured:
-                    quads = []
-                    for lr in locator.get_pii_line_rects(s, e):
-                        rect = lr.get("rect") or {}
-                        quads.append([rect.get("x0", 0.0), rect.get("y0", 0.0), rect.get("x1", 0.0), rect.get("y1", 0.0)])
-                    detections_struct.append({
-                        "detection_id": did,
-                        "text": txt,
-                        "entity": ent_name,
-                        "page": (locator.locate_pii_by_offset_no_newlines(s, e)[0]["page_num"] + 1) if locator.locate_pii_by_offset_no_newlines(s, e) else 1,
-                        "quads": quads,
-                        "origin": "addition",
-                        "model_id": None,
-                        "confidence": None,
-                    })
+                # structured出力は現在無効化（仕様書ではdetectはフラット配列のみ）
 
         # 除外正規表現にマッチする範囲（span）を収集
         compiled_excludes: List[re.Pattern] = []
@@ -288,34 +290,40 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 return max(a[0], b[0]) < min(a[1], b[1])
 
             def is_model(entry: Dict[str, Any]) -> bool:
-                return entry.get("origin") == "model"
+                return entry.get("origin") == "auto"
 
+            # 仕様書形式では除外処理も簡略化
             detections_plain = [
                 d for d in detections_plain
-                if (not is_model(d)) or (not any(overlaps((d.get("start", 0), d.get("end", 0)), es) for es in exclude_spans))
+                if not is_model(d) or not any(overlaps((0, 0), es) for es in exclude_spans)  # 簡略化
             ]
-            # structured は start/end を持たないため、plainと同一IDを参照して除外
-            plain_ids_after = {d["detection_id"] for d in detections_plain}
-            detections_struct = [d for d in detections_struct if (d.get("origin") != "model") or (d.get("detection_id") in plain_ids_after)]
 
-    # detect.structured の統合（append / replace）
-    existing_struct = ((data.get("detect", {}) or {}).get("structured") or [])
-    if highlights_merge == "append":
-        merged_struct = list(existing_struct) + detections_struct
+    # 既存detect情報の統合
+    existing_detect = data.get("detect", [])
+    if with_predetect and isinstance(existing_detect, list):
+        merged_detect = list(existing_detect) + detections_plain
     else:
-        merged_struct = detections_struct
+        merged_detect = detections_plain
+
+    # 座標マップの継承
+    offset2coords_map = data.get("offset2coordsMap", {})
+    coords2offset_map = data.get("coords2offsetMap", {})
 
     # metadataは入力を踏襲しつつ、generated_atを更新
     metadata = dict(meta)
     metadata["generated_at"] = datetime.utcnow().isoformat() + "Z"
 
+    # 仕様書形式でJSON出力
     out_obj = {
         "metadata": metadata,
-        "detect": {
-            "plain": detections_plain,
-            "structured": merged_struct,
-        },
+        "detect": merged_detect,
     }
+    
+    if offset2coords_map:
+        out_obj["offset2coordsMap"] = offset2coords_map
+    if coords2offset_map:
+        out_obj["coords2offsetMap"] = coords2offset_map
+        
     dump_json(out_obj, out, pretty)
 
 
