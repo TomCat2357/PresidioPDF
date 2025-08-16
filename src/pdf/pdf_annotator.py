@@ -159,18 +159,31 @@ class PDFAnnotator:
             except Exception:
                 pass
 
+            # Creator情報の抽出（name フィールドから）
+            creator = annot.info.get('name', "")
+
+            # Content情報のパース（新しい埋め込み形式）
+            content = annot.info.get("content", "")
+            parsed_data = self._parse_annotation_content(content)
+
             out = {
                 "annotation_type": annot_type,
                 "page_number": page_number,
                 "covered_text": covered_text,
                 "title": annot.info.get("title", ""),
-                "content": annot.info.get("content", ""),
+                "content": content,
+                "creator": creator,
                 "color_info": self._extract_annotation_colors(annot),
                 "opacity": self._extract_annotation_opacity(annot),
                 "creation_date": annot.info.get("creationDate", ""),
                 "modification_date": annot.info.get("modDate", ""),
                 "author": annot.info.get("subject", ""),
             }
+            
+            # パース済みデータがあれば追加
+            if parsed_data:
+                out.update(parsed_data)
+                
             if quads:
                 out["quads"] = quads
             return out
@@ -178,6 +191,28 @@ class PDFAnnotator:
         except Exception as e:
             logger.debug(f"注釈情報抽出エラー: {e}")
             return None
+
+    def _parse_annotation_content(self, content: str) -> Dict:
+        """注釈のcontent文字列をパースして構造化データを取得"""
+        result = {}
+        try:
+            # detect_word:"value",entity_type:"TYPE" 形式のパース
+            import re
+            
+            # detect_word:"..." の抽出
+            detect_word_match = re.search(r'detect_word:"([^"]*)"', content)
+            if detect_word_match:
+                result["detect_word"] = detect_word_match.group(1)
+            
+            # entity_type:"..." の抽出
+            entity_type_match = re.search(r'entity_type:"([^"]*)"', content)
+            if entity_type_match:
+                result["entity_type"] = entity_type_match.group(1)
+                
+        except Exception as e:
+            logger.debug(f"注釈コンテンツパースエラー: {e}")
+        
+        return result
 
     def _extract_covered_text(self, rect: fitz.Rect, page) -> str:
         """注釈がカバーしているテキストを抽出"""

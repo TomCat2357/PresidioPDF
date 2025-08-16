@@ -273,10 +273,27 @@ class PDFMasker:
                 highlight = page.add_highlight_annot(rect_or_quads)
             highlight.set_colors(stroke=color)
             highlight.set_opacity(0.4)
+            
+            # Creator情報と検出データを埋め込み
+            detect_word = str(entity.get("text", ""))
+            entity_type = str(entity.get("entity_type", "PII"))
+            content_text = f'detect_word:"{detect_word}",entity_type:"{entity_type}"'
+            
             highlight.set_info(
-                title=str(entity.get("entity_type", "PII")),
-                content=str(entity.get("text", "")),
+                title=entity_type,
+                content=content_text
             )
+            
+            # Creator情報を設定（name フィールドを使用）
+            try:
+                if hasattr(highlight, 'set_name'):
+                    highlight.set_name("origin")
+                else:
+                    # 直接info辞書を更新
+                    highlight.info['name'] = "origin"
+            except Exception as e:
+                logger.debug(f"Creator設定エラー: {e}")
+            
             # 一部のPyMuPDFバージョンではPDF_ANNOT_FLAG_PRINTが存在しない
             flag_const = getattr(fitz, "PDF_ANNOT_FLAG_PRINT", None)
             try:
@@ -401,17 +418,51 @@ class PDFMasker:
             for page_num, page in enumerate(doc):
                 for annot in page.annots():
                     if annot.type[1] == "Highlight":
-                        existing.append(
-                            {
-                                "rect": annot.rect,
-                                "page_num": page_num,
-                                "content": annot.info.get("content", ""),
-                                "title": annot.info.get("title", ""),
-                            }
-                        )
+                        # Creator情報を取得
+                        creator = getattr(annot, 'name', None) or getattr(annot.info, 'name', None) or ""
+                        
+                        # Content情報を取得してパース
+                        content = annot.info.get("content", "")
+                        parsed_data = self._parse_highlight_content(content)
+                        
+                        highlight_info = {
+                            "rect": annot.rect,
+                            "page_num": page_num,
+                            "content": content,
+                            "title": annot.info.get("title", ""),
+                            "creator": creator,
+                        }
+                        
+                        # パース済みデータがあれば追加
+                        if parsed_data:
+                            highlight_info.update(parsed_data)
+                            
+                        existing.append(highlight_info)
         except Exception as e:
             logger.debug(f"既存ハイライト取得エラー: {e}")
         return existing
+
+    def _parse_highlight_content(self, content: str) -> Dict:
+        """ハイライトのcontent文字列をパースして構造化データを取得"""
+        result = {}
+        try:
+            # detect_word:"value",entity_type:"TYPE" 形式のパース
+            import re
+            
+            # detect_word:"..." の抽出
+            detect_word_match = re.search(r'detect_word:"([^"]*)"', content)
+            if detect_word_match:
+                result["detect_word"] = detect_word_match.group(1)
+            
+            # entity_type:"..." の抽出
+            entity_type_match = re.search(r'entity_type:"([^"]*)"', content)
+            if entity_type_match:
+                result["entity_type"] = entity_type_match.group(1)
+                
+        except Exception as e:
+            logger.debug(f"ハイライトコンテンツパースエラー: {e}")
+        
+        return result
 
     def _is_duplicate_annotation(
         self,

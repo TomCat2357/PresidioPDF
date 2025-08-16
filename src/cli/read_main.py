@@ -106,43 +106,95 @@ def _read_highlight_raw(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any
 
 
 def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structured: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """ハイライトを仕様書のdetect形式に変換（厳密な検証付き）"""
+    """ハイライトを仕様書のdetect形式に変換（改良されたテキスト検索ベース座標マッピング付き）"""
     # 許可されたエンティティタイプ
     ALLOWED_ENTITIES = {"PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"}
     
     detect_list: List[Dict[str, Any]] = []
     
+    # テキストブロックデータを取得
+    text_blocks = structured.get("text", [[]])
+    
+    # 既に使用された位置を追跡（重複回避のため）
+    used_positions = set()
+    
     for highlight in highlights:
+        # Creator情報の確認
+        creator = highlight.get("creator", "")
+        origin = "auto" if creator == "origin" else "manual"
+        
+        # コンテンツからdetect_wordとentity_typeを抽出
+        detect_word = ""
+        entity_type = ""
+        
+        # 新しい埋め込み形式をパース
+        if "detect_word" in highlight and "entity_type" in highlight:
+            detect_word = highlight["detect_word"]
+            entity_type = highlight["entity_type"]
+        else:
+            # 従来の形式から取得
+            entity_type = highlight.get("title", "UNKNOWN")
+            detect_word = highlight.get("content", "")
+        
         # エンティティタイプの検証
-        entity = highlight.get("entity", "UNKNOWN")
-        if entity not in ALLOWED_ENTITIES:
+        if entity_type not in ALLOWED_ENTITIES:
             continue  # 許可されていないエンティティは読み取らない
         
-        # originの検証
-        origin = highlight.get("origin", "manual")
-        if origin not in ["manual", "custom", "auto"]:
-            continue  # 無効なoriginは読み取らない
+        if not detect_word:
+            continue  # テキストが空の場合は読み取らない
             
-        # 座標検証とマッピング（座標マップが利用可能な場合）
-        highlight_coords = highlight.get("coordinates", {})
-        if highlight_coords:
-            # 1. 座標の1pixel以上のずれチェック
-            # TODO: 座標マップとの照合実装
-            # coords2offset_mapから最も近い座標を見つけて1pixel以内かチェック
-            
-            # 2. ハイライト語とマップ変換結果の一致検証
-            # TODO: 座標→オフセット→語復元での一致性チェック
-            highlight_text = highlight.get("text", "")
-            if not highlight_text:
-                continue  # テキストが空の場合は読み取らない
+        # テキスト検索ベースで位置を特定
+        start_pos = {"page_num": 0, "block_num": 0, "offset": 0}
+        end_pos = {"page_num": 0, "block_num": 0, "offset": 0}
         
-        # ハイライトから座標情報を取得し、page_num/block_num/offsetに変換
-        # 実装は座標マッピング機能完成後に詳細化
+        # 全てのテキストブロックから detect_word の全ての出現位置を検索
+        found = False
+        candidates = []
+        
+        for page_num, page_blocks in enumerate(text_blocks):
+            for block_num, block_text in enumerate(page_blocks):
+                # 指定した単語の全ての出現位置を検索
+                start_index = 0
+                while True:
+                    offset = block_text.find(detect_word, start_index)
+                    if offset == -1:
+                        break
+                    
+                    position_key = (page_num, block_num, offset)
+                    if position_key not in used_positions:
+                        candidates.append({
+                            'page_num': page_num,
+                            'block_num': block_num, 
+                            'offset': offset,
+                            'end_offset': offset + len(detect_word) - 1
+                        })
+                    
+                    start_index = offset + 1
+        
+        # 最適な候補を選択（最初の未使用位置）
+        if candidates:
+            best_candidate = candidates[0]
+            start_pos = {
+                "page_num": best_candidate['page_num'], 
+                "block_num": best_candidate['block_num'], 
+                "offset": best_candidate['offset']
+            }
+            end_pos = {
+                "page_num": best_candidate['page_num'], 
+                "block_num": best_candidate['block_num'], 
+                "offset": best_candidate['end_offset']
+            }
+            
+            # この位置を使用済みとしてマーク
+            position_key = (best_candidate['page_num'], best_candidate['block_num'], best_candidate['offset'])
+            used_positions.add(position_key)
+            found = True
+        
         detect_item = {
-            "start": {"page_num": 0, "block_num": 0, "offset": 0},
-            "end": {"page_num": 0, "block_num": 0, "offset": 0},
-            "entity": entity,
-            "word": highlight.get("text", ""),
+            "start": start_pos,
+            "end": end_pos,
+            "entity": entity_type,
+            "word": detect_word,
             "origin": origin
         }
         detect_list.append(detect_item)
