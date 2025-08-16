@@ -35,12 +35,12 @@ CLI Usage
 
 Breaking change (Aug 2025)
 - All CLI `--config` options are removed. CLI commands no longer read YAML config files directly.
-- New meta command added: run a YAML config to orchestrate `read/detect/duplicate/mask/embed` in sequence.
+- Meta command added: run a YAML config to orchestrate `read/detect/duplicate/mask/embed` in sequence.
   - Run: `uv run python -m src.cli.run_config_main <config.yml>`
   - Config format: `steps: [{op: "read", options: {pdf: "...", out: "..."}}, ...]`
-This project provides both a legacy subcommand CLI and new split commands. Prefer the new split commands for piping and tooling.
+This project provides both a legacy subcommand CLI and split commands. Prefer the split commands for piping and tooling.
 
-New commands (recommended)
+CLI commands
 - `uv run python -m src.cli.read_main`: Read a PDF and output JSON with text and coordinate mapping data.
 - `uv run python -m src.cli.detect_main`: Read the JSON from read_main and produce PII detections JSON in specification format.
 - `uv run python -m src.cli.duplicate_main`: De-duplicate detections JSON with configurable overlap/keep policies including entity-aware processing.
@@ -68,7 +68,7 @@ uv run python -m src.cli.read_main --pdf processed.pdf --out outputs/read.json -
 uv run python -m src.cli.read_main --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
 ```
 
-New options:
+Options:
 - `--with-map/--no-map`: Include coordinate mapping data (default: True)
 - `--with-highlights`: Include existing PDF highlights in detect field
 
@@ -84,7 +84,7 @@ uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.j
 uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --no-predetect
 ```
 
-New options:
+Options:
 - `--with-predetect/--no-predetect`: Include existing detect information from input (default: True)
 
 Detect additions and exclusions
@@ -121,7 +121,7 @@ uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/ded
   --entity-overlap-mode any --pretty
 ```
 
-New options:
+Options:
 - `--entity-overlap-mode`: Control entity type consideration in duplicate processing
   - `same`: Only same entity types are considered for overlap (default)
   - `any`: Different entity types can also be considered for overlap
@@ -139,7 +139,7 @@ uv run python -m src.cli.mask_main --pdf input.pdf -j outputs/detect.json --out 
 uv run python -m src.cli.read_main --pdf masked.pdf --out extracted.json --with-map
 ```
 
-New options:
+Options:
 - `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
 
 embed (embed_main.py)
