@@ -80,6 +80,7 @@ codex-read = "cli.read_main:main"
 codex-detect = "cli.detect_main:main"
 codex-duplicate-process = "cli.duplicate_main:main"
 codex-mask = "cli.mask_main:main"
+codex-run-config = "cli.run_config_main:main"
 
 # Web app
 presidio-web = "web.web_main:main"

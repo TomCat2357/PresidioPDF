@@ -284,7 +284,6 @@ def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, 
 
 @click.command(help="PDFを読み込み 統一スキーマのJSONをファイル出力（text.*, detect.*）")
 @click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
-@click.option("--config", type=str, help="設定ファイル（readセクションのみ参照）")
 @click.option("--out", type=str, required=True, help="出力先（必ず指定。標準出力は不可）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option(
@@ -300,7 +299,7 @@ def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, 
     show_default=True,
     help="ログレベル（進捗はDEBUGで表示）",
 )
-def main(pdf: str, config: Optional[str], out: Optional[str], pretty: bool, with_map: bool, with_highlights: bool, log_level: str = "WARNING"):
+def main(pdf: str, out: Optional[str], pretty: bool, with_map: bool, with_highlights: bool, log_level: str = "WARNING"):
     try:
         # ログ設定（stderrへ出力）
         logging.basicConfig(

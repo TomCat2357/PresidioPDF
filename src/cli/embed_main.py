@@ -14,7 +14,6 @@ from typing import Optional
 import click
 
 from src.cli.common import validate_input_file_exists, validate_output_parent_exists
-from src.core.config_manager import ConfigManager
 
 
 def _embed_coordinate_map(original_pdf_path: str, json_file_path: str, output_pdf_path: str) -> bool:
@@ -60,17 +59,13 @@ def _embed_coordinate_map(original_pdf_path: str, json_file_path: str, output_pd
 @click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
 @click.option("-j", "--json", "json_file", type=str, required=True, help="座標マップを含むJSONファイル")
 @click.option("--out", type=str, required=True, help="出力PDFパス（指定必須）")
-@click.option("--config", type=str, help="設定ファイル")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
-def main(pdf: str, json_file: str, out: str, config: Optional[str], force: bool):
+def main(pdf: str, json_file: str, out: str, force: bool):
     # ファイル存在確認
     validate_input_file_exists(pdf)
     validate_input_file_exists(json_file)
-    if config:
-        validate_input_file_exists(config)
     validate_output_parent_exists(out)
     
-    cfg = ConfigManager()
     
     # JSONファイルの読み込みと検証
     with open(json_file, 'r', encoding='utf-8') as f:

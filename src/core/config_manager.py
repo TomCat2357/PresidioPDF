@@ -24,6 +24,7 @@ class ConfigManager:
         "INDIVIDUAL_NUMBER",
         "YEAR",
         "PROPER_NOUN",
+        "OTHER",
     ]
 
     def __init__(self, config_file: Optional[str] = None, args: Optional[Dict] = None):
@@ -32,7 +33,8 @@ class ConfigManager:
             config_file: YAML設定ファイルのパス
             args: コマンドライン引数の辞書
         """
-        self.config_file = config_file or "config/config.yaml"
+        # CLI方針変更によりYAMLからの読込は廃止
+        self.config_file = None
         self.args = args or {}
         self.config = self._load_config()
 
@@ -199,10 +201,7 @@ class ConfigManager:
         # 1. デフォルト設定（最低優先度）
         config = self._get_default_config()
 
-        # 2. YAML設定ファイル
-        if self.config_file:
-            yaml_config = self._load_yaml_config(self.config_file)
-            config = self._deep_merge_dict(config, yaml_config)
+        # 2. YAML設定ファイルの読込は廃止（CLIでは設定ファイルを読み込まない）
 
         # 3. コマンドライン引数（最高優先度）
         if self.args:
@@ -224,11 +223,13 @@ class ConfigManager:
         return config
 
     def get_enabled_entities(self) -> List[str]:
-        """有効なエンティティタイプのリストを返す"""
-        enabled_entities = self._safe_get_config("enabled_entities", {})
-        if not isinstance(enabled_entities, dict):
-            enabled_entities = {}
+        """有効なエンティティタイプのリストを返す
 
+        方針変更: CLIで設定ファイルを読まないため、明示設定が無ければ全エンティティを有効化。
+        """
+        enabled_entities = self._safe_get_config("enabled_entities", {})
+        if not isinstance(enabled_entities, dict) or not enabled_entities:
+            return list(self.ENTITY_TYPES)
         return [entity for entity, is_enabled in enabled_entities.items() if is_enabled]
 
     def get_entity_colors(self, entity_type: str) -> Dict[str, int]:

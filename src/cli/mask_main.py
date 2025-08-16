@@ -61,20 +61,17 @@ def _embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
 
 
 @click.command(help="検出JSON（新仕様フラット形式）を使ってPDFにハイライト注釈を追加（入力はファイル必須）")
-@click.option("--config", type=str, help="設定ファイル（maskセクションのみ参照）")
 @click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
 @click.option("-j", "--json", "json_file", type=str, required=True, help="入力detect JSONファイル（必須。標準入力は不可）")
 @click.option("--out", type=str, required=True, help="出力PDFパス（指定必須）")
 @click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
 @click.option("--embed-coordinates/--no-embed-coordinates", default=False, help="座標マップをPDFに埋め込む")
-def main(config: Optional[str], force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool, embed_coordinates: bool):
+def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool, embed_coordinates: bool):
     # ファイル存在確認
     validate_input_file_exists(pdf)
     if json_file:
         validate_input_file_exists(json_file)
-    if config:
-        validate_input_file_exists(config)
     validate_output_parent_exists(out)
         
     cfg = ConfigManager()

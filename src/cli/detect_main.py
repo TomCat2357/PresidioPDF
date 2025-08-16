@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import sys
 
 import click
-import yaml
 
 from src.core.config_manager import ConfigManager
 from src.cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
@@ -85,7 +84,6 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 
 @click.command(help="read出力(JSON)からPIIを検出し統一スキーマでファイル出力")
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
-@click.option("--config", "shared_config", type=str, help="共通設定YAMLのパス（detectセクションのみ参照）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
 @click.option("-j", "--json", "json_file", type=str, required=True, help="入力read JSONファイル（必須。標準入力は不可）")
 @click.option("--model", multiple=True, default=["ja_core_news_sm"], show_default=True, help="spaCyモデルID（複数可）")
@@ -94,12 +92,11 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
 @click.option("--with-predetect/--no-predetect", default=True, help="入力のdetect情報を含める（旧--highlights-merge append相当）")
 @click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="互換オプション（新仕様では常にフラットdetect出力）。動作には影響しません")
-def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, validate: bool, with_predetect: bool, use: str):
+@click.option("--entity", "entities_csv", type=str, help="検出するエンティティ（CSV例: 'PERSON,ADDRESS'。未指定=全エンティティ）")
+def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, validate: bool, with_predetect: bool, use: str, entities_csv: Optional[str]):
     # ファイル存在確認
     if json_file:
         validate_input_file_exists(json_file)
-    if shared_config:
-        validate_input_file_exists(shared_config)
     if out:
         validate_output_parent_exists(out)
     
@@ -143,54 +140,30 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
     with fitz.open(pdf_path) as doc:
         locator = PDFTextLocator(doc)
         target_text = plain_text if isinstance(plain_text, str) else locator.full_text_no_newlines
-        enabled_entities = cfg.get_enabled_entities()
-        model_results = analyzer.analyze_text(target_text, enabled_entities)
+        # --entity 指定の解釈（CSV）。ADDRESSはLOCATIONのエイリアス。
+        selected_entities: Optional[List[str]] = None
+        if entities_csv:
+            tokens = [t.strip() for t in str(entities_csv).split(',') if t.strip()]
+            selected_entities = []
+            for tok in tokens:
+                t_low = tok.lower()
+                if t_low == 'address':
+                    selected_entities.append('LOCATION')
+                    continue
+                if t_low in ALLOWED_ENTITIES:
+                    selected_entities.append(ALLOWED_ENTITIES[t_low])
+                    continue
+                t_up = tok.upper()
+                if t_up in ALLOWED_ENTITY_NAMES:
+                    selected_entities.append(t_up)
+                    continue
+                allowed_aliases = sorted(list(ALLOWED_ENTITIES.keys()) + ["address"])
+                raise click.ClickException(f"未定義のエンティティです: {tok}. 許可: {', '.join(allowed_aliases)} または {', '.join(ALLOWED_ENTITY_NAMES)}")
+        # モデル検出に用いるエンティティ集合（未指定は全エンティティ＝ConfigManager側で全有効）
+        model_entities = selected_entities if selected_entities else cfg.get_enabled_entities()
+        model_results = analyzer.analyze_text(target_text, model_entities)
 
-        # 共有YAMLからdetectセクションを読み取り（引数優先でマージ）
-        config_adds: List[Tuple[str, str]] = []  # (ENTITY, regex)
-        config_excludes: List[str] = []
-        if shared_config:
-            try:
-                with open(shared_config, "r", encoding="utf-8") as f:
-                    conf = yaml.safe_load(f) or {}
-            except Exception as e:
-                raise click.ClickException(f"--config の読み込みに失敗: {e}")
-            detect_section = conf.get("detect") if isinstance(conf, dict) else None
-            if detect_section is not None and not isinstance(detect_section, list):
-                raise click.ClickException("config.yamlのdetectセクションはリストである必要があります")
-
-            # エンティティ許容（厳密）: 小文字→内部表記（仕様で固定されたリストのみ許可）
-            entity_aliases = ALLOWED_ENTITIES
-
-            if detect_section:
-                for item in detect_section:
-                    if not isinstance(item, dict):
-                        continue
-                    if "entities" in item:
-                        ents = item.get("entities") or []
-                        if not isinstance(ents, list):
-                            raise click.ClickException("detect.entities はリストである必要があります")
-                        for ent_item in ents:
-                            if not isinstance(ent_item, dict) or len(ent_item) != 1:
-                                raise click.ClickException("entities 配下は {<entity>: <regex>} 形式で指定してください")
-                            (k, v), = ent_item.items()
-                            if not isinstance(v, str) or not v:
-                                raise click.ClickException("entities の正規表現は非空文字列である必要があります")
-                            k_l = str(k).strip().lower()
-                            if k_l not in entity_aliases:
-                                allowed_list = ", ".join(sorted(entity_aliases.keys()))
-                                raise click.ClickException(f"未定義のエンティティ種別です: {k}。許可されたエンティティ: {allowed_list}")
-                            config_adds.append((entity_aliases[k_l], v))
-                    if "exclude" in item:
-                        exs = item.get("exclude") or []
-                        if not isinstance(exs, list):
-                            raise click.ClickException("detect.exclude はリストである必要があります")
-                        for rx in exs:
-                            if not isinstance(rx, str) or not rx:
-                                raise click.ClickException("exclude の正規表現は非空文字列である必要があります")
-                            config_excludes.append(rx)
-
-        # 引数 --add / --exclude をパース（引数優先: 並び順維持のため先頭に）
+        # 引数 --add / --exclude をパース
         def parse_add_arg(s: str) -> Tuple[str, str]:
             if ":" not in s:
                 raise click.ClickException("--add は <entity>:<regex> 形式で指定してください")
@@ -203,12 +176,8 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 raise click.ClickException("--add の正規表現が空です")
             return ALLOWED_ENTITIES[ent_key], regex
 
-        cli_adds: List[Tuple[str, str]] = [parse_add_arg(a) for a in adds]
-        cli_excludes: List[str] = list(excludes)
-
-        # 結合（引数が先、次にconfig）
-        add_specs: List[Tuple[str, str]] = cli_adds + config_adds
-        exclude_specs: List[str] = cli_excludes + config_excludes
+        add_specs: List[Tuple[str, str]] = [parse_add_arg(a) for a in adds]
+        exclude_specs: List[str] = list(excludes)
 
         for r in model_results:
             ent = r.get("entity_type") or r.get("entity")

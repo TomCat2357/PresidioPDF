@@ -32,6 +32,12 @@ uv sync --extra minimal    # Minimal installation
 Note: This project exclusively uses `uv` for dependency management. Do not use `pip`.
 
 CLI Usage
+
+Breaking change (Aug 2025)
+- All CLI `--config` options are removed. CLI commands no longer read YAML config files directly.
+- New meta command added: run a YAML config to orchestrate `read/detect/duplicate/mask/embed` in sequence.
+  - Run: `uv run python -m src.cli.run_config_main <config.yml>`
+  - See sample: `config/sample_run.yaml`
 This project provides both a legacy subcommand CLI and new split commands. Prefer the new split commands for piping and tooling.
 
 New commands (recommended)

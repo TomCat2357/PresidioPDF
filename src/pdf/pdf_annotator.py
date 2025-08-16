@@ -10,7 +10,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from pathlib import Path
 
-from core.config_manager import ConfigManager
+from src.core.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 

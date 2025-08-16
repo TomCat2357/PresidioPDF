@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional, Tuple, List
 
 import click
-import yaml
 
 from src.cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
 from src.core.dedupe import dedupe_detections
@@ -130,7 +129,6 @@ def _is_better(item1, item2, tie_break: List[str], origin_priority: List[str], l
 
 
 @click.command(help="検出結果の重複を処理して正規化し統一スキーマでファイル出力")
-@click.option("--config", "shared_config", type=str, help="共通設定YAMLのパス（duplicateセクションのみ参照）")
 @click.option("--entity-order", type=str, default="PERSON,LOCATION,DATE_TIME,PHONE_NUMBER,INDIVIDUAL_NUMBER,YEAR,PROPER_NOUN,OTHER", show_default=True, help="エンティティ優先順（カンマ区切り）")
 @click.option("-j", "--json", "json_file", type=str, required=True, help="入力detect JSONファイル（必須。標準入力は不可）")
 @click.option("--length-pref", type=click.Choice(["long", "short"]), default="long", show_default=True, help="長短の優先: long/short")
@@ -143,7 +141,6 @@ def _is_better(item1, item2, tie_break: List[str], origin_priority: List[str], l
 @click.option("--tie-break", "tie_break", type=str, default="origin,length,position,entity", show_default=True, help="タイブレーク順（カンマ区切り）: origin,length,entity,position の並びで指定")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONの検証を実施")
 def main(
-    shared_config: Optional[str],
     entity_order: Optional[str],
     json_file: Optional[str],
     length_pref: Optional[str],
@@ -159,8 +156,6 @@ def main(
     # ファイル存在確認
     if json_file:
         validate_input_file_exists(json_file)
-    if shared_config:
-        validate_input_file_exists(shared_config)
     if out:
         validate_output_parent_exists(out)
         
@@ -168,52 +163,11 @@ def main(
     raw = Path(json_file).read_text(encoding="utf-8")
     data = json.loads(raw)
 
-    # 共有YAMLから duplicate_process セクションを読み取り（引数で上書き）
-    conf_tb: List[str] = []
-    conf_origin_pri: List[str] = []
-    conf_length: Optional[str] = None
-    conf_position: Optional[str] = None
-    conf_entity_order: List[str] = []
-    if shared_config:
-        try:
-            with open(shared_config, "r", encoding="utf-8") as f:
-                conf = yaml.safe_load(f) or {}
-        except Exception as e:
-            raise click.ClickException(f"--config の読み込みに失敗: {e}")
-        dup_section = conf.get("duplicate_process") if isinstance(conf, dict) else None
-        if dup_section is not None and not isinstance(dup_section, list):
-            raise click.ClickException("config.yamlのduplicate_processセクションはリストである必要があります")
-        if dup_section:
-            for item in dup_section:
-                if not isinstance(item, dict) or len(item) != 1:
-                    continue
-                (k, v), = item.items()
-                k = str(k).strip()
-                if k in ("tie_break", "tie-break"):
-                    if isinstance(v, list):
-                        conf_tb = [str(x).strip() for x in v if str(x).strip()]
-                    elif isinstance(v, str):
-                        conf_tb = [s.strip() for s in v.split(",") if s.strip()]
-                elif k in ("origin_priority", "origin-priority"):
-                    if isinstance(v, list):
-                        conf_origin_pri = [str(x).strip() for x in v if str(x).strip()]
-                    elif isinstance(v, str):
-                        conf_origin_pri = [s.strip() for s in v.split(",") if s.strip()]
-                elif k == "length":
-                    conf_length = str(v).strip()
-                elif k == "position":
-                    conf_position = str(v).strip()
-                elif k in ("entity_order", "entity-order"):
-                    if isinstance(v, list):
-                        conf_entity_order = [str(x).strip() for x in v if str(x).strip()]
-                    elif isinstance(v, str):
-                        conf_entity_order = [s.strip() for s in v.split(",") if s.strip()]
-
-    # CLI引数で上書き
-    tb = [s.strip() for s in (tie_break or ",".join(conf_tb)).split(",") if s.strip()] if (tie_break or conf_tb) else []
-    origin_pri = [s.strip().lower() for s in (origin_priority or ",".join(conf_origin_pri)).split(",") if s.strip()] if (origin_priority or conf_origin_pri) else []
-    length_pref_f = (length_pref or conf_length)
-    position_pref_f = (position_pref or conf_position)
+    # CLI引数をそのまま使用
+    tb = [s.strip() for s in (tie_break or "").split(",") if s.strip()]
+    origin_pri = [s.strip().lower() for s in (origin_priority or "").split(",") if s.strip()]
+    length_pref_f = length_pref
+    position_pref_f = position_pref
     ent_order = [p.strip() for p in (entity_order or ",".join(conf_entity_order)).split(",") if p.strip()]
     
     # エンティティ順序の検証
