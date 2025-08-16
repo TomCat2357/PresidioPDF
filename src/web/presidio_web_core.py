@@ -575,7 +575,7 @@ class PresidioPDFWebApp:
 
     def _generate_web_annotation_content(self, entity: Dict, mode: str) -> Dict:
         """Web UI用の注釈内容を生成"""
-        entity_type_jp = self.get_entity_type_japanese(entity.get("entity_type", "CUSTOM"))
+        entity_type_jp = self.get_entity_type_japanese(entity.get("entity_type", "OTHER"))
         text = entity.get("text", "")
 
         if mode == "silent":
@@ -614,12 +614,12 @@ class PresidioPDFWebApp:
             color_map = {
                 "PERSON": (1,0,0), "LOCATION": (0,1,0), "PHONE_NUMBER": (0,0,1),
                 "DATE_TIME": (1,1,0), "INDIVIDUAL_NUMBER": (1,0,1), "YEAR": (0.5,0,1),
-                "PROPER_NOUN": (1,0.5,0), "CUSTOM": (0.5,0.5,0.5)
+                "PROPER_NOUN": (1,0.5,0), "OTHER": (0.5,0.5,0.5)
             }
             highlight_color_map = {
                 "PERSON": (1,0.8,0.8), "LOCATION": (0.8,1,0.8), "PHONE_NUMBER": (0.8,0.8,1),
                 "DATE_TIME": (1,1,0.8), "INDIVIDUAL_NUMBER": (1,0.8,1), "YEAR": (0.8,1,1),
-                "PROPER_NOUN": (1,0.86,0.7), "CUSTOM": (0.9,0.9,0.9)
+                "PROPER_NOUN": (1,0.86,0.7), "OTHER": (0.9,0.9,0.9)
             }
             color = color_map.get(e.get("entity_type"), (0.5, 0.5, 0.5))
             highlight_color = highlight_color_map.get(e.get("entity_type"), (0.9, 0.9, 0.9))
@@ -887,7 +887,7 @@ class PresidioPDFWebApp:
             highlight_color_map = {
                 "PERSON": (1, 0.8, 0.8), "LOCATION": (0.8, 1, 0.8), "PHONE_NUMBER": (0.8, 0.8, 1),
                 "DATE_TIME": (1, 1, 0.8), "INDIVIDUAL_NUMBER": (1, 0.8, 1), "YEAR": (0.8, 1, 1),
-                "PROPER_NOUN": (1, 0.86, 0.7), "CUSTOM": (0.9, 0.9, 0.9)
+                "PROPER_NOUN": (1, 0.86, 0.7), "OTHER": (0.9, 0.9, 0.9)
             }
             
             highlight_color = highlight_color_map.get(entity.get("entity_type"), (0.9, 0.9, 0.9))
@@ -898,7 +898,7 @@ class PresidioPDFWebApp:
             hl.set_opacity(0.4)
             
             # 注釈情報を設定
-            entity_type_jp = self.get_entity_type_japanese(entity.get("entity_type", "CUSTOM"))
+            entity_type_jp = self.get_entity_type_japanese(entity.get("entity_type", "OTHER"))
             title = f"個人情報: {entity_type_jp}"
             content = entity.get("text", "")
             
@@ -1051,7 +1051,7 @@ class PresidioPDFWebApp:
             "INDIVIDUAL_NUMBER": "個人番号",
             "YEAR": "年号",
             "PROPER_NOUN": "固有名詞",
-            "CUSTOM": "カスタム",
+            "OTHER": "その他",
         }
         return mapping.get(entity_type, entity_type)
 

@@ -2,7 +2,7 @@
 .venv/
 venv/
 env/
-
+tmp/
 # Python キャッシュファイル
 __pycache__/
 *.py[cod]

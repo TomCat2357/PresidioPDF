@@ -8,10 +8,16 @@ from typing import Optional, Tuple, List
 import click
 import yaml
 
-from cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
-from core.dedupe import dedupe_detections
-from core.config_manager import ConfigManager
+from src.cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
+from src.core.dedupe import dedupe_detections
+from src.core.config_manager import ConfigManager
 
+
+# 許可されたエンティティリスト（仕様で固定）
+ALLOWED_ENTITY_NAMES = [
+    "PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", 
+    "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"
+]
 
 def _dedupe_detections_spec_format(
     detect_list: List,
@@ -125,9 +131,9 @@ def _is_better(item1, item2, tie_break: List[str], origin_priority: List[str], l
 
 @click.command(help="検出結果の重複を処理して正規化し統一スキーマでファイル出力")
 @click.option("--config", "shared_config", type=str, help="共通設定YAMLのパス（duplicateセクションのみ参照）")
-@click.option("--entity-order", type=str, default="PERSON,PHONE_NUMBER,EMAIL_ADDRESS,ADDRESS,DATE_OF_BIRTH,CREDIT_CARD,PASSPORT,DRIVER_LICENSE,MYNUMBER,BANK_ACCOUNT", show_default=True, help="エンティティ優先順（カンマ区切り）")
+@click.option("--entity-order", type=str, default="PERSON,LOCATION,DATE_TIME,PHONE_NUMBER,INDIVIDUAL_NUMBER,YEAR,PROPER_NOUN,OTHER", show_default=True, help="エンティティ優先順（カンマ区切り）")
 @click.option("-j", "--json", "json_file", type=str, required=True, help="入力detect JSONファイル（必須。標準入力は不可）")
-@click.option("--length-pref", type=click.Choice(["long", "short"]), help="長短の優先: long/short")
+@click.option("--length-pref", type=click.Choice(["long", "short"]), default="long", show_default=True, help="長短の優先: long/short")
 @click.option("--origin-priority", type=str, default="manual,custom,auto", show_default=True, help="検出由来の優先順（カンマ区切り）")
 @click.option("--out", type=str, required=True, help="出力先（必須。標準出力は不可）")
 @click.option("--overlap", type=click.Choice(["exact", "contain", "overlap"]), default="overlap", show_default=True, help="重複の定義: exact/contain/overlap")
@@ -209,6 +215,12 @@ def main(
     length_pref_f = (length_pref or conf_length)
     position_pref_f = (position_pref or conf_position)
     ent_order = [p.strip() for p in (entity_order or ",".join(conf_entity_order)).split(",") if p.strip()]
+    
+    # エンティティ順序の検証
+    for entity in ent_order:
+        if entity not in ALLOWED_ENTITY_NAMES:
+            allowed_list = ", ".join(ALLOWED_ENTITY_NAMES)
+            raise click.ClickException(f"未定義のエンティティ種別です: {entity}。許可されたエンティティ: {allowed_list}")
 
     # 仕様書形式: detectはフラット配列
     detect_list = data.get("detect", [])

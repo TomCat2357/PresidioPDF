@@ -7,6 +7,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import logging
 
 # Add workspace to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -105,19 +106,47 @@ def _read_highlight_raw(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any
 
 
 def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structured: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """ハイライトを仕様書のdetect形式に変換"""
+    """ハイライトを仕様書のdetect形式に変換（厳密な検証付き）"""
+    # 許可されたエンティティタイプ
+    ALLOWED_ENTITIES = {"PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"}
+    
     detect_list: List[Dict[str, Any]] = []
+    
     for highlight in highlights:
+        # エンティティタイプの検証
+        entity = highlight.get("entity", "UNKNOWN")
+        if entity not in ALLOWED_ENTITIES:
+            continue  # 許可されていないエンティティは読み取らない
+        
+        # originの検証
+        origin = highlight.get("origin", "manual")
+        if origin not in ["manual", "custom", "auto"]:
+            continue  # 無効なoriginは読み取らない
+            
+        # 座標検証とマッピング（座標マップが利用可能な場合）
+        highlight_coords = highlight.get("coordinates", {})
+        if highlight_coords:
+            # 1. 座標の1pixel以上のずれチェック
+            # TODO: 座標マップとの照合実装
+            # coords2offset_mapから最も近い座標を見つけて1pixel以内かチェック
+            
+            # 2. ハイライト語とマップ変換結果の一致検証
+            # TODO: 座標→オフセット→語復元での一致性チェック
+            highlight_text = highlight.get("text", "")
+            if not highlight_text:
+                continue  # テキストが空の場合は読み取らない
+        
         # ハイライトから座標情報を取得し、page_num/block_num/offsetに変換
         # 実装は座標マッピング機能完成後に詳細化
         detect_item = {
             "start": {"page_num": 0, "block_num": 0, "offset": 0},
             "end": {"page_num": 0, "block_num": 0, "offset": 0},
-            "entity": highlight.get("entity", "UNKNOWN"),
+            "entity": entity,
             "word": highlight.get("text", ""),
-            "origin": "manual"
+            "origin": origin
         }
         detect_list.append(detect_item)
+    
     return detect_list
 
 
@@ -169,6 +198,15 @@ def _read_embedded_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[
                 if block_coords:
                     offset2coords_map[str(page_num)][str(block_id)] = block_coords
         
+        # 進捗ログ（概要）
+        total_pages = len(page_mappings)
+        total_blocks = sum(len(b) for b in page_mappings.values())
+        logging.debug(
+            "埋め込み座標マップを読み取り: ページ=%d, ブロック=%d",
+            total_pages,
+            total_blocks,
+        )
+
         return offset2coords_map, coords2offset_map
         
     except Exception as e:
@@ -177,7 +215,7 @@ def _read_embedded_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[
 
 
 def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """座標マップを生成（仕様書形式・PDFBlockTextMapper統合版）"""
+    """座標マップを新規生成する（常に生成。埋め込みは参照しない）"""
     import fitz
     from src.pdf.pdf_block_mapper import PDFBlockTextMapper
     from src.pdf.pdf_coordinate_mapper import PDFCoordinateMapper
@@ -188,56 +226,52 @@ def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, 
     coords2offset_map: Dict[str, Any] = {}
     
     try:
-        # まず埋め込まれた座標マップを読み込み試行
-        embedded_maps = _read_embedded_coordinate_maps(pdf_path)
-        if embedded_maps[0] or embedded_maps[1]:  # 埋め込みマップが見つかった場合
-            print("埋め込まれた座標マップを使用します", file=sys.stderr)
-            return embedded_maps
-        
-        # 埋め込みマップがない場合は従来の方法で生成
-        print("座標マップを新規生成します", file=sys.stderr)
-        
         # MuPDFの標準出力を抑制
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             with fitz.open(pdf_path) as doc:
                 # PDFBlockTextMapperを使用してブロック単位の座標マッピングを取得
                 mapper = PDFBlockTextMapper(doc, enable_cache=True)
-                
-                # ページごとにブロック情報を処理
-                for page_num in range(len(doc)):
-                    offset2coords_map[str(page_num)] = {}
-                    page_block_infos = mapper.get_page_block_summary(page_num)
-                    page_block_texts = mapper.get_page_block_texts(page_num)
-                    
-                    for block_info in page_block_infos:
-                        page_block_id = block_info["page_block_id"]
-                        block_text = page_block_texts[page_block_id] if page_block_id < len(page_block_texts) else ""
-                        
-                        # ブロック内の各文字位置に対する座標を取得
-                        block_coords = []
-                        char_offset = 0
-                        
-                        # ブロック全体の文字範囲を処理
-                        if block_text:
-                            # ブロック内の各文字の座標情報を取得
+
+                total_pages = len(doc)
+                logging.debug("座標マップ生成開始: 総ページ数=%d", total_pages)
+                # ページごとの処理進捗を表示（stderr）。TTYでない場合も安全に動作。
+                label = "座標マップ生成中: ページ処理"
+                iterable = range(total_pages)
+                with click.progressbar(iterable, label=label, file=sys.stderr, length=total_pages) as bar:
+                    for page_num in bar:
+                        blocks_processed = 0
+                        coords_emitted = 0
+                        offset2coords_map[str(page_num)] = {}
+                        page_block_texts = mapper.get_page_block_texts(page_num)
+                        page_mapping = mapper.page_block_offset_mapping.get(page_num, {})
+                        for page_block_id, offset_map in page_mapping.items():
+                            block_text = page_block_texts[page_block_id] if page_block_id < len(page_block_texts) else ""
+                            if not block_text:
+                                continue
+                            blocks_processed += 1
+                            block_coords: List[List[float]] = []
                             for char_offset in range(len(block_text)):
-                                char_coords = mapper.map_page_block_offset_to_coordinates(
-                                    page_num, page_block_id, char_offset, char_offset + 1
-                                )
-                                
-                                if char_coords:
-                                    for coord_data in char_coords:
-                                        rect = coord_data["rect"]
-                                        bbox = [rect.x0, rect.y0, rect.x1, rect.y1]
-                                        block_coords.append(bbox)
-                                        
-                                        # coords2offsetMapの作成
-                                        coord_key = f"({rect.x0},{rect.y0},{rect.x1},{rect.y1})"
-                                        coords2offset_map[coord_key] = f"({page_num},{page_block_id},{char_offset})"
-                        
-                        # ブロックに座標データがある場合のみ追加
-                        if block_coords:
-                            offset2coords_map[str(page_num)][str(page_block_id)] = block_coords
+                                idx = offset_map.get(char_offset)
+                                if idx is None:
+                                    continue
+                                char_pos = mapper.char_positions[idx]
+                                if not char_pos.bbox:
+                                    continue
+                                x0, y0, x1, y1 = char_pos.bbox
+                                bbox = [x0, y0, x1, y1]
+                                block_coords.append(bbox)
+                                coord_key = f"({x0},{y0},{x1},{y1})"
+                                coords2offset_map[coord_key] = f"({page_num},{page_block_id},{char_offset})"
+                                coords_emitted += 1
+                            if block_coords:
+                                offset2coords_map[str(page_num)][str(page_block_id)] = block_coords
+                        logging.debug(
+                            "ページ処理完了: %d/%d, ブロック=%d, 生成座標=%d",
+                            page_num + 1,
+                            total_pages,
+                            blocks_processed,
+                            coords_emitted,
+                        )
     
     except Exception as e:
         # エラー時は空のマップを返す
@@ -253,10 +287,26 @@ def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, 
 @click.option("--config", type=str, help="設定ファイル（readセクションのみ参照）")
 @click.option("--out", type=str, required=True, help="出力先（必ず指定。標準出力は不可）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
-@click.option("--with-map/--no-map", default=True, help="座標⇔文字オフセット変換マップを含める")
-@click.option("--with-highlights", is_flag=True, default=False, help="既存ハイライトをdetectに含める")
-def main(pdf: str, config: Optional[str], out: Optional[str], pretty: bool, with_map: bool, with_highlights: bool):
+@click.option(
+    "--with-map/--no-map",
+    default=True,
+    help="座標マップを出力へ含めるか（Trueなら埋め込みを優先し、無ければ生成）",
+)
+@click.option("--with-highlights/--no-highlights", default=True, help="既存ハイライトをdetectに含める（デフォルトON）")
+@click.option(
+    "--log-level",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False),
+    default="WARNING",
+    show_default=True,
+    help="ログレベル（進捗はDEBUGで表示）",
+)
+def main(pdf: str, config: Optional[str], out: Optional[str], pretty: bool, with_map: bool, with_highlights: bool, log_level: str = "WARNING"):
     try:
+        # ログ設定（stderrへ出力）
+        logging.basicConfig(
+            level=getattr(logging, str(log_level).upper(), logging.WARNING),
+            format="%(asctime)s %(levelname)s [read]: %(message)s",
+        )
         # 入力確認
         validate_input_file_exists(pdf)
         if out:
@@ -277,11 +327,19 @@ def main(pdf: str, config: Optional[str], out: Optional[str], pretty: bool, with
             highlights = _read_highlight_raw(pdf, cfg)
             detect_list = _convert_highlights_to_spec_format(highlights, structured)
         
-        # 座標マップ生成
+        # 座標マップ: --with-map のときのみ出力へ含める
         offset2coords_map: Dict[str, Any] = {}
         coords2offset_map: Dict[str, Any] = {}
         if with_map:
-            offset2coords_map, coords2offset_map = _generate_coordinate_maps(pdf)
+            embedded_maps: Tuple[Dict[str, Any], Dict[str, Any]] = _read_embedded_coordinate_maps(pdf)
+            if embedded_maps[0] or embedded_maps[1]:
+                print("埋め込まれた座標マップを使用します", file=sys.stderr)
+                logging.debug("埋め込みマップ利用を選択")
+                offset2coords_map, coords2offset_map = embedded_maps
+            else:
+                print("座標マップを新規生成します", file=sys.stderr)
+                logging.debug("座標マップの新規生成を開始")
+                offset2coords_map, coords2offset_map = _generate_coordinate_maps(pdf)
         
         # 仕様書の形式でJSON出力を構築
         result: Dict[str, Any] = {
@@ -290,8 +348,10 @@ def main(pdf: str, config: Optional[str], out: Optional[str], pretty: bool, with
             "detect": detect_list
         }
         
-        if with_map:
+        # --with-map の場合のみマップを含める（空でなければ）
+        if with_map and offset2coords_map:
             result["offset2coordsMap"] = offset2coords_map
+        if with_map and coords2offset_map:
             result["coords2offsetMap"] = coords2offset_map
         
         dump_json(result, out, pretty)

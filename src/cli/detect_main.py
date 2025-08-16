@@ -10,9 +10,23 @@ import sys
 import click
 import yaml
 
-from core.config_manager import ConfigManager
-from cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
+from src.core.config_manager import ConfigManager
+from src.cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
 
+
+# 許可されたエンティティリスト（仕様で固定）
+ALLOWED_ENTITIES = {
+    "person": "PERSON",
+    "location": "LOCATION", 
+    "date_time": "DATE_TIME",
+    "phone_number": "PHONE_NUMBER",
+    "individual_number": "INDIVIDUAL_NUMBER",
+    "year": "YEAR",
+    "proper_noun": "PROPER_NOUN",
+    "other": "OTHER",
+}
+
+ALLOWED_ENTITY_NAMES = list(ALLOWED_ENTITIES.values())
 
 def _convert_offsets_to_position(start_offset: int, end_offset: int, text_2d: List[List[str]]) -> Tuple[Dict[str, int], Dict[str, int]]:
     """グローバルオフセットをpage_num,block_num,offset形式に変換"""
@@ -77,10 +91,10 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--model", multiple=True, default=["ja_core_news_sm"], show_default=True, help="spaCyモデルID（複数可）")
 @click.option("--out", type=str, required=True, help="出力先（必須。標準出力は不可）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
-@click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="検出対象の選択")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
 @click.option("--with-predetect/--no-predetect", default=True, help="入力のdetect情報を含める（旧--highlights-merge append相当）")
-def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, use: str, validate: bool, with_predetect: bool):
+@click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="互換オプション（新仕様では常にフラットdetect出力）。動作には影響しません")
+def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, validate: bool, with_predetect: bool, use: str):
     # ファイル存在確認
     if json_file:
         validate_input_file_exists(json_file)
@@ -116,27 +130,15 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
         except Exception:
             plain_text = None
 
-    # --useオプションによる処理対象の決定
-    if use == "plain":
-        use_plain, use_structured = True, False
-    elif use == "structured":
-        use_plain, use_structured = False, True
-    elif use == "both":
-        use_plain, use_structured = True, True
-    else:  # auto
-        use_plain = text_2d is not None and len(text_2d) > 0
-        use_structured = True
-
     cfg = ConfigManager()
-    from analysis.analyzer import Analyzer  # Lazy heavy dep
+    from src.analysis.analyzer import Analyzer  # Lazy heavy dep
 
     analyzer = Analyzer(cfg)
 
     detections_plain: List[Dict[str, Any]] = []
-    detections_struct: List[Dict[str, Any]] = []
 
     import fitz  # Lazy import
-    from pdf.pdf_locator import PDFTextLocator
+    from src.pdf.pdf_locator import PDFTextLocator
 
     with fitz.open(pdf_path) as doc:
         locator = PDFTextLocator(doc)
@@ -157,16 +159,8 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
             if detect_section is not None and not isinstance(detect_section, list):
                 raise click.ClickException("config.yamlのdetectセクションはリストである必要があります")
 
-            # エンティティ許容（厳密）: 小文字→内部表記
-            entity_aliases = {
-                "person": "PERSON",
-                "location": "LOCATION",
-                "date_time": "DATE_TIME",
-                "phone_number": "PHONE_NUMBER",
-                "individual_number": "INDIVIDUAL_NUMBER",
-                "year": "YEAR",
-                "proper_noun": "PROPER_NOUN",
-            }
+            # エンティティ許容（厳密）: 小文字→内部表記（仕様で固定されたリストのみ許可）
+            entity_aliases = ALLOWED_ENTITIES
 
             if detect_section:
                 for item in detect_section:
@@ -184,7 +178,8 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                                 raise click.ClickException("entities の正規表現は非空文字列である必要があります")
                             k_l = str(k).strip().lower()
                             if k_l not in entity_aliases:
-                                raise click.ClickException(f"未定義のエンティティ種別です: {k}")
+                                allowed_list = ", ".join(sorted(entity_aliases.keys()))
+                                raise click.ClickException(f"未定義のエンティティ種別です: {k}。許可されたエンティティ: {allowed_list}")
                             config_adds.append((entity_aliases[k_l], v))
                     if "exclude" in item:
                         exs = item.get("exclude") or []
@@ -201,20 +196,12 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 raise click.ClickException("--add は <entity>:<regex> 形式で指定してください")
             ent_name, regex = s.split(":", 1)
             ent_key = ent_name.strip().lower()
-            aliases = {
-                "person": "PERSON",
-                "location": "LOCATION",
-                "date_time": "DATE_TIME",
-                "phone_number": "PHONE_NUMBER",
-                "individual_number": "INDIVIDUAL_NUMBER",
-                "year": "YEAR",
-                "proper_noun": "PROPER_NOUN",
-            }
-            if ent_key not in aliases:
-                raise click.ClickException(f"未定義のエンティティ種別です: {ent_name}")
+            if ent_key not in ALLOWED_ENTITIES:
+                allowed_list = ", ".join(sorted(ALLOWED_ENTITIES.keys()))
+                raise click.ClickException(f"未定義のエンティティ種別です: {ent_name}。許可されたエンティティ: {allowed_list}")
             if not regex:
                 raise click.ClickException("--add の正規表現が空です")
-            return aliases[ent_key], regex
+            return ALLOWED_ENTITIES[ent_key], regex
 
         cli_adds: List[Tuple[str, str]] = [parse_add_arg(a) for a in adds]
         cli_excludes: List[str] = list(excludes)
@@ -237,17 +224,9 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 "word": txt,
                 "origin": "auto"
             }
-            if use_plain:
-                detections_plain.append(entry_plain)
-            if use_structured:
-                quads = []
-                for lr in locator.get_pii_line_rects(s, e):
-                    rect = lr.get("rect") or {}
-                    quads.append([rect.get("x0", 0.0), rect.get("y0", 0.0), rect.get("x1", 0.0), rect.get("y1", 0.0)])
-                # structured出力は現在無効化（仕様書ではdetectはフラット配列のみ）
-                pass
+            detections_plain.append(entry_plain)
 
-        # 追加の正規表現での検出（origin: addition）
+        # 追加の正規表現での検出（origin: custom）
         compiled_adds: List[Tuple[str, re.Pattern]] = []
         for ent_name, rx in add_specs:
             try:
@@ -260,16 +239,14 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
                 s, e = m.start(), m.end()
                 txt = target_text[s:e]
                 did = _detection_id(ent_name, txt, (s, e))
-                if use_plain:
-                    start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
-                    detections_plain.append({
-                        "start": start_pos,
-                        "end": end_pos,
-                        "entity": ent_name,
-                        "word": txt,
-                        "origin": "追加"
-                    })
-                # structured出力は現在無効化（仕様書ではdetectはフラット配列のみ）
+                start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
+                detections_plain.append({
+                    "start": start_pos,
+                    "end": end_pos,
+                    "entity": ent_name,
+                    "word": txt,
+                    "origin": "custom"
+                })
 
         # 除外正規表現にマッチする範囲（span）を収集
         compiled_excludes: List[re.Pattern] = []
@@ -284,18 +261,18 @@ def main(adds: Tuple[str, ...], shared_config: Optional[str], excludes: Tuple[st
             for m in rx.finditer(target_text):
                 exclude_spans.append((m.start(), m.end()))
 
-        # 追加 > 除外 > 自動検出: 除外は自動検出（origin=model）のみから除去
+        # 追加 > 除外 > 自動検出: 除外は自動検出（origin=auto）のみから除去
         if exclude_spans:
             def overlaps(a: Tuple[int, int], b: Tuple[int, int]) -> bool:
                 return max(a[0], b[0]) < min(a[1], b[1])
 
-            def is_model(entry: Dict[str, Any]) -> bool:
+            def is_auto(entry: Dict[str, Any]) -> bool:
                 return entry.get("origin") == "auto"
 
             # 仕様書形式では除外処理も簡略化
             detections_plain = [
                 d for d in detections_plain
-                if not is_model(d) or not any(overlaps((0, 0), es) for es in exclude_spans)  # 簡略化
+                if not is_auto(d) or not any(overlaps((0, 0), es) for es in exclude_spans)  # 簡略化
             ]
 
     # 既存detect情報の統合
