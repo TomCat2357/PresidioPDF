@@ -125,12 +125,28 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
             # 座標マップがある場合はそれを使用、なければlocatorで座標を取得
             quads = []
             if offset2coords_map:
-                # 座標マップから座標を取得
-                map_key = f"{page_num},{block_num},{start_offset},{end_offset}"
-                if map_key in offset2coords_map:
-                    coords = offset2coords_map[map_key]
-                    if isinstance(coords, list) and len(coords) >= 4:
-                        quads = [coords[:4]]  # [x0, y0, x1, y1] format
+                # 座標マップから座標を取得 - page_num/block_num/offset範囲をすべて収集
+                page_map = offset2coords_map.get(str(page_num), {})
+                if isinstance(page_map, dict):
+                    block_map = page_map.get(str(block_num), [])
+                    if isinstance(block_map, list):
+                        # start_offsetからend_offsetまでの座標をすべて収集
+                        collected_coords = []
+                        for offset in range(start_offset, end_offset):
+                            if offset < len(block_map) and isinstance(block_map[offset], list) and len(block_map[offset]) >= 4:
+                                collected_coords.extend(block_map[offset])
+                        
+                        # 収集した座標から外接矩形を計算
+                        if collected_coords and len(collected_coords) >= 4:
+                            # 座標は[x0, y0, x1, y1]の4要素単位で格納されている
+                            rects = [collected_coords[i:i+4] for i in range(0, len(collected_coords), 4)]
+                            if rects:
+                                # 全矩形の外接矩形を計算
+                                min_x0 = min(rect[0] for rect in rects)
+                                min_y0 = min(rect[1] for rect in rects)
+                                max_x1 = max(rect[2] for rect in rects)
+                                max_y1 = max(rect[3] for rect in rects)
+                                quads = [[min_x0, min_y0, max_x1, max_y1]]
             
             if not quads:
                 # locatorで座標を取得
