@@ -30,10 +30,10 @@ class ConfigManager:
     def __init__(self, config_file: Optional[str] = None, args: Optional[Dict] = None):
         """
         Args:
-            config_file: YAML設定ファイルのパス
-            args: コマンドライン引数の辞書
+            config_file: YAML設定ファイルのパス（新CLI仕様では使用されない）
+            args: コマンドライン引数の辞書（新CLI仕様では最小限）
         """
-        # CLI方針変更によりYAMLからの読込は廃止
+        # 新CLI方針変更によりYAMLからの読込は廃止、デフォルト設定のみ使用
         self.config_file = None
         self.args = args or {}
         self.config = self._load_config()
@@ -201,7 +201,7 @@ class ConfigManager:
         # 1. デフォルト設定（最低優先度）
         config = self._get_default_config()
 
-        # 2. YAML設定ファイルの読込は廃止（CLIでは設定ファイルを読み込まない）
+        # 2. YAML設定ファイルの読込は廃止（新CLI仕様では各コマンドが独立し設定ファイルを読み込まない）
 
         # 3. コマンドライン引数（最高優先度）
         if self.args:
@@ -216,16 +216,16 @@ class ConfigManager:
         """コマンドライン引数を設定辞書に変換"""
         config = {}
 
-        # 新CLIではCLI引数からの設定注入を最小化。
-        # 旧フラグに紐づく変換は削除し、YAML設定のみで制御する。
-        # 汎用的なentitiesやcustom_recognizers等の注入は必要時に別経路で扱う。
+        # 新CLI仕様ではCLI引数からの設定注入を最小化。
+        # 各コマンド（read/detect/mask等）が独立して動作し、YAML設定に依存しない。
+        # 設定が必要な場合はrun_config_mainを使用してYAMLベースの一括実行を行う。
 
         return config
 
     def get_enabled_entities(self) -> List[str]:
         """有効なエンティティタイプのリストを返す
 
-        方針変更: CLIで設定ファイルを読まないため、明示設定が無ければ全エンティティを有効化。
+        新CLI仕様: 各コマンドが設定ファイルを読まないため、明示設定が無ければ全エンティティを有効化。
         """
         enabled_entities = self._safe_get_config("enabled_entities", {})
         if not isinstance(enabled_entities, dict) or not enabled_entities:

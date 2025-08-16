@@ -37,15 +37,16 @@ Breaking change (Aug 2025)
 - All CLI `--config` options are removed. CLI commands no longer read YAML config files directly.
 - New meta command added: run a YAML config to orchestrate `read/detect/duplicate/mask/embed` in sequence.
   - Run: `uv run python -m src.cli.run_config_main <config.yml>`
-  - See sample: `config/sample_run.yaml`
+  - Config format: `steps: [{op: "read", options: {pdf: "...", out: "..."}}, ...]`
 This project provides both a legacy subcommand CLI and new split commands. Prefer the new split commands for piping and tooling.
 
 New commands (recommended)
-- `codex-read`: Read a PDF and output JSON with text and coordinate mapping data.
-- `codex-detect`: Read the JSON from `codex-read` and produce PII detections JSON in specification format.
-- `codex-duplicate-process`: De-duplicate detections JSON with configurable overlap/keep policies including entity-aware processing.
-- `codex-mask`: Apply highlight annotations to the PDF using detections JSON with optional coordinate map embedding.
+- `uv run python -m src.cli.read_main`: Read a PDF and output JSON with text and coordinate mapping data.
+- `uv run python -m src.cli.detect_main`: Read the JSON from read_main and produce PII detections JSON in specification format.
+- `uv run python -m src.cli.duplicate_main`: De-duplicate detections JSON with configurable overlap/keep policies including entity-aware processing.
+- `uv run python -m src.cli.mask_main`: Apply highlight annotations to the PDF using detections JSON with optional coordinate map embedding.
 - `uv run python -m src.cli.embed_main`: Embed coordinate mapping data into PDF documents.
+- `uv run python -m src.cli.run_config_main`: Meta command to run read/detect/duplicate/mask/embed in sequence from YAML config.
 
 Legacy aggregated CLI (deprecated)
 - `presidio-cli <subcommand>` remains available for backward compatibility but is deprecated. Use the split commands above.
@@ -55,32 +56,32 @@ Common options
 - `--quiet`                  Suppress non-critical output
 - `--config PATH`            YAML config path (default: `config/config.yaml`)
 
-read (codex-read)
+read (src.cli.read_main)
 ```bash
 # Read a PDF into JSON (specification format: text as 2D array, optional coordinate maps)
-uv run codex-read --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-map
+uv run python -m src.cli.read_main --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-map
 
 # Read with embedded coordinate maps from processed PDFs
-uv run codex-read --pdf processed.pdf --out outputs/read.json --pretty --with-map
+uv run python -m src.cli.read_main --pdf processed.pdf --out outputs/read.json --pretty --with-map
 
 # Read existing highlights from PDF
-uv run codex-read --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
+uv run python -m src.cli.read_main --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
 ```
 
 New options:
 - `--with-map/--no-map`: Include coordinate mapping data (default: True)
 - `--with-highlights`: Include existing PDF highlights in detect field
 
-detect (codex-detect)
+detect (src.cli.detect_main)
 ```bash
 # Detect from read JSON; writes detections in specification format (page_num/block_num/offset)
-uv run codex-detect -j outputs/read.json --out outputs/detect.json --pretty --validate
+uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --pretty
 
 # Include existing detections from read result
-uv run codex-detect -j outputs/read.json --out outputs/detect.json --with-predetect
+uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --with-predetect
 
 # Exclude existing detections (replace mode)
-uv run codex-detect -j outputs/read.json --out outputs/detect.json --no-predetect
+uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --no-predetect
 ```
 
 New options:
@@ -94,32 +95,29 @@ Detect additions and exclusions
 CLI examples
 ```bash
 # Add regex-based detections per entity (multiple --add allowed)
-uv run codex-detect -j outputs/read.json \
+uv run python -m src.cli.detect_main -j outputs/read.json \
   --add person:"田中.*" \
   --add location:"(渋谷|新宿)" \
   --out outputs/detect.json --pretty
 
 # Add and exclude (exclude applies only to auto/model results)
-uv run codex-detect -j outputs/read.json \
+uv run python -m src.cli.detect_main -j outputs/read.json \
   --exclude "株式会社.*" \
   --add person:"田中太郎" \
   --out outputs/detect.json --pretty
-
-# With shared YAML config (detect section only)
-uv run codex-detect -j outputs/read.json --config config/config.yaml --out outputs/detect.json --pretty
 ```
 
-duplicate (codex-duplicate-process)
+duplicate (src.cli.duplicate_main)
 ```bash
 # Basic duplicate processing
-uv run codex-duplicate-process -j outputs/detect.json --out outputs/deduped.json --pretty
+uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/deduped.json --pretty
 
 # Entity-aware duplicate processing (same entity types only)
-uv run codex-duplicate-process -j outputs/detect.json --out outputs/deduped.json \
+uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/deduped.json \
   --entity-overlap-mode same --pretty
 
 # Cross-entity duplicate processing (different entity types can be duplicates)
-uv run codex-duplicate-process -j outputs/detect.json --out outputs/deduped.json \
+uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/deduped.json \
   --entity-overlap-mode any --pretty
 ```
 
@@ -128,17 +126,17 @@ New options:
   - `same`: Only same entity types are considered for overlap (default)
   - `any`: Different entity types can also be considered for overlap
 
-mask (codex-mask)
+mask (src.cli.mask_main)
 ```bash
 # Basic PDF masking
-uv run codex-mask --pdf input.pdf -j outputs/detect.json --out masked.pdf
+uv run python -m src.cli.mask_main --pdf input.pdf -j outputs/detect.json --out masked.pdf
 
 # Embed coordinate maps in output PDF
-uv run codex-mask --pdf input.pdf -j outputs/detect.json --out masked.pdf \
+uv run python -m src.cli.mask_main --pdf input.pdf -j outputs/detect.json --out masked.pdf \
   --embed-coordinates
 
 # Read embedded coordinate maps from the masked PDF
-uv run codex-read --pdf masked.pdf --out extracted.json --with-map
+uv run python -m src.cli.read_main --pdf masked.pdf --out extracted.json --with-map
 ```
 
 New options:
@@ -244,19 +242,19 @@ Key changes:
 - `offset2coordsMap`: Maps page/block positions to coordinate arrays
 - `coords2offsetMap`: Maps coordinates to position tuples
 
-Legacy duplicate-process (codex-duplicate-process)
+Legacy duplicate-process (src.cli.duplicate_main)
 ```bash
 # De-duplicate detections with overlap/keep policies  
 # Overlap modes: exact (完全一致), contain (包含), overlap (一部重なり; default)
 # Keep policies: widest (範囲最大; default), first, last, entity-order
-uv run codex-duplicate-process \
+uv run python -m src.cli.duplicate_main \
   -j outputs/detect.json \
   --overlap overlap \
   --keep widest \
   --out outputs/detect_dedup.json --pretty
 
 # Entity-priority example
-uv run codex-duplicate-process \
+uv run python -m src.cli.duplicate_main \
   -j outputs/detect.json \
   --overlap overlap \
   --keep entity-order \
@@ -270,7 +268,7 @@ Advanced tie-break (multi-criteria)
 
 CLI examples
 ```bash
-uv run codex-duplicate-process \
+uv run python -m src.cli.duplicate_main \
   --detect outputs/detect.json \
   --overlap overlap \
   --tie-break origin,length,entity,position \
@@ -291,10 +289,10 @@ duplicate_process:
   - entity_order: ["INDIVIDUAL_NUMBER", "PHONE_NUMBER", "PERSON", "LOCATION", "DATE_TIME", "YEAR", "PROPER_NOUN"]
 ```
 
-mask (codex-mask)
+mask (src.cli.mask_main)
 ```bash
 # Add highlight annotations to the PDF from detections JSON
-uv run codex-mask --pdf test_pdfs/sample.pdf -j outputs/detect_dedup.json --out outputs/sample_annotated.pdf --validate
+uv run python -m src.cli.mask_main --pdf test_pdfs/sample.pdf -j outputs/detect_dedup.json --out outputs/sample_annotated.pdf
 ```
 
 Notes
@@ -304,10 +302,10 @@ Notes
 - `--validate` performs basic schema checks. For detections, each structured `quad` must be a 4-number array `[x0, y0, x1, y1]` and `page >= 1`.
 
 Migration guide (legacy → split)
-- `uv run presidio-cli read ...` → `uv run codex-read ...`
-- `uv run presidio-cli detect ...` → `uv run codex-detect ...`
-- `uv run presidio-cli duplicate-process ...` → `uv run codex-duplicate-process ...`
-- `uv run presidio-cli mask ...` → `uv run codex-mask ...`
+- `uv run presidio-cli read ...` → `uv run python -m src.cli.read_main ...`
+- `uv run presidio-cli detect ...` → `uv run python -m src.cli.detect_main ...`
+- `uv run presidio-cli duplicate-process ...` → `uv run python -m src.cli.duplicate_main ...`
+- `uv run presidio-cli mask ...` → `uv run python -m src.cli.mask_main ...`
 
 JSON Schemas (concise)
 - `read` output
@@ -327,7 +325,7 @@ JSON Schemas (concise)
   - `highlights?: Array<object>` passthrough of `read.content.highlight` when `--append-highlights`
 
 Troubleshooting
-- Mask hash mismatch: `codex-mask ...` fails with sha256 mismatch
+- Mask hash mismatch: `src.cli.mask_main ...` fails with sha256 mismatch
   - Ensure the PDF used for `mask` matches the PDF in `read`/`detect`. Use `--force` to override (not recommended).
 - Missing `source.path` in detect input
   - Use the `read` subcommand’s output as input to `detect`. It includes absolute `source.path`.
@@ -340,13 +338,13 @@ Web UI
 Launch the web application:
 ```bash
 # Start web server (CPU mode, default port 5000)
-uv run presidio-web
+uv run python src/web_main.py
 
 # Start with GPU support
-uv run presidio-web --gpu
+uv run python src/web_main.py --gpu
 
 # Custom host and port
-uv run presidio-web --host 127.0.0.1 --port 8080 --debug
+uv run python src/web_main.py --host 127.0.0.1 --port 8080 --debug
 ```
 
 Web UI Features:
@@ -388,4 +386,5 @@ Notes
 - This project uses `uv` exclusively for dependency management
 - For offline environments, ensure spaCy model wheels are pre-installed
 - Web UI provides additional features not available in CLI mode
-- Console scripts: `codex-read`, `codex-detect`, `codex-duplicate-process`, `codex-mask` (CLI), `presidio-web` (Web UI)
+- CLI commands: Run via `uv run python -m src.cli.*_main` modules
+- Web UI: Run via `uv run python src/web_main.py`
