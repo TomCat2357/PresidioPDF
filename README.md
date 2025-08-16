@@ -39,6 +39,7 @@ New commands (recommended)
 - `codex-detect`: Read the JSON from `codex-read` and produce PII detections JSON in specification format.
 - `codex-duplicate-process`: De-duplicate detections JSON with configurable overlap/keep policies including entity-aware processing.
 - `codex-mask`: Apply highlight annotations to the PDF using detections JSON with optional coordinate map embedding.
+- `uv run python -m src.cli.embed_main`: Embed coordinate mapping data into PDF documents.
 
 Legacy aggregated CLI (deprecated)
 - `presidio-cli <subcommand>` remains available for backward compatibility but is deprecated. Use the split commands above.
@@ -51,13 +52,13 @@ Common options
 read (codex-read)
 ```bash
 # Read a PDF into JSON (specification format: text as 2D array, optional coordinate maps)
-uv run codex-read test_pdfs/sample.pdf --out outputs/read.json --pretty --with-map
+uv run codex-read --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-map
 
 # Read with embedded coordinate maps from processed PDFs
-uv run codex-read processed.pdf --out outputs/read.json --pretty --with-map
+uv run codex-read --pdf processed.pdf --out outputs/read.json --pretty --with-map
 
 # Read existing highlights from PDF
-uv run codex-read test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
+uv run codex-read --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
 ```
 
 New options:
@@ -99,7 +100,7 @@ uv run codex-detect -j outputs/read.json \
   --out outputs/detect.json --pretty
 
 # With shared YAML config (detect section only)
-uv run codex-detect -j outputs/read.json --config config/config.yaml --pretty
+uv run codex-detect -j outputs/read.json --config config/config.yaml --out outputs/detect.json --pretty
 ```
 
 duplicate (codex-duplicate-process)
@@ -124,18 +125,34 @@ New options:
 mask (codex-mask)
 ```bash
 # Basic PDF masking
-uv run codex-mask --pdf input.pdf --json outputs/detect.json --out masked.pdf
+uv run codex-mask --pdf input.pdf -j outputs/detect.json --out masked.pdf
 
 # Embed coordinate maps in output PDF
-uv run codex-mask --pdf input.pdf --json outputs/detect.json --out masked.pdf \
+uv run codex-mask --pdf input.pdf -j outputs/detect.json --out masked.pdf \
   --embed-coordinates
 
 # Read embedded coordinate maps from the masked PDF
-uv run codex-read masked.pdf --out extracted.json --with-map
+uv run codex-read --pdf masked.pdf --out extracted.json --with-map
 ```
 
 New options:
 - `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
+
+embed (embed_main.py)
+```bash
+# Embed coordinate maps from JSON into PDF
+uv run python -m src.cli.embed_main --pdf input.pdf -j outputs/read.json --out embedded.pdf
+
+# Force embedding even if hash mismatch
+uv run python -m src.cli.embed_main --pdf input.pdf -j outputs/read.json --out embedded.pdf --force
+```
+
+Options:
+- `--pdf`: Input PDF file path (required)
+- `-j, --json`: JSON file containing coordinate mapping data (required) 
+- `--out`: Output PDF path (required)
+- `--config`: Configuration file path (optional)
+- `--force`: Force embedding even if PDF hash doesn't match JSON metadata
 
 YAML (detect section; read-only)
 ```yaml
@@ -271,7 +288,7 @@ duplicate_process:
 mask (codex-mask)
 ```bash
 # Add highlight annotations to the PDF from detections JSON
-uv run codex-mask test_pdfs/sample.pdf --detect outputs/detect_dedup.json --out outputs/sample_annotated.pdf --validate
+uv run codex-mask --pdf test_pdfs/sample.pdf -j outputs/detect_dedup.json --out outputs/sample_annotated.pdf --validate
 ```
 
 Notes
@@ -304,7 +321,7 @@ JSON Schemas (concise)
   - `highlights?: Array<object>` passthrough of `read.content.highlight` when `--append-highlights`
 
 Troubleshooting
-- Mask hash mismatch: `presidio-cli mask ...` fails with sha256 mismatch
+- Mask hash mismatch: `codex-mask ...` fails with sha256 mismatch
   - Ensure the PDF used for `mask` matches the PDF in `read`/`detect`. Use `--force` to override (not recommended).
 - Missing `source.path` in detect input
   - Use the `read` subcommand’s output as input to `detect`. It includes absolute `source.path`.
@@ -365,4 +382,4 @@ Notes
 - This project uses `uv` exclusively for dependency management
 - For offline environments, ensure spaCy model wheels are pre-installed
 - Web UI provides additional features not available in CLI mode
-- Console scripts: `presidio-cli` (CLI), `presidio-web` (Web UI)
+- Console scripts: `codex-read`, `codex-detect`, `codex-duplicate-process`, `codex-mask` (CLI), `presidio-web` (Web UI)

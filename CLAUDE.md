@@ -196,19 +196,22 @@ uv sync --extra gui        # Desktop GUI
 ### New CLI Commands (Specification Format)
 ```bash
 # Read PDF and extract text with coordinate mapping
-uv run python -m src.cli.read_main --pdf input.pdf --out read_output.json --with-map --pretty
+uv run codex-read --pdf input.pdf --out read_output.json --with-map --pretty
 
 # Read existing highlights from PDF
-uv run python -m src.cli.read_main --pdf input.pdf --out read_output.json --with-highlights --pretty
+uv run codex-read --pdf input.pdf --out read_output.json --with-highlights --pretty
 
 # Detect PII from read output with specification format
-uv run python -m src.cli.detect_main -j read_output.json --out detect_output.json --with-predetect --pretty
+uv run codex-detect -j read_output.json --out detect_output.json --with-predetect --pretty
 
 # Process duplicates with entity-aware mode
-uv run python -m src.cli.duplicate_main -j detect_output.json --out final_output.json --entity-overlap-mode same --pretty
+uv run codex-duplicate-process -j detect_output.json --out final_output.json --entity-overlap-mode same --pretty
 
 # Apply masking with coordinate map embedding
-uv run python -m src.cli.mask_main --pdf input.pdf --json final_output.json --out masked.pdf --embed-coordinates
+uv run codex-mask --pdf input.pdf -j final_output.json --out masked.pdf --embed-coordinates
+
+# Embed coordinate maps in PDF
+uv run python -m src.cli.embed_main --pdf input.pdf -j read_output.json --out embedded.pdf
 ```
 
 ### Legacy CLI (Deprecated)
@@ -297,10 +300,10 @@ The new specification supports embedding coordinate maps directly in PDFs:
 
 ```bash
 # Embed coordinate maps during masking
-uv run python -m src.cli.mask_main --pdf input.pdf --json detect.json --out output.pdf --embed-coordinates
+uv run codex-mask --pdf input.pdf -j detect.json --out output.pdf --embed-coordinates
 
 # Read embedded coordinate maps
-uv run python -m src.cli.read_main --pdf output.pdf --out result.json --with-map
+uv run codex-read --pdf output.pdf --out result.json --with-map
 ```
 
 This allows processed PDFs to carry their coordinate mapping data for later use.
