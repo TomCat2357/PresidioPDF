@@ -169,3 +169,6 @@ update_20240531/*
 uv.lock
 *.pkl
 *test*
+
+# 一時的なHTMLファイル
+outputs/temp/page_content.html

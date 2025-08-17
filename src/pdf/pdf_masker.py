@@ -176,6 +176,7 @@ class PDFMasker:
 
             for entity in entities:
                 rects_to_highlight = entity.get("line_rects", [])
+                join_as_quads = bool(entity.get("join_as_quads"))
                 if not rects_to_highlight:
                     coords = entity.get("coordinates", {})
                     page_num = coords.get("page_number", 1) - 1
@@ -195,29 +196,54 @@ class PDFMasker:
                         continue
                     rects_to_highlight = [{"rect": rect, "page_num": page_num}]
 
-                for rect_info in rects_to_highlight:
-                    page_num = int(rect_info.get("page_num"))
-                    page = doc[page_num]
-                    space = rect_info.get("coord_space") or rect_info.get("space") or "fitz"
-                    rdict = rect_info.get("rect") or {}
-                    try:
-                        x0 = float(rdict["x0"]); y0 = float(rdict["y0"])
-                        x1 = float(rdict["x1"]); y1 = float(rdict["y1"])
-                    except Exception:
-                        continue  # 値が欠けている / 数値化できない
-                    r = fitz.Rect(x0, y0, x1, y1)
-                    if space == "pdf":
-                        ph = page.rect.height
-                        r = fitz.Rect(r.x0, ph - r.y1, r.x1, ph - r.y0)  # Y反転
-                    r = r & page.rect
-                    if (not r) or r.width <= 0 or r.height <= 0:
-                        continue
-                    # 既存重複チェック
-                    if self._is_duplicate_highlight(r, entity, existing_highlights, page_num):
-                        continue
-                    # 単一Rectごとにハイライト（複数行は複数アノテーションでカバー）
-                    self._add_single_highlight(page, r, entity)
-                    highlights_added += 1
+                if join_as_quads and rects_to_highlight:
+                    # ページごとにまとめてクアッド注釈を1つ作成
+                    page_groups: Dict[int, List[fitz.Quad]] = {}
+                    for rect_info in rects_to_highlight:
+                        pnum = int(rect_info.get("page_num"))
+                        page = doc[pnum]
+                        rdict = rect_info.get("rect") or {}
+                        try:
+                            x0 = float(rdict["x0"]); y0 = float(rdict["y0"])
+                            x1 = float(rdict["x1"]); y1 = float(rdict["y1"])
+                        except Exception:
+                            continue
+                        r = fitz.Rect(x0, y0, x1, y1) & page.rect
+                        if (not r) or r.width <= 0 or r.height <= 0:
+                            continue
+                        q = fitz.Quad(fitz.Point(r.x0, r.y0), fitz.Point(r.x1, r.y0), fitz.Point(r.x0, r.y1), fitz.Point(r.x1, r.y1))
+                        page_groups.setdefault(pnum, []).append(q)
+
+                    for pnum, quads in page_groups.items():
+                        if not quads:
+                            continue
+                        page = doc[pnum]
+                        # join_as_quads指定時は既存重複チェックをスキップ（マルチクアッドで一体表示のため）
+                        self._add_single_highlight(page, quads, entity)
+                        highlights_added += 1
+                else:
+                    # 既存ロジック：1行=1注釈
+                    for rect_info in rects_to_highlight:
+                        page_num = int(rect_info.get("page_num"))
+                        page = doc[page_num]
+                        space = rect_info.get("coord_space") or rect_info.get("space") or "fitz"
+                        rdict = rect_info.get("rect") or {}
+                        try:
+                            x0 = float(rdict["x0"]); y0 = float(rdict["y0"])
+                            x1 = float(rdict["x1"]); y1 = float(rdict["y1"])
+                        except Exception:
+                            continue  # 値が欠けている / 数値化できない
+                        r = fitz.Rect(x0, y0, x1, y1)
+                        if space == "pdf":
+                            ph = page.rect.height
+                            r = fitz.Rect(r.x0, ph - r.y1, r.x1, ph - r.y0)  # Y反転
+                        r = r & page.rect
+                        if (not r) or r.width <= 0 or r.height <= 0:
+                            continue
+                        if self._is_duplicate_highlight(r, entity, existing_highlights, page_num):
+                            continue
+                        self._add_single_highlight(page, r, entity)
+                        highlights_added += 1
 
             doc.save(pdf_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
             doc.close()
@@ -273,27 +299,31 @@ class PDFMasker:
                 highlight = page.add_highlight_annot(rect_or_quads)
             highlight.set_colors(stroke=color)
             highlight.set_opacity(0.4)
-            
-            # Creator情報と検出データを埋め込み
-            detect_word = str(entity.get("text", ""))
+            # 検出データを埋め込み（title=origin, contentにentity_type/detect_word）
+            raw_detect_word = str(entity.get("text", ""))
+            # 改行・制御文字を除去
+            detect_word = raw_detect_word.replace("\n", "").replace("\r", "").replace("\t", "")
             entity_type = str(entity.get("entity_type", "PII"))
+            origin = str(entity.get("origin", "auto"))
+
             content_text = f'detect_word:"{detect_word}",entity_type:"{entity_type}"'
-            
-            highlight.set_info(
-                title=entity_type,
-                content=content_text
-            )
-            
-            # Creator情報を設定（name フィールドを使用）
+
+            # PDF日時（Creation / ModDate）: D:YYYYMMDDHHmmSS
+            from datetime import datetime
+            now = datetime.now()
+            pdf_date = now.strftime("D:%Y%m%d%H%M%S")
+
             try:
-                if hasattr(highlight, 'set_name'):
-                    highlight.set_name("origin")
-                else:
-                    # 直接info辞書を更新
-                    highlight.info['name'] = "origin"
-            except Exception as e:
-                logger.debug(f"Creator設定エラー: {e}")
-            
+                highlight.set_info(
+                    title=origin,
+                    content=content_text,
+                    creationDate=pdf_date,
+                    modDate=pdf_date,
+                )
+            except Exception:
+                # 最低限 title / content の設定
+                highlight.set_info(title=origin, content=content_text)
+
             # 一部のPyMuPDFバージョンではPDF_ANNOT_FLAG_PRINTが存在しない
             flag_const = getattr(fitz, "PDF_ANNOT_FLAG_PRINT", None)
             try:

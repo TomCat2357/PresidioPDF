@@ -72,6 +72,12 @@ Options:
 - `--with-map/--no-map`: Include coordinate mapping data (default: True)
 - `--with-highlights`: Include existing PDF highlights in detect field
 
+Notes (highlights mapping):
+- `--with-highlights` で出力される `detect` の各項目は、ページごとのブロックプレーンテキスト（2D配列: `text[page][block]`）に対して `word` を文字列検索して得た位置に基づき、`start/end` を `{page_num, block_num, offset}` で出力します。
+- ページ番号・ブロック番号・オフセットはいずれも 0 始まりです（例: 最初のページ=0、最初のブロック=0）。
+- 該当するテキストが見つからないハイライトは出力しません（ダミーの `0,0,0` は出力しない仕様）。
+- デバッグには `--log-level DEBUG` を指定してください（進捗・座標マップ生成の詳細が stderr に出ます）。
+
 detect (src.cli.detect_main)
 ```bash
 # Detect from read JSON; writes detections in specification format (page_num/block_num/offset)
@@ -141,6 +147,30 @@ uv run python -m src.cli.read_main --pdf masked.pdf --out extracted.json --with-
 
 Options:
 - `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
+
+Annotation behavior (Aug 2025 update)
+- Multi-line entities (e.g., names broken across line wraps) are masked as a single highlight annotation composed of multiple quads (C approach). This keeps one logical detection as one annotation while visually covering each line segment.
+- Annotation metadata:
+  - `title`: stores `origin` of the detection (one of `auto`, `manual`, `custom`).
+  - `content`: stores `detect_word:"...",entity_type:"TYPE"`. Line breaks and control characters are removed from `detect_word` (e.g., `田中太\n郎` becomes `田中太郎`).
+  - `creationDate`/`modDate`: set to the current time in PDF date format `D:YYYYMMDDHHmmSS`.
+  - `name`: not set.
+
+Pipeline example (PERSON only)
+```bash
+# 1) Read PDF → JSON with coordinate maps
+uv run python -m src.cli.read_main --pdf test_pdfs/b1.pdf --out tmp/b1_read.json --pretty --with-map
+
+# 2) Detect PERSON only
+uv run python -m src.cli.detect_main -j tmp/b1_read.json --out tmp/b1_detect.json --entity PERSON --pretty
+
+# 3) Mask PDF (adds highlight annotations per detection)
+#    If you see a hash mismatch error, add --force
+uv run python -m src.cli.mask_main --pdf test_pdfs/b1.pdf -j tmp/b1_detect.json --out tmp/b1_masked.pdf --force
+```
+
+Notes
+- Depending on the PyMuPDF version and PDF viewers, a multi-quad highlight annotation may appear as a single-quad when read back programmatically. The metadata (`title`, `content`, `creationDate`) remains embedded and can be relied upon to recover `origin`, `detect_word`, and `entity_type`.
 
 embed (embed_main.py)
 ```bash

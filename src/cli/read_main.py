@@ -113,7 +113,11 @@ def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structu
     detect_list: List[Dict[str, Any]] = []
     
     # テキストブロックデータを取得
-    text_blocks = structured.get("text", [[]])
+    # NOTE: 期待する形式は 2次元配列（page_num -> [block_text, ...]）。
+    # これまで structured_from_pdf の戻りは {"pages": ...} で、"text" を持たず常に [[ ]] になっていたため
+    # 検索が行われず page_num/block_num/offset が 0 のままになる不具合があった。
+    # 呼び出し側から {"text": text_2d} を渡す前提に変更し、未提供時は空配列にする。
+    text_blocks = structured.get("text") or []
     
     # 既に使用された位置を追跡（重複回避のため）
     used_positions = set()
@@ -190,14 +194,16 @@ def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structu
             used_positions.add(position_key)
             found = True
         
-        detect_item = {
-            "start": start_pos,
-            "end": end_pos,
-            "entity": entity_type,
-            "word": detect_word,
-            "origin": origin
-        }
-        detect_list.append(detect_item)
+        # マッチが見つかった場合のみ追加（デフォルト0のまま出力しない）
+        if found:
+            detect_item = {
+                "start": start_pos,
+                "end": end_pos,
+                "entity": entity_type,
+                "word": detect_word,
+                "origin": origin
+            }
+            detect_list.append(detect_item)
     
     return detect_list
 
@@ -376,7 +382,8 @@ def main(pdf: str, out: Optional[str], pretty: bool, with_map: bool, with_highli
         detect_list: List[Dict[str, Any]] = []
         if with_highlights:
             highlights = _read_highlight_raw(pdf, cfg)
-            detect_list = _convert_highlights_to_spec_format(highlights, structured)
+            # ハイライト位置推定は 2Dテキスト配列を用いて行う
+            detect_list = _convert_highlights_to_spec_format(highlights, {"text": text_2d})
         
         # 座標マップ: --with-map のときのみ出力へ含める
         offset2coords_map: Dict[str, Any] = {}

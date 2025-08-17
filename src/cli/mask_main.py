@@ -101,6 +101,43 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
     import fitz  # Lazy import
     from src.pdf.pdf_locator import PDFTextLocator
     
+    def _group_rects_by_line(rects: List[List[float]], y_threshold: float = 2.0) -> List[List[float]]:
+        """同一行の矩形をy座標でグルーピングして各行の外接矩形を返す。
+        rects: [[x0,y0,x1,y1], ...]
+        y_threshold: y中心の近接しきい値（ポイント）
+        """
+        if not rects:
+            return []
+        # y中心でソート
+        items = []
+        for r in rects:
+            try:
+                x0, y0, x1, y1 = map(float, r)
+                cy = (y0 + y1) / 2.0
+                items.append((cy, [x0, y0, x1, y1]))
+            except Exception:
+                continue
+        items.sort(key=lambda t: t[0])
+        groups: List[List[List[float]]] = []
+        for cy, rect in items:
+            if not groups:
+                groups.append([rect])
+                continue
+            last_group = groups[-1]
+            # グループ代表の平均y中心
+            gcy = sum(((rr[1] + rr[3]) / 2.0) for rr in last_group) / len(last_group)
+            if abs(cy - gcy) <= y_threshold:
+                last_group.append(rect)
+            else:
+                groups.append([rect])
+        # 各グループを外接矩形へ
+        out: List[List[float]] = []
+        for grp in groups:
+            xs0 = [rr[0] for rr in grp]; ys0 = [rr[1] for rr in grp]
+            xs1 = [rr[2] for rr in grp]; ys1 = [rr[3] for rr in grp]
+            out.append([min(xs0), min(ys0), max(xs1), max(ys1)])
+        return out
+
     with fitz.open(pdf) as doc:
         locator = PDFTextLocator(doc)
         
@@ -135,18 +172,12 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
                         for offset in range(start_offset, end_offset):
                             if offset < len(block_map) and isinstance(block_map[offset], list) and len(block_map[offset]) >= 4:
                                 collected_coords.extend(block_map[offset])
-                        
-                        # 収集した座標から外接矩形を計算
+                        # 行単位に矩形を分割してクアッドを生成
                         if collected_coords and len(collected_coords) >= 4:
-                            # 座標は[x0, y0, x1, y1]の4要素単位で格納されている
                             rects = [collected_coords[i:i+4] for i in range(0, len(collected_coords), 4)]
-                            if rects:
-                                # 全矩形の外接矩形を計算
-                                min_x0 = min(rect[0] for rect in rects)
-                                min_y0 = min(rect[1] for rect in rects)
-                                max_x1 = max(rect[2] for rect in rects)
-                                max_y1 = max(rect[3] for rect in rects)
-                                quads = [[min_x0, min_y0, max_x1, max_y1]]
+                            line_rects = _group_rects_by_line(rects)
+                            if line_rects:
+                                quads = line_rects
             
             if not quads:
                 # locatorで座標を取得
@@ -165,18 +196,22 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
                 except Exception:
                     pass
             
-            if quads:
-                entities.append({
-                    "entity_type": entity_type,
-                    "text": text,
-                    "line_rects": [
-                        {
-                            "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
-                            "page_num": page_num,
-                        }
-                        for q in quads
-                    ],
-                })
+                if quads:
+                    # originを検出アイテムから引き継ぐ（auto/manual/custom）
+                    origin = str(detect_item.get("origin", "auto"))
+                    entities.append({
+                        "entity_type": entity_type,
+                        "text": text,
+                        "origin": origin,
+                        "join_as_quads": True,
+                        "line_rects": [
+                            {
+                                "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
+                                "page_num": page_num,
+                            }
+                            for q in quads
+                        ],
+                    })
 
     from src.pdf.pdf_masker import PDFMasker  # Lazy import
 

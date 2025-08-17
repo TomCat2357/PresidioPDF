@@ -15,7 +15,7 @@ from presidio_analyzer import (
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from typing import List, Dict
 
-from core.config_manager import ConfigManager
+from src.core.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 
