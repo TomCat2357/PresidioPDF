@@ -168,13 +168,21 @@ def main(
     origin_pri = [s.strip().lower() for s in (origin_priority or "").split(",") if s.strip()]
     length_pref_f = length_pref
     position_pref_f = position_pref
-    ent_order = [p.strip() for p in (entity_order or ",".join(conf_entity_order)).split(",") if p.strip()]
-    
-    # エンティティ順序の検証
-    for entity in ent_order:
-        if entity not in ALLOWED_ENTITY_NAMES:
-            allowed_list = ", ".join(ALLOWED_ENTITY_NAMES)
-            raise click.ClickException(f"未定義のエンティティ種別です: {entity}。許可されたエンティティ: {allowed_list}")
+    ent_order_raw = [p.strip() for p in (entity_order).split(",") if p.strip()]
+
+    # エンティティ順序（大文字小文字非依存、ADDRESSはLOCATIONに正規化）
+    ent_order: List[str] = []
+    for tok in ent_order_raw:
+        low = tok.lower()
+        if low == "address":
+            ent_order.append("LOCATION")
+            continue
+        up = tok.upper()
+        if up in ALLOWED_ENTITY_NAMES:
+            ent_order.append(up)
+            continue
+        allowed_list = ", ".join(ALLOWED_ENTITY_NAMES + ["ADDRESS(=LOCATION)"])
+        raise click.ClickException(f"未定義のエンティティ種別です: {tok}。許可されたエンティティ: {allowed_list}")
 
     # 仕様書形式: detectはフラット配列
     detect_list = data.get("detect", [])

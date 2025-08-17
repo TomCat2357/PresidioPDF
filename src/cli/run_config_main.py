@@ -131,6 +131,15 @@ def _call_mask(opts: Dict[str, Any]):
     if embed is not None:
         args.append("--embed-coordinates" if embed else "--no-embed-coordinates")
 
+    # エンティティ別マスク指定の伝搬（masks: ["PERSON=#FF0000@0.3", ...]）
+    masks = opts.get("masks") or opts.get("mask")
+    if masks:
+        if isinstance(masks, list):
+            for m in masks:
+                args.extend(["--mask", str(m)])
+        else:
+            args.extend(["--mask", str(masks)])
+
     return mask_main.main(args=args, standalone_mode=False)
 
 

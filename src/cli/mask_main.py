@@ -67,7 +67,9 @@ def _embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
 @click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
 @click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
 @click.option("--embed-coordinates/--no-embed-coordinates", default=False, help="座標マップをPDFに埋め込む")
-def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool, embed_coordinates: bool):
+# 例: --mask PERSON=#FF0040@0.35 --mask ADDRESS=blue@0.2 （ADDRESSはLOCATIONのエイリアス）
+@click.option("--mask", "mask_specs", multiple=True, help="エンティティ別のハイライト色と透明度を指定（繰り返し可）。<ENTITY>=<color>[@alpha]")
+def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool, embed_coordinates: bool, mask_specs: Optional[List[str]]):
     # ファイル存在確認
     validate_input_file_exists(pdf)
     if json_file:
@@ -138,6 +140,112 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
             out.append([min(xs0), min(ys0), max(xs1), max(ys1)])
         return out
 
+    # マスク指定のパース（ENTITY=color[@alpha] 形式、ENTITYは大文字小文字非依存・出力は全大文字。ADDRESSはLOCATIONのエイリアス）
+    def _normalize_entity_key(name: str) -> str:
+        n = str(name or "").strip()
+        if not n:
+            return ""
+        low = n.lower()
+        if low == "address":
+            return "LOCATION"
+        return n.upper()
+
+    # 簡易CSSカラー名→RGBマップ（最小集合）
+    CSS_COLORS = {
+        "black": (0, 0, 0),
+        "white": (255, 255, 255),
+        "red": (255, 0, 0),
+        "green": (0, 128, 0),
+        "blue": (0, 0, 255),
+        "cyan": (0, 255, 255),
+        "magenta": (255, 0, 255),
+        "yellow": (255, 255, 0),
+        "gray": (128, 128, 128),
+        "grey": (128, 128, 128),
+        "orange": (255, 165, 0),
+        "purple": (128, 0, 128),
+        "pink": (255, 192, 203),
+        "brown": (165, 42, 42),
+        "teal": (0, 128, 128),
+        "lime": (0, 255, 0),
+        "navy": (0, 0, 128),
+        "maroon": (128, 0, 0),
+        "olive": (128, 128, 0),
+        "silver": (192, 192, 192),
+        "royalblue": (65, 105, 225),
+    }
+
+    def _clamp01(x: float) -> float:
+        try:
+            xf = float(x)
+        except Exception:
+            xf = 0.0
+        return 0.0 if xf < 0 else (1.0 if xf > 1 else xf)
+
+    def _parse_color_and_alpha(s: str) -> (List[float], Optional[float]):
+        """色表現とαを解析して([r,g,b](0..1)), alpha(0..1 or None)を返す。
+        許容: #RGB/#RRGGBB/#RRGGBBAA, rgb(r,g,b), rgba(r,g,b,a), css名
+        """
+        import re
+        s = str(s).strip()
+        # rgba()
+        m = re.fullmatch(r"rgba\((\d{1,3}),(\d{1,3}),(\d{1,3}),(\d*\.?\d+)\)", s, flags=re.I)
+        if m:
+            r, g, b = [max(0, min(255, int(m.group(i)))) for i in (1, 2, 3)]
+            a = _clamp01(float(m.group(4)))
+            return [r / 255.0, g / 255.0, b / 255.0], a
+        # rgb()
+        m = re.fullmatch(r"rgb\((\d{1,3}),(\d{1,3}),(\d{1,3})\)", s, flags=re.I)
+        if m:
+            r, g, b = [max(0, min(255, int(m.group(i)))) for i in (1, 2, 3)]
+            return [r / 255.0, g / 255.0, b / 255.0], None
+        # #RRGGBBAA or #RRGGBB or #RGB
+        if s.startswith('#'):
+            hexv = s[1:]
+            try:
+                if len(hexv) == 3:
+                    r = int(hexv[0] * 2, 16); g = int(hexv[1] * 2, 16); b = int(hexv[2] * 2, 16)
+                    return [r / 255.0, g / 255.0, b / 255.0], None
+                if len(hexv) == 6:
+                    r = int(hexv[0:2], 16); g = int(hexv[2:4], 16); b = int(hexv[4:6], 16)
+                    return [r / 255.0, g / 255.0, b / 255.0], None
+                if len(hexv) == 8:
+                    r = int(hexv[0:2], 16); g = int(hexv[2:4], 16); b = int(hexv[4:6], 16); a = int(hexv[6:8], 16) / 255.0
+                    return [r / 255.0, g / 255.0, b / 255.0], _clamp01(a)
+            except Exception:
+                pass
+        # css名
+        rgb = CSS_COLORS.get(s.lower())
+        if rgb:
+            r, g, b = rgb
+            return [r / 255.0, g / 255.0, b / 255.0], None
+        # 不明: グレーにフォールバック
+        return [0.9, 0.9, 0.9], None
+
+    mask_styles: Dict[str, Dict[str, float]] = {}
+    if mask_specs:
+        for spec in mask_specs:
+            if not spec or '=' not in spec:
+                raise click.ClickException(f"--mask は <ENTITY>=<color>[@alpha] 形式で指定してください: {spec}")
+            key, val = spec.split('=', 1)
+            ent = _normalize_entity_key(key)
+            if not ent:
+                raise click.ClickException(f"--mask のエンティティ名が空です: {spec}")
+            # color[@alpha]
+            parts = val.split('@', 1)
+            color_str = parts[0].strip()
+            rgb, a_rgba = _parse_color_and_alpha(color_str)
+            alpha: Optional[float] = a_rgba
+            if len(parts) == 2 and (alpha is None):
+                try:
+                    alpha = _clamp01(float(parts[1]))
+                except Exception:
+                    raise click.ClickException(f"--mask のalphaが不正です(0..1): {parts[1]}")
+            # 既定α
+            if alpha is None:
+                alpha = 0.4
+            mask_styles[ent] = {"r": rgb[0], "g": rgb[1], "b": rgb[2], "a": alpha}
+
     with fitz.open(pdf) as doc:
         locator = PDFTextLocator(doc)
         
@@ -196,22 +304,29 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
                 except Exception:
                     pass
             
-                if quads:
-                    # originを検出アイテムから引き継ぐ（auto/manual/custom）
-                    origin = str(detect_item.get("origin", "auto"))
-                    entities.append({
-                        "entity_type": entity_type,
-                        "text": text,
-                        "origin": origin,
-                        "join_as_quads": True,
-                        "line_rects": [
-                            {
-                                "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
-                                "page_num": page_num,
-                            }
-                            for q in quads
-                        ],
-                    })
+            if quads:
+                # originを検出アイテムから引き継ぐ（auto/manual/custom）
+                origin = str(detect_item.get("origin", "auto"))
+                ent_u = _normalize_entity_key(entity_type)
+                # 出力・内部は全大文字を使用
+                entities.append({
+                    "entity_type": ent_u,
+                    "text": text,
+                    "origin": origin,
+                    "join_as_quads": True,
+                    # マスクスタイルの適用（該当エンティティのみ）
+                    **({
+                        "mask_rgb": [mask_styles[ent_u]["r"], mask_styles[ent_u]["g"], mask_styles[ent_u]["b"]],
+                        "mask_alpha": mask_styles[ent_u]["a"],
+                    } if ent_u in mask_styles else {}),
+                    "line_rects": [
+                        {
+                            "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
+                            "page_num": page_num,
+                        }
+                        for q in quads
+                    ],
+                })
 
     from src.pdf.pdf_masker import PDFMasker  # Lazy import
 

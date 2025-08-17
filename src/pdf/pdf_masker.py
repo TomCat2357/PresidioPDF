@@ -288,7 +288,14 @@ class PDFMasker:
     def _add_single_highlight(self, page: fitz.Page, rect_or_quads, entity: Dict):
         """単一のハイライトを追加（Rect または list[Quad]）"""
         try:
-            color = self._get_highlight_color_pymupdf(entity["entity_type"])
+            # エンティティ別の上書き色/透明度（mask_mainから渡される）
+            override_rgb = entity.get("mask_rgb")
+            override_alpha = entity.get("mask_alpha")
+            color = (
+                [float(override_rgb[0]), float(override_rgb[1]), float(override_rgb[2])] 
+                if isinstance(override_rgb, (list, tuple)) and len(override_rgb) == 3 
+                else self._get_highlight_color_pymupdf(entity["entity_type"])
+            )
             # 形は Rect または list[Quad] のどちらかに限定
             if isinstance(rect_or_quads, list):
                 quads = [q for q in rect_or_quads if isinstance(q, fitz.Quad)]
@@ -298,7 +305,7 @@ class PDFMasker:
             else:
                 highlight = page.add_highlight_annot(rect_or_quads)
             highlight.set_colors(stroke=color)
-            highlight.set_opacity(0.4)
+            highlight.set_opacity(float(override_alpha) if override_alpha is not None else 0.4)
             # 検出データを埋め込み（title=origin, contentにentity_type/detect_word）
             raw_detect_word = str(entity.get("text", ""))
             # 改行・制御文字を除去
