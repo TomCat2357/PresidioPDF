@@ -1,17 +1,39 @@
-# Python 仮想環境
+# =============================================================================
+# Python 環境関連
+# =============================================================================
+
+# 仮想環境
 .venv/
 venv/
 env/
+ENV/
+env.bak/
+venv.bak/
+
+# 一時ディレクトリ
 tmp/
 tmp_docs/
 
-# Python キャッシュファイル
+# 環境変数
+.env
+
+# パッケージマネージャ関連
+uv.lock
+Pipfile.lock
+poetry.lock
+.pdm.toml
+
+# =============================================================================
+# Python ビルド・キャッシュ関連
+# =============================================================================
+
+# Pythonキャッシュ
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# 分散パッケージ
+# パッケージビルド
 .Python
 build/
 develop-eggs/
@@ -35,7 +57,14 @@ MANIFEST
 *.manifest
 *.spec
 
-# 単体テスト
+# PEP 582
+__pypackages__/
+
+# =============================================================================
+# テスト・カバレッジ関連
+# =============================================================================
+
+# テストツール
 htmlcov/
 .tox/
 .nox/
@@ -49,11 +78,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-tests/
 
-# 翻訳
-*.mo
-*.pot
+# =============================================================================
+# フレームワーク固有ファイル
+# =============================================================================
 
 # Django
 *.log
@@ -68,12 +96,19 @@ instance/
 # Scrapy
 .scrapy
 
-# Sphinx
-docs/_build/
+# Celery
+celerybeat-schedule
+celerybeat.pid
 
-# PyBuilder
-.pybuilder/
-target/
+# =============================================================================
+# 開発ツール関連
+# =============================================================================
+
+# IDE
+.idea/
+.spyderproject
+.spyproject
+.ropeproject
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -82,95 +117,90 @@ target/
 profile_default/
 ipython_config.py
 
-# pyenv
+# 型チェック・リンター
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# その他の開発ツール
 .python-version
+cython_debug/
 
-# pipenv
-Pipfile.lock
+# =============================================================================
+# ドキュメント関連
+# =============================================================================
 
-# poetry
-poetry.lock
-
-# pdm
-.pdm.toml
-
-# PEP 582
-__pypackages__/
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath
-*.sage.py
-
-# 環境変数
-.env
-.venv
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder
-.spyderproject
-.spyproject
-
-# Rope
-.ropeproject
+# Sphinx
+docs/_build/
 
 # mkdocs
 /site
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# 翻訳ファイル
+*.mo
+*.pot
 
-# Pyre
-.pyre/
+# PyBuilder
+.pybuilder/
+target/
 
-# pytype
-.pytype/
+# SageMath
+*.sage.py
 
-# Cython
-cython_debug/
+# =============================================================================
+# プロジェクト固有設定
+# =============================================================================
 
-# PyCharm
-.idea/
-
-# PDFファイル（サンプル以外）
+# PDF処理プロジェクト固有
 *.pdf
 !examples/*.pdf
 
-# Node.js
-node_modules/
-
-# 出力フォルダ
+# 出力・ログディレクトリ
 output/
 logs/
+outputs/temp/page_content.html
 
 # 一時ファイル
 *.tmp
 *.temp
 
-# MCPサーバ設定
+# =============================================================================
+# 外部ツール・依存関係
+# =============================================================================
+
+# Node.js
+node_modules/
+
+# MCP設定
 .mcp.json
-*.json
-*log*
+
+# =============================================================================
+# データ・メディアファイル（プロジェクト固有）
+# =============================================================================
+
+# 画像・動画ファイル
 *.png
 *.jpg
-*.yaml
-nm_dataset_64/*
-runs/*
 *.mp4
+
+# データファイル
+*.json
+*.yaml
 *.txt
 *.csv
-update_20240531/*
 *.pt
-*.cache
-uv.lock
 *.pkl
+*.cache
+
+# ログファイル
+*log*
+
+# テスト関連
 *test*
 
-# 一時的なHTMLファイル
-outputs/temp/page_content.html
+# データセット・実験結果
+nm_dataset_64/*
+runs/*
+update_20240531/*
