@@ -147,6 +147,32 @@ uv run python -m src.cli.read_main --pdf masked.pdf --out extracted.json --with-
 
 Options:
 - `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
+- `--mask <ENTITY>=<color>[@alpha]` (repeatable): Set highlight color and opacity per entity.
+  - ENTITY: case-insensitive; internally uppercased. `ADDRESS` is an alias of `LOCATION`.
+  - color: one of `#RGB`, `#RRGGBB`, `#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)`, or a small set of CSS color names (e.g., `red`, `yellow`, `royalblue`).
+  - alpha: 0..1. If omitted, defaults to `0.4`. If `rgba(...)` includes alpha, that takes precedence.
+
+Examples (color/opacity customization)
+```bash
+# Per-entity highlight color and opacity (CLI)
+uv run python -m src.cli.mask_main \
+  --pdf input.pdf -j outputs/detect.json --out masked.pdf \
+  --mask PERSON=#FF0040@0.35 \
+  --mask LOCATION=yellow@0.2
+```
+
+YAML (run_config_main)
+```yaml
+steps:
+  - op: "mask"
+    options:
+      pdf: "input.pdf"
+      json: "outputs/detect.json"
+      out: "masked.pdf"
+      masks:
+        - "PERSON=#FF0040@0.35"
+        - "LOCATION=yellow@0.2"
+```
 
 Annotation behavior (Aug 2025 update)
 - Multi-line entities (e.g., names broken across line wraps) are masked as a single highlight annotation composed of multiple quads (C approach). This keeps one logical detection as one annotation while visually covering each line segment.
