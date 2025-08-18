@@ -95,10 +95,25 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
     if not isinstance(detect_list, list):
         detect_list = []
     
-    # 座標マップの取得
+    # 座標・テキスト情報の取得
     offset2coords_map = det.get("offset2coordsMap", {})
     coords2offset_map = det.get("coords2offsetMap", {})
     text_2d = det.get("text", [])
+
+    # グローバル（改行なし）オフセットマップを準備（ページ/ブロック跨ぎ対応用）
+    # 仕様: text_2dは改行なしのブロック文字列を2D配列で保持
+    block_start_global: Dict[tuple, int] = {}
+    block_len_map: Dict[tuple, int] = {}
+    global_cursor = 0
+    if isinstance(text_2d, list):
+        for p, page_blocks in enumerate(text_2d):
+            if not isinstance(page_blocks, list):
+                continue
+            for b, block_text in enumerate(page_blocks):
+                s = str(block_text or "")
+                block_start_global[(p, b)] = global_cursor
+                block_len_map[(p, b)] = len(s)
+                global_cursor += len(s)
     
     import fitz  # Lazy import
     from src.pdf.pdf_locator import PDFTextLocator
@@ -267,44 +282,70 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
             start_offset = start_pos.get("offset", 0)
             end_offset = end_pos.get("offset", 0)
             
-            # 座標マップがある場合はそれを使用、なければlocatorで座標を取得
-            quads = []
-            if offset2coords_map:
-                # 座標マップから座標を取得 - page_num/block_num/offset範囲をすべて収集
-                page_map = offset2coords_map.get(str(page_num), {})
-                if isinstance(page_map, dict):
-                    block_map = page_map.get(str(block_num), [])
-                    if isinstance(block_map, list):
-                        # start_offsetからend_offsetまでの座標をすべて収集
-                        collected_coords = []
-                        for offset in range(start_offset, end_offset):
-                            if offset < len(block_map) and isinstance(block_map[offset], list) and len(block_map[offset]) >= 4:
-                                collected_coords.extend(block_map[offset])
-                        # 行単位に矩形を分割してクアッドを生成
-                        if collected_coords and len(collected_coords) >= 4:
-                            rects = [collected_coords[i:i+4] for i in range(0, len(collected_coords), 4)]
-                            line_rects = _group_rects_by_line(rects)
-                            if line_rects:
-                                quads = line_rects
-            
-            if not quads:
-                # locatorで座標を取得
+            # 改行なしグローバルオフセットに変換し、PDFTextLocatorで跨行/ブロック/ページ対応のline_rectsを取得
+            line_rects_items: List[Dict[str, Any]] = []
+            try:
+                key_s = (page_num, block_num)
+                key_e = (end_pos.get("page_num", page_num), end_pos.get("block_num", block_num))
+                if key_s in block_start_global and key_e in block_start_global:
+                    start_global = block_start_global[key_s] + int(start_offset)
+                    # endは包含端 → 排他的終端へ(+1)
+                    end_global_excl = block_start_global[key_e] + int(end_offset) + 1
+                    # PDFTextLocatorで行矩形を取得（ページ情報付き）
+                    line_rects_items = locator.get_pii_line_rects(start_global, end_global_excl)
+            except Exception:
+                line_rects_items = []
+
+            # フォールバック: 旧オフセット座標マップ（ブロック/ページ跨ぎ対応版）
+            if not line_rects_items and offset2coords_map:
                 try:
-                    if isinstance(text_2d, list) and page_num < len(text_2d):
-                        page_blocks = text_2d[page_num]
-                        if isinstance(page_blocks, list) and block_num < len(page_blocks):
-                            block_text = page_blocks[block_num]
-                            if isinstance(block_text, str):
-                                # ブロック内のテキスト位置から座標を推定
-                                quads_result = locator.locate_text_in_block(
-                                    page_num, block_num, start_offset, end_offset, text
-                                )
-                                if quads_result:
-                                    quads = quads_result
+                    ps = int(start_pos.get("page_num", 0))
+                    pe = int(end_pos.get("page_num", ps))
+                    bs = int(start_pos.get("block_num", 0))
+                    be = int(end_pos.get("block_num", bs))
+                    os = int(start_offset)
+                    oe = int(end_offset)
+
+                    # 収集: page→矩形配列
+                    page_rects: Dict[int, List[List[float]]] = {}
+                    for p in range(ps, pe + 1):
+                        page_dict = offset2coords_map.get(str(p), {})
+                        if not isinstance(page_dict, dict) or not page_dict:
+                            continue
+                        # ブロックIDを昇順で走査
+                        block_ids = sorted([int(k) for k in page_dict.keys() if str(k).isdigit()])
+                        if not block_ids:
+                            continue
+                        b_start = bs if p == ps else block_ids[0]
+                        b_end = be if p == pe else block_ids[-1]
+                        for b in block_ids:
+                            if b < b_start or b > b_end:
+                                continue
+                            block_list = page_dict.get(str(b), [])
+                            if not isinstance(block_list, list) or not block_list:
+                                continue
+                            o_start = os if (p == ps and b == bs) else 0
+                            o_end = oe if (p == pe and b == be) else (len(block_list) - 1)
+                            if o_start > o_end:
+                                continue
+                            for off in range(o_start, o_end + 1):
+                                bbox = block_list[off] if 0 <= off < len(block_list) else None
+                                if isinstance(bbox, list) and len(bbox) >= 4:
+                                    page_rects.setdefault(p, []).append(bbox[:4])
+
+                    # 行方向へグルーピングしてline_rectsを構築
+                    for p, rects in page_rects.items():
+                        if not rects:
+                            continue
+                        for r in _group_rects_by_line(rects):
+                            line_rects_items.append({
+                                "rect": {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3]},
+                                "page_num": p,
+                            })
                 except Exception:
-                    pass
-            
-            if quads:
+                    line_rects_items = []
+
+            if line_rects_items:
                 # originを検出アイテムから引き継ぐ（auto/manual/custom）
                 origin = str(detect_item.get("origin", "auto"))
                 ent_u = _normalize_entity_key(entity_type)
@@ -321,10 +362,15 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
                     } if ent_u in mask_styles else {}),
                     "line_rects": [
                         {
-                            "rect": {"x0": float(q[0]), "y0": float(q[1]), "x1": float(q[2]), "y1": float(q[3])},
-                            "page_num": page_num,
+                            "rect": {
+                                "x0": float(item["rect"]["x0"]),
+                                "y0": float(item["rect"]["y0"]),
+                                "x1": float(item["rect"]["x1"]),
+                                "y1": float(item["rect"]["y1"]),
+                            },
+                            "page_num": int(item.get("page_num", page_num)),
                         }
-                        for q in quads
+                        for item in line_rects_items
                     ],
                 })
 

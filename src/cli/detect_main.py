@@ -27,28 +27,63 @@ ALLOWED_ENTITIES = {
 
 ALLOWED_ENTITY_NAMES = list(ALLOWED_ENTITIES.values())
 
-def _convert_offsets_to_position(start_offset: int, end_offset: int, text_2d: List[List[str]]) -> Tuple[Dict[str, int], Dict[str, int]]:
-    """グローバルオフセットをpage_num,block_num,offset形式に変換"""
+def _convert_offsets_to_position(start_offset: int, end_offset_exclusive: int, text_2d: List[List[str]]) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """グローバルオフセットをpage_num,block_num,offset形式に変換
+
+    注意:
+    - start_offset は最初の文字の位置（0-based）
+    - end_offset_exclusive はPythonスライス互換の終端（非包含）
+    - 本関数は end.offset を「最後の文字そのもの」の位置（包含）に合わせて算出する
+    - 開始と終了は別々のブロック/ページにまたがってもよい
+    """
+
+    # 終了位置は包含端に合わせる（最後の文字そのもののオフセット）
+    last_char_global = max(0, end_offset_exclusive - 1)
+
+    start_pos: Optional[Dict[str, int]] = None
+    end_pos: Optional[Dict[str, int]] = None
+
     current_offset = 0
+    last_page_num = 0
+    last_block_num = 0
+    last_block_len = 0
+
     for page_num, page_blocks in enumerate(text_2d):
         for block_num, block_text in enumerate(page_blocks):
             block_len = len(block_text)
-            if current_offset <= start_offset < current_offset + block_len:
+            last_page_num = page_num
+            last_block_num = block_num
+            last_block_len = block_len
+
+            # start の属する位置
+            if start_pos is None and current_offset <= start_offset < current_offset + block_len:
                 start_pos = {
                     "page_num": page_num,
                     "block_num": block_num,
-                    "offset": start_offset - current_offset
+                    "offset": start_offset - current_offset,
                 }
+
+            # end(包含) の属する位置
+            if end_pos is None and current_offset <= last_char_global < current_offset + block_len:
                 end_pos = {
                     "page_num": page_num,
                     "block_num": block_num,
-                    "offset": min(end_offset - current_offset, block_len - 1)
+                    "offset": last_char_global - current_offset,
                 }
-                return start_pos, end_pos
+
             current_offset += block_len
-    
-    # 見つからない場合のデフォルト
-    return {"page_num": 0, "block_num": 0, "offset": 0}, {"page_num": 0, "block_num": 0, "offset": 0}
+
+    # フォールバック: いずれか見つからない場合、末尾/先頭にクランプ
+    if start_pos is None:
+        start_pos = {"page_num": 0, "block_num": 0, "offset": 0}
+    if end_pos is None:
+        # 最後のブロックの末尾に合わせる（空でない前提。空なら0にクランプ）
+        end_pos = {
+            "page_num": last_page_num,
+            "block_num": last_block_num,
+            "offset": max(0, last_block_len - 1),
+        }
+    return start_pos, end_pos
 
 
 def _validate_read_json(obj: Dict[str, Any]) -> List[str]:
@@ -118,12 +153,14 @@ def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[s
     plain_text = None
     if isinstance(text_2d, list) and text_2d:
         try:
-            # 2D配列を全結合してfull_plain_textを作成
+            # 2D配列の全ブロックを順序通りにフラット結合（区切りは入れない）
+            # 改行/改ブロック/改ページに跨るPIIも検出できるよう、文字列を一度フラット化する
             full_plain_text_parts = []
             for page_blocks in text_2d:
                 if isinstance(page_blocks, list):
-                    full_plain_text_parts.extend(page_blocks)
-            plain_text = "".join(str(x) for x in full_plain_text_parts)
+                    for block in page_blocks:
+                        full_plain_text_parts.append(str(block))
+            plain_text = "".join(full_plain_text_parts)
         except Exception:
             plain_text = None
 
@@ -185,6 +222,7 @@ def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[s
             txt = target_text[s:e]
             did = _detection_id(ent, txt, (s, e))
             # 仕様書形式: start/endをpage_num,block_num,offset形式に変換
+            # endは「最後の文字そのもの」のoffset（包含端）になるようにマッピング
             start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
             entry_plain = {
                 "start": start_pos,
@@ -208,6 +246,7 @@ def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[s
                 s, e = m.start(), m.end()
                 txt = target_text[s:e]
                 did = _detection_id(ent_name, txt, (s, e))
+                # endは包含端に合わせる
                 start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
                 detections_plain.append({
                     "start": start_pos,

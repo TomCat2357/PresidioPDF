@@ -106,26 +106,37 @@ def _read_highlight_raw(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any
 
 
 def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structured: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """ハイライトを仕様書のdetect形式に変換（改良されたテキスト検索ベース座標マッピング付き）"""
+    """ハイライトを仕様書のdetect形式に変換（テキスト検索はページ/ブロック跨ぎ対応）"""
     # 許可されたエンティティタイプ
     ALLOWED_ENTITIES = {"PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"}
     
     detect_list: List[Dict[str, Any]] = []
     
-    # テキストブロックデータを取得
-    # NOTE: 期待する形式は 2次元配列（page_num -> [block_text, ...]）。
-    # これまで structured_from_pdf の戻りは {"pages": ...} で、"text" を持たず常に [[ ]] になっていたため
-    # 検索が行われず page_num/block_num/offset が 0 のままになる不具合があった。
-    # 呼び出し側から {"text": text_2d} を渡す前提に変更し、未提供時は空配列にする。
+    # テキストブロックデータ（2D配列: page->[block,...]）
     text_blocks = structured.get("text") or []
+
+    # グローバル検索用に平坦化した文字列と、グローバル->(page,block,offset)の写像を構築
+    flat_text_parts: List[str] = []
+    global_pos_to_pbo: List[Tuple[int, int, int]] = []
+    for p, page_blocks in enumerate(text_blocks):
+        if not isinstance(page_blocks, list):
+            continue
+        for b, block_text in enumerate(page_blocks):
+            s = str(block_text or "")
+            if not s:
+                continue
+            flat_text_parts.append(s)
+            # 各文字位置の逆写像
+            global_pos_to_pbo.extend((p, b, i) for i in range(len(s)))
+    flat_text = "".join(flat_text_parts)
     
     # 既に使用された位置を追跡（重複回避のため）
     used_positions = set()
     
     for highlight in highlights:
-        # Creator情報の確認
-        creator = highlight.get("creator", "")
-        origin = "auto" if creator == "origin" else "manual"
+        # originはtitleに格納（auto/manual/custom）
+        origin_raw = str(highlight.get("title", "")).strip().lower()
+        origin = origin_raw if origin_raw in {"auto", "manual", "custom"} else "manual"
         
         # コンテンツからdetect_wordとentity_typeを抽出
         detect_word = ""
@@ -147,52 +158,33 @@ def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structu
         if not detect_word:
             continue  # テキストが空の場合は読み取らない
             
-        # テキスト検索ベースで位置を特定
+        # テキスト検索ベースで位置を特定（ページ/ブロック跨ぎ対応）
         start_pos = {"page_num": 0, "block_num": 0, "offset": 0}
         end_pos = {"page_num": 0, "block_num": 0, "offset": 0}
-        
-        # 全てのテキストブロックから detect_word の全ての出現位置を検索
         found = False
-        candidates = []
-        
-        for page_num, page_blocks in enumerate(text_blocks):
-            for block_num, block_text in enumerate(page_blocks):
-                # 指定した単語の全ての出現位置を検索
-                start_index = 0
-                while True:
-                    offset = block_text.find(detect_word, start_index)
-                    if offset == -1:
-                        break
-                    
-                    position_key = (page_num, block_num, offset)
-                    if position_key not in used_positions:
-                        candidates.append({
-                            'page_num': page_num,
-                            'block_num': block_num, 
-                            'offset': offset,
-                            'end_offset': offset + len(detect_word) - 1
-                        })
-                    
-                    start_index = offset + 1
-        
-        # 最適な候補を選択（最初の未使用位置）
-        if candidates:
-            best_candidate = candidates[0]
-            start_pos = {
-                "page_num": best_candidate['page_num'], 
-                "block_num": best_candidate['block_num'], 
-                "offset": best_candidate['offset']
-            }
-            end_pos = {
-                "page_num": best_candidate['page_num'], 
-                "block_num": best_candidate['block_num'], 
-                "offset": best_candidate['end_offset']
-            }
-            
-            # この位置を使用済みとしてマーク
-            position_key = (best_candidate['page_num'], best_candidate['block_num'], best_candidate['offset'])
-            used_positions.add(position_key)
-            found = True
+
+        if flat_text and detect_word:
+            idx = 0
+            while True:
+                pos = flat_text.find(detect_word, idx)
+                if pos == -1:
+                    break
+                # この開始位置が既に使用されていないことを確認（重複回避）
+                p, b, o = global_pos_to_pbo[pos]
+                if (p, b, o) in used_positions:
+                    idx = pos + 1
+                    continue
+                # 開始
+                start_pos = {"page_num": p, "block_num": b, "offset": o}
+                # 終了（包含端）
+                end_global = pos + len(detect_word) - 1
+                if end_global >= len(global_pos_to_pbo):
+                    end_global = len(global_pos_to_pbo) - 1
+                ep, eb, eo = global_pos_to_pbo[end_global]
+                end_pos = {"page_num": ep, "block_num": eb, "offset": eo}
+                used_positions.add((p, b, o))
+                found = True
+                break
         
         # マッチが見つかった場合のみ追加（デフォルト0のまま出力しない）
         if found:
