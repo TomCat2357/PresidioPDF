@@ -22,6 +22,8 @@ uv.lock
 Pipfile.lock
 poetry.lock
 .pdm.toml
+.serena/
+.claude/
 
 # =============================================================================
 # Python ビルド・キャッシュ関連
