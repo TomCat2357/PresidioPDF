@@ -425,7 +425,7 @@ class PipelineService:
                     block_start_global[(p, b)] = global_cursor
                     global_cursor += len(s)
 
-        # マスク対象（ページ・矩形・置換文字列）の構築
+        # マスク対象（ページ・矩形）の構築
         redactions: List[Dict[str, Any]] = []
 
         def _normalize_entity_key(name: str) -> str:
@@ -470,12 +470,6 @@ class PipelineService:
                 out.append([min(xs0), min(ys0), max(xs1), max(ys1)])
             return out
 
-        def _mask_text_with_question(text: str) -> str:
-            """テキストを?置換する（空白は維持）"""
-            s = str(text or "")
-            masked = "".join("?" if not ch.isspace() else ch for ch in s).strip()
-            return masked if masked else "?"
-
         with fitz.open(str(pdf_path)) as doc:
             locator = PDFTextLocator(doc)
 
@@ -486,7 +480,6 @@ class PipelineService:
                 start_pos = detect_item.get("start", {})
                 end_pos = detect_item.get("end", {})
                 entity_type = detect_item.get("entity", "PII")
-                text = detect_item.get("word", "")
 
                 if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
                     continue
@@ -556,8 +549,7 @@ class PipelineService:
                         line_rects_items = []
 
                 if line_rects_items:
-                    replacement_text = _mask_text_with_question(text)
-                    for idx, item in enumerate(line_rects_items):
+                    for item in line_rects_items:
                         rect_info = item.get("rect", {})
                         try:
                             x0 = float(rect_info["x0"])
@@ -572,12 +564,11 @@ class PipelineService:
                             {
                                 "page_num": int(item.get("page_num", page_num)),
                                 "rect": [x0, y0, x1, y1],
-                                "replace_text": replacement_text if idx == 0 else "?",
                                 "entity_type": _normalize_entity_key(entity_type),
                             }
                         )
 
-        # PDFに黒塗り + ?置換を適用
+        # PDFに黒塗りを適用
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with fitz.open(str(pdf_path)) as out_doc:
             redaction_count = 0
@@ -597,19 +588,7 @@ class PipelineService:
                     if (not rect) or rect.width <= 0 or rect.height <= 0:
                         continue
 
-                    replace_text = item.get("replace_text") or "?"
-                    try:
-                        page.add_redact_annot(
-                            rect,
-                            text=replace_text,
-                            fill=(0, 0, 0),        # 黒塗り
-                            text_color=(1, 1, 1),  # 置換文字は白
-                            fontsize=8,
-                            align=0,
-                        )
-                    except TypeError:
-                        # 互換: 古いPyMuPDFでは一部引数が使えない
-                        page.add_redact_annot(rect, text=replace_text, fill=(0, 0, 0))
+                    page.add_redact_annot(rect, fill=(0, 0, 0))
                     redaction_count += 1
 
                 # 追加したredactionをこのページへ反映

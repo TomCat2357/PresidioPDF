@@ -8,7 +8,7 @@ Phase 4: 編集UI
 - テーブル選択時のシグナル発行
 """
 
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -183,6 +183,8 @@ class ResultPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.entities: List[Dict] = []  # 現在表示中のエンティティリスト
+        self._sort_column: Optional[int] = None
+        self._sort_ascending: bool = True
         self.init_ui()
 
     def init_ui(self):
@@ -218,6 +220,10 @@ class ResultPanel(QWidget):
         self.results_table.customContextMenuRequested.connect(self.show_context_menu)
         self.results_table.itemSelectionChanged.connect(self.on_selection_changed)
         self.results_table.itemDoubleClicked.connect(self.edit_selected)
+        header = self.results_table.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self.on_header_clicked)
+        header.setSortIndicatorShown(False)
 
         layout.addWidget(self.results_table)
 
@@ -236,11 +242,12 @@ class ResultPanel(QWidget):
         if not isinstance(detect_list, list):
             detect_list = []
 
-        self.entities = detect_list
+        self.entities = list(detect_list)
         self.update_table()
 
     def update_table(self):
         """テーブル表示を更新（1始まりで表示）"""
+        self._apply_sort()
         self.results_table.setRowCount(len(self.entities))
 
         for i, entity in enumerate(self.entities):
@@ -272,7 +279,7 @@ class ResultPanel(QWidget):
             self.results_table.setItem(i, 4, QTableWidgetItem(position_str))
 
             # 手動追加フラグ
-            is_manual = entity.get("manual", False)
+            is_manual = self._is_manual_entity(entity)
             manual_str = "✓" if is_manual else ""
             self.results_table.setItem(i, 5, QTableWidgetItem(manual_str))
 
@@ -281,6 +288,89 @@ class ResultPanel(QWidget):
 
         # カウント更新
         self.count_label.setText(f"{len(self.entities)}件")
+
+        # ソート状態のインジケータを更新
+        header = self.results_table.horizontalHeader()
+        if self._sort_column is None:
+            header.setSortIndicatorShown(False)
+        else:
+            header.setSortIndicatorShown(True)
+            order = (
+                Qt.SortOrder.AscendingOrder
+                if self._sort_ascending
+                else Qt.SortOrder.DescendingOrder
+            )
+            header.setSortIndicator(self._sort_column, order)
+
+    def on_header_clicked(self, column: int):
+        """ヘッダークリックでソート順を切り替える"""
+        if self._sort_column == column:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column = column
+            self._sort_ascending = True
+
+        self.update_table()
+
+    def _apply_sort(self):
+        """現在のソート状態に従って entities を並べ替える"""
+        if self._sort_column is None:
+            return
+        self.entities.sort(
+            key=lambda entity: self._entity_sort_key(entity, self._sort_column),
+            reverse=not self._sort_ascending,
+        )
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        """値を整数へ安全に変換する"""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _is_manual_entity(entity: Dict) -> bool:
+        """手動追加項目かどうかを判定"""
+        if not isinstance(entity, dict):
+            return False
+        if entity.get("manual") is True:
+            return True
+        return str(entity.get("origin", "")).lower() == "manual"
+
+    @classmethod
+    def _entity_sort_key(cls, entity: Dict, column: int):
+        """列に応じたソートキーを返す"""
+        if not isinstance(entity, dict):
+            return ()
+
+        start_pos = entity.get("start", {})
+        end_pos = entity.get("end", {})
+        if not isinstance(start_pos, dict):
+            start_pos = {}
+        if not isinstance(end_pos, dict):
+            end_pos = {}
+
+        page_num = cls._safe_int(start_pos.get("page_num", 0))
+        block_num = cls._safe_int(start_pos.get("block_num", 0))
+        offset = cls._safe_int(start_pos.get("offset", 0))
+        end_page_num = cls._safe_int(end_pos.get("page_num", page_num))
+        end_block_num = cls._safe_int(end_pos.get("block_num", block_num))
+        end_offset = cls._safe_int(end_pos.get("offset", offset))
+
+        if column == 0:
+            return (page_num, block_num, offset)
+        if column == 1:
+            return str(entity.get("entity", "")).lower()
+        if column == 2:
+            return str(entity.get("word", "")).lower()
+        if column == 3:
+            return str(entity.get("origin", "")).lower()
+        if column == 4:
+            return (page_num, block_num, offset, end_page_num, end_block_num, end_offset)
+        if column == 5:
+            return 1 if cls._is_manual_entity(entity) else 0
+        return str(entity)
 
     def show_context_menu(self, pos):
         """コンテキストメニューを表示"""

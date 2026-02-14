@@ -17,6 +17,7 @@ import logging
 import json
 import copy
 import shutil
+import fitz
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from PyQt6.QtWidgets import (
@@ -42,14 +43,10 @@ from ..services.pipeline_service import PipelineService
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
 
-# CLIモジュールからdump_jsonをインポート
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from cli.common import dump_json
-
 
 class MainWindow(QMainWindow):
     """メインウィンドウクラス"""
+    EMBEDDED_MAPPING_FILENAME = "presidiopdf_mapping.json"
 
     def __init__(self, app_state: AppState):
         super().__init__()
@@ -90,7 +87,7 @@ class MainWindow(QMainWindow):
 
         # 開く
         open_action = QAction("開く", self)
-        open_action.setStatusTip("PDFファイルを開く（マッピングがあれば自動読込）")
+        open_action.setStatusTip("PDFファイルを開く（埋め込みマッピングがあれば自動読込）")
         open_action.triggered.connect(self.on_open_pdf)
         toolbar.addAction(open_action)
 
@@ -106,15 +103,16 @@ class MainWindow(QMainWindow):
         toolbar.addAction(detect_action)
         self.detect_action = detect_action
 
-        # Duplicate（内部的に保持、ツールバーには非表示）
-        duplicate_action = QAction("🔄 Duplicate", self)
+        # Duplicate（ツールバー表示）
+        duplicate_action = QAction("重複削除", self)
         duplicate_action.setStatusTip("重複する検出結果を処理")
         duplicate_action.triggered.connect(self.on_duplicate)
+        toolbar.addAction(duplicate_action)
         self.duplicate_action = duplicate_action
 
         # 保存（PDF + JSONマッピング）
         save_action = QAction("保存", self)
-        save_action.setStatusTip("PDFとJSONマッピングを保存")
+        save_action.setStatusTip("PDFへJSONマッピングを埋め込んで保存")
         save_action.triggered.connect(self.on_save)
         toolbar.addAction(save_action)
         self.save_action = save_action
@@ -217,7 +215,7 @@ class MainWindow(QMainWindow):
     # =========================================================================
 
     def on_open_pdf(self):
-        """PDFファイルを開く（マッピングがあれば復元、なければRead自動実行）"""
+        """PDFファイルを開く（埋め込みマッピングがあれば復元、なければRead自動実行）"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "PDFファイルを選択",
@@ -234,9 +232,9 @@ class MainWindow(QMainWindow):
             self.log_message(f"PDFファイルを選択: {file_path}")
             self.update_action_states()
 
-            # sidecarのマッピングJSONを優先して復元
+            # PDF埋め込みマッピングがあれば復元
             if self._load_mapping_for_pdf(Path(file_path)):
-                self.log_message("JSONマッピングを読み込みました")
+                self.log_message("PDF埋め込みマッピングを読み込みました")
                 self.update_action_states()
                 return
 
@@ -386,7 +384,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "エラー", error_msg)
 
     def on_save(self):
-        """保存処理（PDF + JSONマッピング）"""
+        """保存処理（PDFへJSONマッピング埋め込み）"""
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
             return
@@ -419,17 +417,17 @@ class MainWindow(QMainWindow):
             # 1) PDF保存
             shutil.copy2(self.app_state.pdf_path, out_pdf)
 
-            # 2) JSONマッピング保存（sidecar）
-            sidecar_path = self._get_mapping_path_for_pdf(out_pdf)
+            # 2) JSONマッピングをPDFへ埋め込み
             mapping_payload = self._build_mapping_payload(out_pdf)
-            dump_json(mapping_payload, str(sidecar_path), pretty=True)
+            if not self._embed_mapping_into_pdf(out_pdf, mapping_payload):
+                raise RuntimeError("PDFへのマッピング埋め込みに失敗しました")
 
             self.log_message(f"保存完了: {out_pdf}")
-            self.log_message(f"マッピング保存完了: {sidecar_path}")
+            self.log_message("埋め込みマッピング保存完了")
             QMessageBox.information(
                 self,
                 "完了",
-                f"保存しました:\n{out_pdf}\n\nマッピング:\n{sidecar_path}"
+                f"保存しました（埋め込みマッピング）:\n{out_pdf}"
             )
 
         except Exception as e:
@@ -587,7 +585,11 @@ class MainWindow(QMainWindow):
         self._update_app_state_from_result_panel()
 
         # プレビューエンティティも再構築
-        current_result = self.app_state.duplicate_result or self.app_state.detect_result
+        current_result = (
+            self.app_state.duplicate_result
+            or self.app_state.detect_result
+            or self.app_state.read_result
+        )
         if current_result:
             self._highlight_all_entities(current_result)
 
@@ -600,6 +602,15 @@ class MainWindow(QMainWindow):
         # AppStateの結果を更新
         self._update_app_state_from_result_panel()
 
+        # プレビューエンティティも再構築
+        current_result = (
+            self.app_state.duplicate_result
+            or self.app_state.detect_result
+            or self.app_state.read_result
+        )
+        if current_result:
+            self._highlight_all_entities(current_result)
+
     def on_entity_added(self, entity: dict):
         """エンティティが追加された"""
         text = entity.get("word", "")
@@ -610,7 +621,11 @@ class MainWindow(QMainWindow):
         self._update_app_state_from_result_panel()
 
         # プレビューを再描画
-        current_result = self.app_state.duplicate_result or self.app_state.detect_result
+        current_result = (
+            self.app_state.duplicate_result
+            or self.app_state.detect_result
+            or self.app_state.read_result
+        )
         if current_result:
             self._highlight_all_entities(current_result)
 
@@ -806,16 +821,24 @@ class MainWindow(QMainWindow):
     def _update_app_state_from_result_panel(self):
         """ResultPanelの内容でAppStateを更新"""
         entities = self.result_panel.get_entities()
+        if not isinstance(entities, list):
+            entities = []
+        updated_detect = copy.deepcopy(entities)
 
         # duplicate結果がある場合はそちらを優先
         if self.app_state.has_duplicate_result():
-            result = self.app_state.duplicate_result.copy()
-            result["detect"] = entities
+            result = copy.deepcopy(self.app_state.duplicate_result or {})
+            result["detect"] = updated_detect
             self.app_state.duplicate_result = result
         elif self.app_state.has_detect_result():
-            result = self.app_state.detect_result.copy()
-            result["detect"] = entities
+            result = copy.deepcopy(self.app_state.detect_result or {})
+            result["detect"] = updated_detect
             self.app_state.detect_result = result
+        elif self.app_state.has_read_result():
+            # Detect前の手動マークもread_resultへ保持して即時反映する
+            result = copy.deepcopy(self.app_state.read_result or {})
+            result["detect"] = updated_detect
+            self.app_state.read_result = result
 
     @staticmethod
     def _is_manual_entity(entity: Any) -> bool:
@@ -901,10 +924,6 @@ class MainWindow(QMainWindow):
     # ユーティリティ
     # =========================================================================
 
-    def _get_mapping_path_for_pdf(self, pdf_path: Path) -> Path:
-        """保存済みPDFに対応するsidecar JSONパスを返す"""
-        return pdf_path.with_name(f"{pdf_path.stem}_mapping.json")
-
     def _retarget_result_pdf_path(self, result: Optional[dict], pdf_path: Path) -> Optional[dict]:
         """結果JSON内のmetadata.pdf.pathを保存先PDFに付け替える"""
         if not isinstance(result, dict):
@@ -934,15 +953,43 @@ class MainWindow(QMainWindow):
             "duplicate_result": duplicate_result,
         }
 
-    def _load_mapping_for_pdf(self, pdf_path: Path) -> bool:
-        """PDFのsidecar JSONマッピングを読み込んで状態を復元"""
-        mapping_path = self._get_mapping_path_for_pdf(pdf_path)
-        if not mapping_path.exists():
+    def _embed_mapping_into_pdf(self, pdf_path: Path, payload: dict) -> bool:
+        """マッピングJSONをPDF埋め込みファイルとして保存"""
+        temp_path = pdf_path.with_suffix(pdf_path.suffix + ".tmp")
+        try:
+            json_data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            with fitz.open(str(pdf_path)) as doc:
+                embedded_files = doc.embfile_names()
+                if self.EMBEDDED_MAPPING_FILENAME in embedded_files:
+                    doc.embfile_del(self.EMBEDDED_MAPPING_FILENAME)
+                doc.embfile_add(
+                    self.EMBEDDED_MAPPING_FILENAME,
+                    json_data,
+                    filename=self.EMBEDDED_MAPPING_FILENAME,
+                )
+                doc.save(str(temp_path), garbage=4, deflate=True, clean=True)
+
+            temp_path.replace(pdf_path)
+            return True
+        except Exception as e:
+            self.log_message(f"マッピング埋め込みに失敗: {e}")
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except Exception:
+                pass
             return False
 
+    def _load_mapping_for_pdf(self, pdf_path: Path) -> bool:
+        """PDFの埋め込みJSONマッピングを読み込んで状態を復元"""
         try:
-            with open(mapping_path, "r", encoding="utf-8") as f:
-                payload = json.load(f)
+            with fitz.open(str(pdf_path)) as doc:
+                embedded_files = doc.embfile_names()
+                if self.EMBEDDED_MAPPING_FILENAME not in embedded_files:
+                    return False
+                payload_raw = doc.embfile_get(self.EMBEDDED_MAPPING_FILENAME)
+
+            payload = json.loads(payload_raw.decode("utf-8"))
 
             if not isinstance(payload, dict):
                 return False
@@ -962,7 +1009,7 @@ class MainWindow(QMainWindow):
             self.app_state.duplicate_result = self._retarget_result_pdf_path(duplicate_result, pdf_path)
             return True
         except Exception as e:
-            self.log_message(f"マッピング読込に失敗: {mapping_path} ({e})")
+            self.log_message(f"埋め込みマッピング読込に失敗: {pdf_path} ({e})")
             return False
 
     def log_message(self, message: str):
