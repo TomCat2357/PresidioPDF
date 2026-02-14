@@ -519,22 +519,11 @@ class MainWindow(QMainWindow):
                     start_pos, end_pos, offset2coords
                 )
 
-            # 後方互換: rect_pdfも保持
-            rect_pdf = entity.get("rect_pdf")
-            if not rect_pdf and rects_pdf:
-                # 全rects_pdfの外接矩形をrect_pdfとして保持（ヒットテスト用）
-                x0 = min(r[0] for r in rects_pdf)
-                y0 = min(r[1] for r in rects_pdf)
-                x1 = max(r[2] for r in rects_pdf)
-                y1 = max(r[3] for r in rects_pdf)
-                rect_pdf = [x0, y0, x1, y1]
-
             preview_entity = {
                 "page_num": page_num,
                 "page": page_num,
                 "entity_type": entity.get("entity", ""),
                 "text": entity.get("word", ""),
-                "rect_pdf": rect_pdf,
                 "rects_pdf": rects_pdf,
                 "is_selected": False,
                 "block_num": start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0,

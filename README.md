@@ -1,446 +1,79 @@
 Presidio PDF — Japanese PII detection and masking for PDFs
 
-Overview
-- Detects Japanese PII (names, locations, dates, phone numbers, MyNumber, etc.) in PDF files using spaCy + Presidio.
-- Masks detected entities by adding annotations/highlights to PDFs (PyMuPDF).
-- Exports results as JSON (coordinates or text offsets) or as a highlighted PDF.
-- Provides both CLI and Web UI interfaces with advanced features.
+## Overview
+- 日本語PDFの個人情報(PII)を検出し、ハイライト注釈でマスキングします。
+- 実行インターフェースは **CUI** と **PyQt GUI** のみです。
+- 中核処理は `read -> detect -> duplicate -> mask` の分割コマンドで構成されています。
 
-Requirements
-- Python >= 3.11
-- Dependencies managed via `uv` package manager
-- Japanese spaCy model: `ja_core_news_sm` (default). Larger models available with optional dependencies.
+## Requirements
+- Python `>=3.11,<3.13`
+- `uv` による依存管理
 
-Install
-Using `uv` (recommended):
+## Install
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd presidio-pdf
 
-# Install with default dependencies (CPU mode)
+# 基本(CUI)依存
 uv sync
 
-# Install with optional dependencies
-uv sync --extra dev        # Development tools
-uv sync --extra gpu        # GPU-optimized models (ja_core_news_md, ja_core_news_lg)
-uv sync --extra web        # Web application dependencies
-uv sync --extra gui        # Desktop GUI dependencies
-uv sync --extra minimal    # Minimal installation
+# PyQt GUIを使う場合
+uv sync --extra gui
+
+# 開発用
+uv sync --extra dev
 ```
 
-Note: This project exclusively uses `uv` for dependency management. Do not use `pip`.
+## CUI Usage
 
-CLI Usage
+### Command entrypoints
+- `codex-read`
+- `codex-detect`
+- `codex-duplicate-process`
+- `codex-mask`
+- `codex-run-config`
 
-Breaking change (Aug 2025)
-- All CLI `--config` options are removed. CLI commands no longer read YAML config files directly.
-- Meta command added: run a YAML config to orchestrate `read/detect/duplicate/mask/embed` in sequence.
-  - Run: `uv run python -m src.cli.run_config_main <config.yml>`
-  - Config format: `steps: [{op: "read", options: {pdf: "...", out: "..."}}, ...]`
-This project provides both a legacy subcommand CLI and split commands. Prefer the split commands for piping and tooling.
+上記は `uv run <entrypoint>` で実行できます。  
+モジュール実行 (`uv run python -m src.cli.*`) も利用可能です。
 
-CLI commands
-- `uv run python -m src.cli.read_main`: Read a PDF and output JSON with text and coordinate mapping data.
-- `uv run python -m src.cli.detect_main`: Read the JSON from read_main and produce PII detections JSON in specification format.
-- `uv run python -m src.cli.duplicate_main`: De-duplicate detections JSON with configurable overlap/keep policies including entity-aware processing.
-- `uv run python -m src.cli.mask_main`: Apply highlight annotations to the PDF using detections JSON with optional coordinate map embedding.
-- `uv run python -m src.cli.embed_main`: Embed coordinate mapping data into PDF documents.
-- `uv run python -m src.cli.run_config_main`: Meta command to run read/detect/duplicate/mask/embed in sequence from YAML config.
-
-Legacy aggregated CLI (deprecated)
-- `presidio-cli <subcommand>` remains available for backward compatibility but is deprecated. Use the split commands above.
-
-Common options
-- `-v, --verbose`            Increase verbosity (repeatable)
-- `--quiet`                  Suppress non-critical output
-- `--config PATH`            YAML config path (default: `config/config.yaml`)
-
-read (src.cli.read_main)
+### Basic pipeline
 ```bash
-# Read a PDF into JSON (specification format: text as 2D array, optional coordinate maps)
+# 1) PDFを読み取り
 uv run python -m src.cli.read_main --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-map
 
-# Read with embedded coordinate maps from processed PDFs
-uv run python -m src.cli.read_main --pdf processed.pdf --out outputs/read.json --pretty --with-map
-
-# Read existing highlights from PDF
-uv run python -m src.cli.read_main --pdf test_pdfs/sample.pdf --out outputs/read.json --pretty --with-highlights
-```
-
-Options:
-- `--with-map/--no-map`: Include coordinate mapping data (default: True)
-- `--with-highlights`: Include existing PDF highlights in detect field
-
-Notes (highlights mapping):
-- `--with-highlights` で出力される `detect` の各項目は、ページごとのブロックプレーンテキスト（2D配列: `text[page][block]`）に対して `word` を文字列検索して得た位置に基づき、`start/end` を `{page_num, block_num, offset}` で出力します。
-- ページ番号・ブロック番号・オフセットはいずれも 0 始まりです（例: 最初のページ=0、最初のブロック=0）。
-- 該当するテキストが見つからないハイライトは出力しません（ダミーの `0,0,0` は出力しない仕様）。
-- デバッグには `--log-level DEBUG` を指定してください（進捗・座標マップ生成の詳細が stderr に出ます）。
-
-detect (src.cli.detect_main)
-```bash
-# Detect from read JSON; writes detections in specification format (page_num/block_num/offset)
+# 2) PII検出
 uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --pretty
 
-# Include existing detections from read result
-uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --with-predetect
-
-# Exclude existing detections (replace mode)
-uv run python -m src.cli.detect_main -j outputs/read.json --out outputs/detect.json --no-predetect
-```
-
-Options:
-- `--with-predetect/--no-predetect`: Include existing detect information from input (default: True)
-
-Detect additions and exclusions
-- Additional entities via regex and global exclude regex are supported.
-- Priority of detections: Addition > Exclude > Auto (model)
-- When running detect, only the `detect` section in YAML is read; other command sections are ignored.
-
-CLI examples
-```bash
-# Add regex-based detections per entity (multiple --add allowed)
-uv run python -m src.cli.detect_main -j outputs/read.json \
-  --add person:"田中.*" \
-  --add location:"(渋谷|新宿)" \
-  --out outputs/detect.json --pretty
-
-# Add and exclude (exclude applies only to auto/model results)
-uv run python -m src.cli.detect_main -j outputs/read.json \
-  --exclude "株式会社.*" \
-  --add person:"田中太郎" \
-  --out outputs/detect.json --pretty
-```
-
-duplicate (src.cli.duplicate_main)
-```bash
-# Basic duplicate processing
+# 3) 重複整理
 uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/deduped.json --pretty
 
-# Entity-aware duplicate processing (same entity types only)
-uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/deduped.json \
-  --entity-overlap-mode same --pretty
-
-# Cross-entity duplicate processing (different entity types can be duplicates)
-uv run python -m src.cli.duplicate_main -j outputs/detect.json --out outputs/deduped.json \
-  --entity-overlap-mode any --pretty
+# 4) マスキング
+uv run python -m src.cli.mask_main --pdf test_pdfs/sample.pdf -j outputs/deduped.json --out outputs/masked.pdf
 ```
 
-Options:
-- `--entity-overlap-mode`: Control entity type consideration in duplicate processing
-  - `same`: Only same entity types are considered for overlap (default)
-  - `any`: Different entity types can also be considered for overlap
-
-mask (src.cli.mask_main)
+### Run from YAML config
 ```bash
-# Basic PDF masking
-uv run python -m src.cli.mask_main --pdf input.pdf -j outputs/detect.json --out masked.pdf
-
-# Embed coordinate maps in output PDF
-uv run python -m src.cli.mask_main --pdf input.pdf -j outputs/detect.json --out masked.pdf \
-  --embed-coordinates
-
-# Read embedded coordinate maps from the masked PDF
-uv run python -m src.cli.read_main --pdf masked.pdf --out extracted.json --with-map
+uv run python -m src.cli.run_config_main config/sample_run.yaml
 ```
 
-Options:
-- `--embed-coordinates/--no-embed-coordinates`: Embed coordinate mapping data in output PDF (default: False)
-- `--mask <ENTITY>=<color>[@alpha]` (repeatable): Set highlight color and opacity per entity.
-  - ENTITY: case-insensitive; internally uppercased. `ADDRESS` is an alias of `LOCATION`.
-  - color: one of `#RGB`, `#RRGGBB`, `#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)`, or a small set of CSS color names (e.g., `red`, `yellow`, `royalblue`).
-  - alpha: 0..1. If omitted, defaults to `0.4`. If `rgba(...)` includes alpha, that takes precedence.
-
-Examples (color/opacity customization)
+## PyQt GUI Usage
 ```bash
-# Per-entity highlight color and opacity (CLI)
-uv run python -m src.cli.mask_main \
-  --pdf input.pdf -j outputs/detect.json --out masked.pdf \
-  --mask PERSON=#FF0040@0.35 \
-  --mask LOCATION=yellow@0.2
+uv sync --extra gui
+uv run presidio-gui
 ```
 
-YAML (run_config_main)
-```yaml
-steps:
-  - op: "mask"
-    options:
-      pdf: "input.pdf"
-      json: "outputs/detect.json"
-      out: "masked.pdf"
-      masks:
-        - "PERSON=#FF0040@0.35"
-        - "LOCATION=yellow@0.2"
-```
+## Optional dependencies
+- `dev`: pytest / black / mypy など
+- `gpu`: 大規模日本語モデル・GPU関連
+- `minimal`: 最小構成
+- `gui`: PyQt GUI関連
 
-Annotation behavior (Aug 2025 update)
-- Multi-line entities (e.g., names broken across line wraps) are masked as a single highlight annotation composed of multiple quads (C approach). This keeps one logical detection as one annotation while visually covering each line segment.
-- Annotation metadata:
-  - `title`: stores `origin` of the detection (one of `auto`, `manual`, `custom`).
-  - `content`: stores `detect_word:"...",entity_type:"TYPE"`. Line breaks and control characters are removed from `detect_word` (e.g., `田中太\n郎` becomes `田中太郎`).
-  - `creationDate`/`modDate`: set to the current time in PDF date format `D:YYYYMMDDHHmmSS`.
-  - `name`: not set.
-
-Pipeline example (PERSON only)
+## Test
 ```bash
-# 1) Read PDF → JSON with coordinate maps
-uv run python -m src.cli.read_main --pdf test_pdfs/b1.pdf --out tmp/b1_read.json --pretty --with-map
-
-# 2) Detect PERSON only
-uv run python -m src.cli.detect_main -j tmp/b1_read.json --out tmp/b1_detect.json --entity PERSON --pretty
-
-# 3) Mask PDF (adds highlight annotations per detection)
-#    If you see a hash mismatch error, add --force
-uv run python -m src.cli.mask_main --pdf test_pdfs/b1.pdf -j tmp/b1_detect.json --out tmp/b1_masked.pdf --force
+uv run pytest
 ```
 
-Notes
-- Depending on the PyMuPDF version and PDF viewers, a multi-quad highlight annotation may appear as a single-quad when read back programmatically. The metadata (`title`, `content`, `creationDate`) remains embedded and can be relied upon to recover `origin`, `detect_word`, and `entity_type`.
-
-embed (embed_main.py)
-```bash
-# Embed coordinate maps from JSON into PDF
-uv run python -m src.cli.embed_main --pdf input.pdf -j outputs/read.json --out embedded.pdf
-
-# Force embedding even if hash mismatch
-uv run python -m src.cli.embed_main --pdf input.pdf -j outputs/read.json --out embedded.pdf --force
-```
-
-Options:
-- `--pdf`: Input PDF file path (required)
-- `-j, --json`: JSON file containing coordinate mapping data (required) 
-- `--out`: Output PDF path (required)
-- `--config`: Configuration file path (optional)
-- `--force`: Force embedding even if PDF hash doesn't match JSON metadata
-
-YAML (detect section; read-only)
-```yaml
-detect:
-  - pdf: hogehoge   # placeholder, not used by detect
-  - entities:
-      - person: "田中太郎"
-      - person: "田中健吾"
-  - exclude:
-      - "株式会社.*"
-      - "\\d{4}-\\d{2}-\\d{2}"
-```
-Notes
-- Allowed entity keys (lowercase): person, location, date_time, phone_number, individual_number, year, proper_noun
-- Unknown entity names or invalid regex cause an error and non-zero exit
-
-JSON Output Format
-
-The new specification uses a simplified JSON format:
-
-**read output:**
-```json
-{
-  "metadata": {
-    "pdf": {
-      "filename": "document.pdf",
-      "path": "/absolute/path/to/document.pdf",
-      "size": 12345,
-      "page_count": 3,
-      "sha256": "abc123...",
-      "created_at": "2023-01-01T00:00:00",
-      "modified_at": "2023-01-01T00:00:00"
-    },
-    "generated_at": "2023-01-01T00:00:00Z"
-  },
-  "text": [
-    ["page0_block0_text", "page0_block1_text"],
-    ["page1_block0_text", "page1_block1_text"],
-    ["page2_block0_text"]
-  ],
-  "detect": [
-    {
-      "start": {"page_num": 0, "block_num": 0, "offset": 5},
-      "end": {"page_num": 0, "block_num": 0, "offset": 8},
-      "entity": "PERSON",
-      "word": "田中太郎",
-      "origin": "manual"
-    }
-  ],
-  "offset2coordsMap": {
-    "0": {
-      "0": [[100, 200, 150, 220], [160, 200, 200, 220]]
-    }
-  },
-  "coords2offsetMap": {
-    "(100,200,150,220)": "(0,0,0)",
-    "(160,200,200,220)": "(0,0,4)"
-  }
-}
-```
-
-**detect output:**
-```json
-{
-  "metadata": { /* same as read */ },
-  "detect": [
-    {
-      "start": {"page_num": 0, "block_num": 0, "offset": 5},
-      "end": {"page_num": 0, "block_num": 0, "offset": 8},
-      "entity": "PERSON",
-      "word": "田中太郎", 
-      "origin": "auto"
-    }
-  ],
-  "offset2coordsMap": { /* inherited from read */ },
-  "coords2offsetMap": { /* inherited from read */ }
-}
-```
-
-Key changes:
-- `text`: 2D array format `[["block1", "block2"], ["page2_block1"]]`
-- `detect`: Flat array with `start`/`end` as `{page_num, block_num, offset}` objects
-- `offset2coordsMap`: Maps page/block positions to coordinate arrays
-- `coords2offsetMap`: Maps coordinates to position tuples
-
-Legacy duplicate-process (src.cli.duplicate_main)
-```bash
-# De-duplicate detections with overlap/keep policies  
-# Overlap modes: exact (完全一致), contain (包含), overlap (一部重なり; default)
-# Keep policies: widest (範囲最大; default), first, last, entity-order
-uv run python -m src.cli.duplicate_main \
-  -j outputs/detect.json \
-  --overlap overlap \
-  --keep widest \
-  --out outputs/detect_dedup.json --pretty
-
-# Entity-priority example
-uv run python -m src.cli.duplicate_main \
-  -j outputs/detect.json \
-  --overlap overlap \
-  --keep entity-order \
-  --entity-priority PERSON,EMAIL,PHONE \
-  --out outputs/detect_dedup.json --pretty
-```
-
-Advanced tie-break (multi-criteria)
-- You can precisely control which detection is kept when overlapping.
-- Criteria: origin (manual > addition > auto), length (long/short), entity (custom order), position (first/last)
-
-CLI examples
-```bash
-uv run python -m src.cli.duplicate_main \
-  --detect outputs/detect.json \
-  --overlap overlap \
-  --tie-break origin,length,entity,position \
-  --origin-priority manual,addition,auto \
-  --length-pref long \
-  --position-pref first \
-  --entity-order INDIVIDUAL_NUMBER,PHONE_NUMBER,PERSON,LOCATION,DATE_TIME,YEAR,PROPER_NOUN \
-  --out outputs/detect_dedup.json --pretty
-```
-
-YAML (duplicate_process section; read-only)
-```yaml
-duplicate_process:
-  - tie_break: ["origin", "length", "entity", "position"]
-  - origin_priority: ["manual", "addition", "auto"]
-  - length: "long"
-  - position: "first"
-  - entity_order: ["INDIVIDUAL_NUMBER", "PHONE_NUMBER", "PERSON", "LOCATION", "DATE_TIME", "YEAR", "PROPER_NOUN"]
-```
-
-mask (src.cli.mask_main)
-```bash
-# Add highlight annotations to the PDF from detections JSON
-uv run python -m src.cli.mask_main --pdf test_pdfs/sample.pdf -j outputs/detect_dedup.json --out outputs/sample_annotated.pdf
-```
-
-Notes
-- Offsets in `detect` are Unicode codepoint-based (no-newline variant used for mapping).
-- Structured detection quads are in PDF user units (points).
-- The previous single-command flags (e.g., `--export-mode`, `--read-mode`, `--restore-mode`, etc.) have been removed.
-- `--validate` performs basic schema checks. For detections, each structured `quad` must be a 4-number array `[x0, y0, x1, y1]` and `page >= 1`.
-
-Migration guide (legacy → split)
-- `uv run presidio-cli read ...` → `uv run python -m src.cli.read_main ...`
-- `uv run presidio-cli detect ...` → `uv run python -m src.cli.detect_main ...`
-- `uv run presidio-cli duplicate-process ...` → `uv run python -m src.cli.duplicate_main ...`
-- `uv run presidio-cli mask ...` → `uv run python -m src.cli.mask_main ...`
-
-JSON Schemas (concise)
-- `read` output
-  - `schema_version: string`, `generated_at: RFC3339-Z`
-  - `source: { filename, path, size, page_count, sha256, created_at, modified_at }`
-  - `content:`
-    - `highlight: Array<object>` existing PDF annotations (page/rect/info)
-    - `plain_text: string|null` single string without newlines used for offset mapping
-    - `structured_text: { pages: [ { page: number, blocks: [ { lines: [ { spans: [ { text, bbox } ] } ] } ] } ] }`
-
-- `detect` output
-  - `schema_version: string`, `generated_at: RFC3339-Z`
-  - `source: { pdf: { sha256 }, read_json_sha256 }`
-  - `detections:`
-    - `plain: [ { detection_id, text, entity, start, end, unit:"codepoint", origin:"model", model_id?, confidence? } ]`
-    - `structured: [ { detection_id, text, entity, page, quads: [ [x0,y0,x1,y1], ... ], origin:"model", model_id?, confidence? } ]`
-  - `highlights?: Array<object>` passthrough of `read.content.highlight` when `--append-highlights`
-
-Troubleshooting
-- Mask hash mismatch: `src.cli.mask_main ...` fails with sha256 mismatch
-  - Ensure the PDF used for `mask` matches the PDF in `read`/`detect`. Use `--force` to override (not recommended).
-- Missing `source.path` in detect input
-  - Use the `read` subcommand’s output as input to `detect`. It includes absolute `source.path`.
-- spaCy model errors
-  - Install `ja_core_news_sm` via the project’s `uv sync`. For larger models, install extras (gpu) as needed.
-- Large PDFs or timeouts
-  - Detection runs in-memory; very large PDFs can be slow. Consider splitting the document or running on a machine with more memory/CPU.
-
-Web UI
-Launch the web application:
-```bash
-# Start web server (CPU mode, default port 5000)
-uv run python src/web_main.py
-
-# Start with GPU support
-uv run python src/web_main.py --gpu
-
-# Custom host and port
-uv run python src/web_main.py --host 127.0.0.1 --port 8080 --debug
-```
-
-Web UI Features:
-- **PDF Upload**: Drag-and-drop or click to upload PDF files (up to 50MB)
-- **Model Selection**: Choose from ja_core_news_sm/md/lg/trf models
-- **Entity Configuration**: Enable/disable detection for specific entity types
-- **Advanced Settings**:
-  - Masking method (highlight/annotation/both)
-  - Text display mode (silent/minimal/verbose)
-  - Deduplication settings
-- **Pattern Management**:
-  - Exclusion patterns: Regex patterns to exclude from detection
-  - Additional patterns: Custom regex rules per entity type
-- **Manual Editing**: Add/remove PII entities directly in the PDF viewer
-- **Export Options**: Download masked PDFs with highlights/annotations
-
-Web UI Options:
-- `--gpu`               Enable GPU mode with NVIDIA CUDA support
-- `--host HOST`         Server host address (default: 0.0.0.0)
-- `--port PORT`         Server port number (default: 5000)
-- `--debug`             Enable debug mode with auto-reload
-
-Configuration
-- Default configuration: `config/config.yaml`
-- Template configuration: `config/config_template.yaml`
-- Test configuration: `config/test_config.yaml`
-- Command-line options override YAML settings
-- Web UI settings are session-based and override both CLI and YAML
-- spaCy model defaults to `ja_core_news_sm`; larger models available with `--extra gpu`
-
-Optional Dependencies
-- **dev**: Development tools (pytest, black, mypy, playwright)
-- **gpu**: High-accuracy models (ja_core_news_md/lg, torch, pandas)
-- **minimal**: Lightweight installation with basic functionality
-- **web**: Web application dependencies (Flask, requests)
-- **gui**: Desktop GUI dependencies (FreeSimpleGUI, Pillow)
-
-Notes
-- This project uses `uv` exclusively for dependency management
-- For offline environments, ensure spaCy model wheels are pre-installed
-- Web UI provides additional features not available in CLI mode
-- CLI commands: Run via `uv run python -m src.cli.*_main` modules
-- Web UI: Run via `uv run python src/web_main.py`
+## Notes
+- 依存管理は `uv` を使用してください。
+- CUIコマンドの詳細は `--help` で確認できます。
+  - 例: `uv run python -m src.cli.detect_main --help`

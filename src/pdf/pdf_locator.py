@@ -334,61 +334,6 @@ class PDFTextLocator:
             )
             return []
 
-    def locate_pii_by_offset_no_newlines_legacy(
-        self, start_offset: int, end_offset: int
-    ) -> List[fitz.Rect]:
-        """
-        後方互換性のための旧形式メソッド - 矩形のみを返す
-
-        Args:
-            start_offset: 開始オフセット（改行なしテキスト基準）
-            end_offset: 終了オフセット（改行なしテキスト基準）
-
-        Returns:
-            List[fitz.Rect]: 座標矩形リスト（改行を跨ぐ場合は複数）
-        """
-        rect_data = self.locate_pii_by_offset_no_newlines(start_offset, end_offset)
-        return [item["rect"] for item in rect_data]
-
-    # 後方互換性のためのメソッド
-    def locate_pii_by_offset(self, start: int, end: int) -> List[fitz.Rect]:
-        """
-        後方互換性のためのメソッド
-        従来のフルテキストオフセットから座標を取得
-        """
-        try:
-            if start < 0 or end > len(self.char_data) or start >= end:
-                return []
-
-            target_chars = self.char_data[start:end]
-
-            lines = {}
-            for char_info in target_chars:
-                page_num = char_info["page_num"]
-                line_num = char_info["line_num"]
-                key = (page_num, line_num)
-
-                if key not in lines:
-                    lines[key] = []
-
-                rect = char_info.get("rect")
-                if rect:
-                    lines[key].append(rect)
-
-            final_rects = []
-            for line_rects in lines.values():
-                if line_rects:
-                    combined_rect = line_rects[0]
-                    for rect in line_rects[1:]:
-                        combined_rect = combined_rect + rect
-                    final_rects.append(combined_rect)
-
-            return final_rects
-
-        except Exception as e:
-            logger.error(f"後方互換locate_pii_by_offsetエラー: {e}")
-            return []
-
     def get_pii_line_rects(
         self, start_offset: int, end_offset: int
     ) -> List[Dict[str, Any]]:

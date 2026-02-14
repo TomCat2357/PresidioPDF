@@ -226,12 +226,6 @@ class PDFPreviewWidget(QWidget):
             if rects:
                 return rects
 
-        # フォールバック: rect_pdf（単一矩形）
-        rect_pdf = entity.get("rect_pdf")
-        if rect_pdf and isinstance(rect_pdf, (list, tuple)) and len(rect_pdf) == 4:
-            x0, y0, x1, y1 = rect_pdf
-            return [[x0 * scale, y0 * scale, x1 * scale, y1 * scale]]
-
         # フォールバック: coordinates
         coords = entity.get("coordinates")
         if coords and isinstance(coords, dict):

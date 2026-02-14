@@ -126,9 +126,8 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
 @click.option("--with-predetect/--no-predetect", default=True, help="入力のdetect情報を含める（旧--highlights-merge append相当）")
-@click.option("--use", type=click.Choice(["plain", "structured", "both", "auto"]), default="auto", help="互換オプション（新仕様では常にフラットdetect出力）。動作には影響しません")
 @click.option("--entity", "entities_csv", type=str, help="検出するエンティティ（CSV例: 'PERSON,ADDRESS'。未指定=全エンティティ）")
-def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, validate: bool, with_predetect: bool, use: str, entities_csv: Optional[str]):
+def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, validate: bool, with_predetect: bool, entities_csv: Optional[str]):
     # ファイル存在確認
     if json_file:
         validate_input_file_exists(json_file)
