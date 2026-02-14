@@ -7,7 +7,7 @@ name = "presidio-pdf"
 version = "0.1.0"
 description = "Japanese personal information detection and masking tool for PDF documents"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 # 最小限のデフォルト依存関係（CPUモード）
 dependencies = [
     # 基本的なCLI機能に必要な最小限のパッケージ
@@ -17,7 +17,7 @@ dependencies = [
     "PyMuPDF>=1.23.0",
     "PyYAML>=6.0",
     "numpy>=1.26.0",
-    "ja-core-news-sm",
+    # ja-core-news-sm は別途 python -m spacy download ja_core_news_sm でインストール
 ]
 
 [project.optional-dependencies]
@@ -26,6 +26,7 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
+    "pytest-qt>=4.2.0",
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
@@ -65,8 +66,18 @@ web = [
     "pdfplumber>=0.10.0",
 ]
 
-# GUI専用
+# GUI専用（PyQt6ベース）
 gui = [
+    "PyQt6>=6.6.0",
+    "PyQt6-Qt6>=6.6.0",
+    "Pillow>=10.0.0",
+    "pdf2image>=1.16.0",
+    "ginza>=5.2.0",
+    "ja-ginza>=5.2.0",
+]
+
+# 旧GUI（FreeSimpleGUI）- 非推奨
+gui-legacy = [
     "FreeSimpleGUI>=5.0.0",
     "Pillow>=10.0.0",
     "pdf2image>=1.16.0",
@@ -84,6 +95,9 @@ codex-run-config = "cli.run_config_main:main"
 
 # Web app
 presidio-web = "web.web_main:main"
+
+# PyQt GUI app
+presidio-gui = "gui_pyqt.main:main"
 
 
 [tool.setuptools.packages.find]

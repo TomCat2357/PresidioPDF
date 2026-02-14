@@ -1,0 +1,3 @@
+"""
+PresidioPDF PyQt - モデル層
+"""

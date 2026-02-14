@@ -2,7 +2,7 @@ import os
 import yaml
 import logging
 import re
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 from pathlib import Path
 import json
 
@@ -567,6 +567,23 @@ class ConfigManager:
             self.config["nlp"] = {}
         self.config["nlp"]["spacy_model"] = model_name
         logger.info(f"spaCyモデル設定を更新: {model_name}")
+
+    def get_models(self) -> Tuple[str, ...]:
+        """互換API: 利用候補モデルを優先順で返す"""
+        models: List[str] = []
+
+        primary = self.get_spacy_model()
+        if isinstance(primary, str) and primary:
+            models.append(primary)
+
+        for model in self.get_fallback_models():
+            if isinstance(model, str) and model and model not in models:
+                models.append(model)
+
+        if not models:
+            models = ["ja_core_news_sm", "ja_core_news_md"]
+
+        return tuple(models)
 
     def get_fallback_models(self) -> List[str]:
         """フォールバックモデルのリストを返す"""
