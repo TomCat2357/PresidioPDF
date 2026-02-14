@@ -14,6 +14,9 @@ Phase 4: 編集UI
 """
 
 import logging
+import json
+import copy
+import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from PyQt6.QtWidgets import (
@@ -38,6 +41,11 @@ from ..controllers.task_runner import TaskRunner
 from ..services.pipeline_service import PipelineService
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
+
+# CLIモジュールからdump_jsonをインポート
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from cli.common import dump_json
 
 
 class MainWindow(QMainWindow):
@@ -80,45 +88,47 @@ class MainWindow(QMainWindow):
 
         # アクションの定義
 
-        # PDFファイルを開く（Read自動実行）
-        open_action = QAction("📂 PDF選択", self)
-        open_action.setStatusTip("PDFファイルを選択して読み込み")
+        # 開く
+        open_action = QAction("開く", self)
+        open_action.setStatusTip("PDFファイルを開く（マッピングがあれば自動読込）")
         open_action.triggered.connect(self.on_open_pdf)
         toolbar.addAction(open_action)
-
-        toolbar.addSeparator()
 
         # Read（内部的に保持、ツールバーには非表示）
         read_action = QAction("📖 Read", self)
         read_action.triggered.connect(self.on_read)
         self.read_action = read_action
 
-        # Detect（PII検出）
-        detect_action = QAction("🔍 Detect", self)
+        # 検出
+        detect_action = QAction("検出", self)
         detect_action.setStatusTip("個人情報（PII）を検出")
         detect_action.triggered.connect(self.on_detect)
         toolbar.addAction(detect_action)
         self.detect_action = detect_action
 
-        # Duplicate（重複処理）
+        # Duplicate（内部的に保持、ツールバーには非表示）
         duplicate_action = QAction("🔄 Duplicate", self)
         duplicate_action.setStatusTip("重複する検出結果を処理")
         duplicate_action.triggered.connect(self.on_duplicate)
-        toolbar.addAction(duplicate_action)
         self.duplicate_action = duplicate_action
 
-        # Mask（マスキング）
-        mask_action = QAction("🎭 Mask", self)
-        mask_action.setStatusTip("検出結果をマスキング")
+        # 保存（PDF + JSONマッピング）
+        save_action = QAction("保存", self)
+        save_action.setStatusTip("PDFとJSONマッピングを保存")
+        save_action.triggered.connect(self.on_save)
+        toolbar.addAction(save_action)
+        self.save_action = save_action
+
+        # マスク
+        mask_action = QAction("マスク", self)
+        mask_action.setStatusTip("マーク部分をマスキングして保存")
         mask_action.triggered.connect(self.on_mask)
         toolbar.addAction(mask_action)
         self.mask_action = mask_action
 
-        toolbar.addSeparator()
-
-        # Export（エクスポート）
-        export_action = QAction("💾 Export", self)
-        export_action.setStatusTip("処理結果をエクスポート")
+        # エクスポート（PDFのみ）
+        export_action = QAction("エクスポート", self)
+        export_action.setStatusTip("JSONマッピングなしでPDFを保存")
         export_action.triggered.connect(self.on_export)
         toolbar.addAction(export_action)
         self.export_action = export_action
@@ -127,15 +137,11 @@ class MainWindow(QMainWindow):
         self.update_action_states()
 
     def create_central_widget(self):
-        """中央ウィジェットの作成（Phase 4: 3分割レイアウト）"""
-        # メイン水平スプリッター（3分割: PDF情報、プレビュー、検出結果）
+        """中央ウィジェットの作成（Phase 4: 2分割レイアウト）"""
+        # メイン水平スプリッター（2分割: プレビュー、検出結果）
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 左側パネル: PDF情報・ページ一覧
-        left_panel = self.create_left_panel()
-        main_splitter.addWidget(left_panel)
-
-        # 中央パネル: PDFプレビュー（Phase 4）
+        # 左側パネル: PDFプレビュー（Phase 4）
         self.pdf_preview = PDFPreviewWidget()
         main_splitter.addWidget(self.pdf_preview)
 
@@ -143,8 +149,8 @@ class MainWindow(QMainWindow):
         self.result_panel = ResultPanel()
         main_splitter.addWidget(self.result_panel)
 
-        # 分割比率（左:中央:右 = 1:2:2）
-        main_splitter.setSizes([300, 550, 550])
+        # 分割比率（プレビュー:検出結果 = 6:5）
+        main_splitter.setSizes([600, 500])
 
         # 全体の縦分割（メイン領域 + ログ領域）
         vertical_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -159,27 +165,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(vertical_splitter)
 
-    def create_left_panel(self) -> QWidget:
-        """左側パネル: PDF情報・ページ一覧"""
-        panel = QWidget()
-        layout = QVBoxLayout()
-
-        # PDFファイル情報
-        self.pdf_info_label = QLabel("PDFファイル: （未選択）")
-        self.pdf_info_label.setStyleSheet("padding: 5px; background-color: #f0f0f0;")
-        layout.addWidget(self.pdf_info_label)
-
-        # ページ一覧（将来の拡張用）
-        pages_label = QLabel("ページ一覧:")
-        layout.addWidget(pages_label)
-
-        self.pages_text = QTextEdit()
-        self.pages_text.setReadOnly(True)
-        self.pages_text.setPlaceholderText("PDFを読み込むとページ情報が表示されます")
-        layout.addWidget(self.pages_text)
-
-        panel.setLayout(layout)
-        return panel
 
     def create_log_panel(self) -> QWidget:
         """ログ/メッセージ表示パネル"""
@@ -221,16 +206,18 @@ class MainWindow(QMainWindow):
         self.result_panel.entity_selected.connect(self.on_entity_selected)
         self.result_panel.entity_deleted.connect(self.on_entity_deleted)
         self.result_panel.entity_updated.connect(self.on_entity_updated)
+        self.result_panel.entity_added.connect(self.on_entity_added)
 
         # PDFプレビューからの逆方向連携
         self.pdf_preview.entity_clicked.connect(self.on_preview_entity_clicked)
+        self.pdf_preview.text_selected.connect(self.on_text_selected)
 
     # =========================================================================
     # アクションハンドラー（Phase 1: スタブ実装）
     # =========================================================================
 
     def on_open_pdf(self):
-        """PDFファイルを開く（Read処理も自動実行）"""
+        """PDFファイルを開く（マッピングがあれば復元、なければRead自動実行）"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "PDFファイルを選択",
@@ -240,9 +227,20 @@ class MainWindow(QMainWindow):
 
         if file_path:
             self.app_state.pdf_path = Path(file_path)
+            # PDF切り替え時は前回結果をクリア
+            self.app_state.read_result = None
+            self.app_state.detect_result = None
+            self.app_state.duplicate_result = None
             self.log_message(f"PDFファイルを選択: {file_path}")
             self.update_action_states()
-            # Read処理を自動実行
+
+            # sidecarのマッピングJSONを優先して復元
+            if self._load_mapping_for_pdf(Path(file_path)):
+                self.log_message("JSONマッピングを読み込みました")
+                self.update_action_states()
+                return
+
+            # マッピングがない場合はRead処理を自動実行
             self._auto_read()
 
     def _auto_read(self):
@@ -286,11 +284,14 @@ class MainWindow(QMainWindow):
 
         self.log_message("Detect処理を開始...")
 
+        # 現在の結果一覧から手動マークを抽出し、再検出時も保持する
+        read_input = self._build_read_result_for_detect()
+
         # TaskRunnerで非同期実行
         self.current_task = "detect"
         self.task_runner.start_task(
             PipelineService.run_detect,
-            self.app_state.read_result
+            read_input
         )
 
     def on_duplicate(self):
@@ -352,9 +353,140 @@ class MainWindow(QMainWindow):
         )
 
     def on_export(self):
-        """Export処理（Phase 1: スタブ）"""
-        self.log_message("Export処理を開始（Phase 3で実装予定）...")
-        # Phase 3で実装
+        """Export処理（JSONマッピングなしのPDF保存）"""
+        if not self.app_state.has_pdf():
+            QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
+            return
+
+        # 保存先を選択
+        default_name = self.app_state.pdf_path.stem + "_export.pdf"
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "エクスポート先を選択",
+            default_name,
+            "PDF Files (*.pdf);;All Files (*)"
+        )
+
+        if not output_path:
+            return
+
+        try:
+            out_pdf = Path(output_path)
+            if out_pdf.suffix.lower() != ".pdf":
+                out_pdf = out_pdf.with_suffix(".pdf")
+
+            shutil.copy2(self.app_state.pdf_path, out_pdf)
+            self.log_message(f"エクスポート完了（PDFのみ）: {out_pdf}")
+            QMessageBox.information(self, "完了", f"エクスポートしました:\n{out_pdf}")
+
+        except Exception as e:
+            error_msg = f"Export処理中にエラーが発生しました: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "エラー", error_msg)
+
+    def on_save(self):
+        """保存処理（PDF + JSONマッピング）"""
+        if not self.app_state.has_pdf():
+            QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
+            return
+
+        default_name = self.app_state.pdf_path.stem + "_saved.pdf"
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "保存先を選択",
+            default_name,
+            "PDF Files (*.pdf);;All Files (*)"
+        )
+
+        if not output_path:
+            return
+
+        try:
+            # マッピング未生成時はreadを同期実行して補完
+            if not self.app_state.has_read_result():
+                self.log_message("Read結果がないため、マッピング生成を実行します...")
+                self.app_state.read_result = PipelineService.run_read(
+                    self.app_state.pdf_path,
+                    True,
+                )
+
+            out_pdf = Path(output_path)
+            if out_pdf.suffix.lower() != ".pdf":
+                out_pdf = out_pdf.with_suffix(".pdf")
+
+            # 1) PDF保存
+            shutil.copy2(self.app_state.pdf_path, out_pdf)
+
+            # 2) JSONマッピング保存（sidecar）
+            sidecar_path = self._get_mapping_path_for_pdf(out_pdf)
+            mapping_payload = self._build_mapping_payload(out_pdf)
+            dump_json(mapping_payload, str(sidecar_path), pretty=True)
+
+            self.log_message(f"保存完了: {out_pdf}")
+            self.log_message(f"マッピング保存完了: {sidecar_path}")
+            QMessageBox.information(
+                self,
+                "完了",
+                f"保存しました:\n{out_pdf}\n\nマッピング:\n{sidecar_path}"
+            )
+
+        except Exception as e:
+            error_msg = f"保存中にエラーが発生しました: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "エラー", error_msg)
+
+    def on_save_session(self):
+        """後方互換のエイリアス"""
+        self.on_save()
+
+    def on_load_session(self):
+        """セッション読込処理（保存したセッションの復元）"""
+        # 読込ファイルを選択
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "セッションファイルを選択",
+            "",
+            "JSON Files (*.json);;All Files (*)"
+        )
+
+        if not file_path:
+            return
+
+        try:
+            # JSONファイルを読み込み
+            with open(file_path, "r", encoding="utf-8") as f:
+                session_data = json.load(f)
+
+            # PDFパスを復元
+            pdf_path_str = session_data.get("pdf_path")
+            if pdf_path_str:
+                pdf_path = Path(pdf_path_str)
+                if pdf_path.exists():
+                    self.app_state.pdf_path = pdf_path
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "警告",
+                        f"PDFファイルが見つかりません:\n{pdf_path_str}\n\nセッションは読み込みますが、PDFプレビューは利用できません。"
+                    )
+
+            # 各結果を復元
+            self.app_state.read_result = session_data.get("read_result")
+            self.app_state.detect_result = session_data.get("detect_result")
+            self.app_state.duplicate_result = session_data.get("duplicate_result")
+
+            self.log_message(f"セッション読込完了: {file_path}")
+            QMessageBox.information(self, "完了", f"セッションを読み込みました:\n{file_path}")
+
+            # UI状態を更新
+            self.update_action_states()
+
+        except Exception as e:
+            error_msg = f"セッション読込中にエラーが発生しました: {str(e)}"
+            self.log_message(error_msg)
+            QMessageBox.critical(self, "エラー", error_msg)
 
     # =========================================================================
     # シグナルスロット
@@ -363,21 +495,21 @@ class MainWindow(QMainWindow):
     def on_pdf_path_changed(self, pdf_path: Optional[Path]):
         """PDFパスが変更された"""
         if pdf_path:
-            self.pdf_info_label.setText(f"PDFファイル: {pdf_path.name}")
+            self.statusBar().showMessage(f"PDFファイル: {pdf_path.name}")
             # Phase 4: PDFプレビューに読み込み
             self.pdf_preview.load_pdf(str(pdf_path))
         else:
-            self.pdf_info_label.setText("PDFファイル: （未選択）")
+            self.statusBar().showMessage("PDFファイル: （未選択）")
             self.pdf_preview.close_pdf()
 
     def on_read_result_changed(self, result: Optional[dict]):
         """Read結果が変更された"""
         if result:
-            # ページ情報を表示（Phase 2以降で詳細実装）
+            # ページ情報をステータスバーに表示
             metadata = result.get("metadata", {})
             pdf_info = metadata.get("pdf", {})
             page_count = pdf_info.get("page_count", 0)
-            self.pages_text.setText(f"ページ数: {page_count}")
+            self.statusBar().showMessage(f"ページ数: {page_count}")
 
             self.update_action_states()
 
@@ -449,7 +581,7 @@ class MainWindow(QMainWindow):
 
     def on_entity_deleted(self, index: int):
         """エンティティが削除された"""
-        self.log_message(f"エンティティ #{index} を削除しました")
+        self.log_message(f"エンティティ #{index + 1} を削除しました")
 
         # AppStateの結果を更新
         self._update_app_state_from_result_panel()
@@ -463,10 +595,29 @@ class MainWindow(QMainWindow):
         """エンティティが更新された"""
         entity_type = entity.get("entity", "")
         text = entity.get("word", "")
-        self.log_message(f"エンティティ #{index} を更新: {text} → {entity_type}")
+        self.log_message(f"エンティティ #{index + 1} を更新: {text} → {entity_type}")
 
         # AppStateの結果を更新
         self._update_app_state_from_result_panel()
+
+    def on_entity_added(self, entity: dict):
+        """エンティティが追加された"""
+        text = entity.get("word", "")
+        entity_type = entity.get("entity", "")
+        self.log_message(f"PII追加: {text} ({entity_type})")
+
+        # AppStateの結果を更新
+        self._update_app_state_from_result_panel()
+
+        # プレビューを再描画
+        current_result = self.app_state.duplicate_result or self.app_state.detect_result
+        if current_result:
+            self._highlight_all_entities(current_result)
+
+    def on_text_selected(self, selection_data: dict):
+        """PDFプレビューでテキストが選択された"""
+        # エンティティタイプ選択ダイアログを表示（位置情報は選択領域から自動設定）
+        self.result_panel.add_manual_entity(selection_data)
 
     def on_preview_entity_clicked(self, preview_index: int):
         """PDFプレビュー上のエンティティクリック→ResultPanelの該当行を選択"""
@@ -666,9 +817,153 @@ class MainWindow(QMainWindow):
             result["detect"] = entities
             self.app_state.detect_result = result
 
+    @staticmethod
+    def _is_manual_entity(entity: Any) -> bool:
+        """手動マークの判定"""
+        if not isinstance(entity, dict):
+            return False
+        if entity.get("manual") is True:
+            return True
+        return str(entity.get("origin", "")).lower() == "manual"
+
+    @staticmethod
+    def _entity_identity_key(entity: Dict[str, Any]) -> tuple:
+        """検出項目の同一性判定キー"""
+        start_pos = entity.get("start", {})
+        end_pos = entity.get("end", {})
+        if not isinstance(start_pos, dict):
+            start_pos = {}
+        if not isinstance(end_pos, dict):
+            end_pos = {}
+
+        return (
+            str(entity.get("word", "")),
+            str(entity.get("entity", "")),
+            int(start_pos.get("page_num", -1) or -1),
+            int(start_pos.get("block_num", -1) or -1),
+            int(start_pos.get("offset", -1) or -1),
+            int(end_pos.get("page_num", -1) or -1),
+            int(end_pos.get("block_num", -1) or -1),
+            int(end_pos.get("offset", -1) or -1),
+        )
+
+    def _build_read_result_for_detect(self) -> Dict[str, Any]:
+        """Detect入力用にread_resultへ手動マークを統合したコピーを返す"""
+        base_read = self.app_state.read_result or {}
+        if not isinstance(base_read, dict):
+            return {}
+
+        read_input = copy.deepcopy(base_read)
+        read_detect = read_input.get("detect", [])
+        if not isinstance(read_detect, list):
+            read_detect = []
+
+        # ResultPanelに表示中の手動マークだけを保持対象として抽出
+        current_entities = self.result_panel.get_entities()
+        manual_entities = []
+        if isinstance(current_entities, list):
+            for entity in current_entities:
+                if self._is_manual_entity(entity):
+                    manual_entities.append(copy.deepcopy(entity))
+
+        if not manual_entities:
+            read_input["detect"] = read_detect
+            return read_input
+
+        merged_detect = []
+        seen = set()
+
+        for entity in read_detect:
+            if not isinstance(entity, dict):
+                continue
+            key = self._entity_identity_key(entity)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_detect.append(entity)
+
+        added_count = 0
+        for entity in manual_entities:
+            key = self._entity_identity_key(entity)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_detect.append(entity)
+            added_count += 1
+
+        if added_count > 0:
+            self.log_message(f"手動マーク {added_count}件を保持してDetectを実行します")
+
+        read_input["detect"] = merged_detect
+        return read_input
+
     # =========================================================================
     # ユーティリティ
     # =========================================================================
+
+    def _get_mapping_path_for_pdf(self, pdf_path: Path) -> Path:
+        """保存済みPDFに対応するsidecar JSONパスを返す"""
+        return pdf_path.with_name(f"{pdf_path.stem}_mapping.json")
+
+    def _retarget_result_pdf_path(self, result: Optional[dict], pdf_path: Path) -> Optional[dict]:
+        """結果JSON内のmetadata.pdf.pathを保存先PDFに付け替える"""
+        if not isinstance(result, dict):
+            return result
+        out = copy.deepcopy(result)
+        metadata = out.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            out["metadata"] = metadata
+        pdf_meta = metadata.setdefault("pdf", {})
+        if not isinstance(pdf_meta, dict):
+            pdf_meta = {}
+            metadata["pdf"] = pdf_meta
+        pdf_meta["path"] = str(pdf_path.resolve())
+        return out
+
+    def _build_mapping_payload(self, saved_pdf_path: Path) -> dict:
+        """現在の状態から保存用マッピングJSONを構築"""
+        read_result = self._retarget_result_pdf_path(self.app_state.read_result, saved_pdf_path)
+        detect_result = self._retarget_result_pdf_path(self.app_state.detect_result, saved_pdf_path)
+        duplicate_result = self._retarget_result_pdf_path(self.app_state.duplicate_result, saved_pdf_path)
+
+        return {
+            "pdf_path": str(saved_pdf_path.resolve()),
+            "read_result": read_result,
+            "detect_result": detect_result,
+            "duplicate_result": duplicate_result,
+        }
+
+    def _load_mapping_for_pdf(self, pdf_path: Path) -> bool:
+        """PDFのsidecar JSONマッピングを読み込んで状態を復元"""
+        mapping_path = self._get_mapping_path_for_pdf(pdf_path)
+        if not mapping_path.exists():
+            return False
+
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            if not isinstance(payload, dict):
+                return False
+
+            if any(k in payload for k in ["read_result", "detect_result", "duplicate_result"]):
+                read_result = payload.get("read_result")
+                detect_result = payload.get("detect_result")
+                duplicate_result = payload.get("duplicate_result")
+            else:
+                # 互換: 旧フォーマット（単一結果JSON）
+                read_result = payload
+                detect_result = payload if payload.get("detect") else None
+                duplicate_result = None
+
+            self.app_state.read_result = self._retarget_result_pdf_path(read_result, pdf_path)
+            self.app_state.detect_result = self._retarget_result_pdf_path(detect_result, pdf_path)
+            self.app_state.duplicate_result = self._retarget_result_pdf_path(duplicate_result, pdf_path)
+            return True
+        except Exception as e:
+            self.log_message(f"マッピング読込に失敗: {mapping_path} ({e})")
+            return False
 
     def log_message(self, message: str):
         """ログメッセージを追加"""
@@ -693,8 +988,11 @@ class MainWindow(QMainWindow):
         self.duplicate_action.setEnabled(has_detect and not is_running)
         self.mask_action.setEnabled(has_detect and not is_running)
 
-        # Export: タスクが実行中でなければ有効
-        self.export_action.setEnabled(not is_running)
+        # Export: 何らかの結果があって、タスクが実行中でなければ有効
+        self.export_action.setEnabled(has_pdf and not is_running)
+
+        # Save: PDF + Read結果があり、タスクが実行中でなければ有効
+        self.save_action.setEnabled(has_pdf and has_read and not is_running)
 
     # =========================================================================
     # TaskRunnerシグナルハンドラ（Phase 2）
@@ -721,6 +1019,7 @@ class MainWindow(QMainWindow):
             self.log_message("Read処理が完了しました")
         elif self.current_task == "detect":
             self.app_state.detect_result = result
+            self.app_state.duplicate_result = None
             self.log_message("Detect処理が完了しました")
         elif self.current_task == "duplicate":
             self.app_state.duplicate_result = result

@@ -7,7 +7,7 @@ Phase 4: 編集UI
 - マウス操作によるページナビゲーション
 """
 
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import fitz  # PyMuPDF
 from PyQt6.QtWidgets import (
     QWidget,
@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRect
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor
 
 
@@ -27,6 +27,7 @@ class PDFPreviewWidget(QWidget):
     # シグナル定義
     page_changed = pyqtSignal(int)  # ページ番号が変更された
     entity_clicked = pyqtSignal(int)  # クリックされたエンティティのインデックス
+    text_selected = pyqtSignal(dict)  # テキストが選択された（手動PII追記用）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,6 +35,13 @@ class PDFPreviewWidget(QWidget):
         self.current_page_num: int = 0
         self.highlighted_entities: List[Dict] = []  # ハイライト表示するエンティティ
         self.zoom_level: float = 0.75
+
+        # ドラッグ選択用の状態
+        self.is_dragging: bool = False
+        self.drag_start_pos: Optional[tuple] = None
+        self.drag_current_pos: Optional[tuple] = None
+        self.drag_start_char_index: Optional[int] = None
+        self._page_chars_cache: Dict[int, List[Dict]] = {}
 
         self.init_ui()
 
@@ -93,7 +101,10 @@ class PDFPreviewWidget(QWidget):
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setText("PDFファイルを読み込んでください")
         self.preview_label.setStyleSheet("background-color: #e0e0e0; padding: 20px;")
-        self.preview_label.mousePressEvent = self._on_preview_click
+        self.preview_label.mousePressEvent = self._on_preview_mouse_press
+        self.preview_label.mouseMoveEvent = self._on_preview_mouse_move
+        self.preview_label.mouseReleaseEvent = self._on_preview_mouse_release
+        self.preview_label.setMouseTracking(False)  # ドラッグ中のみ追跡
 
         self.scroll_area.setWidget(self.preview_label)
         layout.addWidget(self.scroll_area)
@@ -109,6 +120,10 @@ class PDFPreviewWidget(QWidget):
             self.pdf_document = fitz.open(pdf_path)
             self.current_page_num = 0
             self.highlighted_entities = []
+            self._page_chars_cache = {}
+            self.drag_start_char_index = None
+            self.drag_start_pos = None
+            self.drag_current_pos = None
 
             self.update_preview()
             self.update_navigation_buttons()
@@ -282,11 +297,180 @@ class PDFPreviewWidget(QWidget):
             current = self.current_page_num + 1
             self.page_label.setText(f"ページ: {current}/{total}")
 
-    def _on_preview_click(self, event):
-        """プレビュー画像上のクリックでエンティティを特定"""
-        if not self.highlighted_entities:
-            return
+    def _view_to_pdf(self, view_x: float, view_y: float) -> Tuple[float, float]:
+        """ビュー座標をPDF座標へ変換"""
+        scale = max(self.zoom_level * 2, 1e-6)
+        return view_x / scale, view_y / scale
 
+    def _get_hit_tolerance_pdf(self, tolerance_px: float = 14.0) -> float:
+        """ヒット判定用の許容距離（PDF座標系）"""
+        scale = max(self.zoom_level * 2, 1e-6)
+        return tolerance_px / scale
+
+    def _get_page_chars(self, page_num: int) -> List[Dict]:
+        """ページの文字情報（rawdict）をキャッシュ付きで取得"""
+        if page_num in self._page_chars_cache:
+            return self._page_chars_cache[page_num]
+
+        if not self.pdf_document or page_num < 0 or page_num >= len(self.pdf_document):
+            return []
+
+        page = self.pdf_document[page_num]
+        rawdict = page.get_text("rawdict")
+
+        chars: List[Dict] = []
+        text_block_id = 0
+        for block in rawdict.get("blocks", []):
+            if "lines" not in block:
+                continue
+
+            block_offset = 0
+            for line_idx, line in enumerate(block.get("lines", [])):
+                for span in line.get("spans", []):
+                    for char_info in span.get("chars", []):
+                        ch = char_info.get("c", "")
+                        bbox = char_info.get("bbox")
+                        if not ch or not bbox or len(bbox) < 4:
+                            block_offset += 1
+                            continue
+
+                        chars.append(
+                            {
+                                "char": ch,
+                                "rect": fitz.Rect(bbox[:4]),
+                                "block_num": text_block_id,
+                                "line_num": line_idx,
+                                "offset": block_offset,
+                            }
+                        )
+                        block_offset += 1
+
+            text_block_id += 1
+
+        self._page_chars_cache[page_num] = chars
+        return chars
+
+    def _distance_sq_to_rect(self, x: float, y: float, rect: fitz.Rect) -> float:
+        """点と矩形の最短距離（二乗）"""
+        dx = 0.0
+        if x < rect.x0:
+            dx = rect.x0 - x
+        elif x > rect.x1:
+            dx = x - rect.x1
+
+        dy = 0.0
+        if y < rect.y0:
+            dy = rect.y0 - y
+        elif y > rect.y1:
+            dy = y - rect.y1
+
+        return dx * dx + dy * dy
+
+    def _find_char_index(
+        self,
+        page_chars: List[Dict],
+        pdf_x: float,
+        pdf_y: float,
+        max_distance: Optional[float] = None,
+    ) -> Optional[int]:
+        """座標に最も近い文字インデックスを返す"""
+        for i, item in enumerate(page_chars):
+            rect = item.get("rect")
+            if isinstance(rect, fitz.Rect) and rect.x0 <= pdf_x <= rect.x1 and rect.y0 <= pdf_y <= rect.y1:
+                return i
+
+        nearest_idx: Optional[int] = None
+        nearest_dist_sq: Optional[float] = None
+        for i, item in enumerate(page_chars):
+            rect = item.get("rect")
+            if not isinstance(rect, fitz.Rect):
+                continue
+            dist_sq = self._distance_sq_to_rect(pdf_x, pdf_y, rect)
+            if nearest_dist_sq is None or dist_sq < nearest_dist_sq:
+                nearest_dist_sq = dist_sq
+                nearest_idx = i
+
+        if nearest_idx is None:
+            return None
+        if max_distance is None:
+            return nearest_idx
+        if nearest_dist_sq is not None and nearest_dist_sq <= (max_distance * max_distance):
+            return nearest_idx
+        return None
+
+    def _find_drag_target_char_index(
+        self,
+        view_pos: Optional[tuple],
+        snap_nearest: bool = False,
+    ) -> Optional[int]:
+        """ドラッグ座標に対応する文字インデックスを返す"""
+        if not view_pos or not self.pdf_document:
+            return None
+
+        page_chars = self._get_page_chars(self.current_page_num)
+        if not page_chars:
+            return None
+
+        pdf_x, pdf_y = self._view_to_pdf(float(view_pos[0]), float(view_pos[1]))
+        max_distance = None if snap_nearest else self._get_hit_tolerance_pdf()
+        return self._find_char_index(page_chars, pdf_x, pdf_y, max_distance=max_distance)
+
+    def _build_selection_line_rects(self, chars: List[Dict]) -> List[list]:
+        """選択文字から行単位の矩形リストを生成"""
+        rects_by_line: Dict[tuple, List[fitz.Rect]] = {}
+        for item in chars:
+            rect = item.get("rect")
+            if not isinstance(rect, fitz.Rect):
+                continue
+            key = (int(item.get("block_num", 0)), int(item.get("line_num", 0)))
+            rects_by_line.setdefault(key, []).append(rect)
+
+        rects_pdf: List[list] = []
+        for line_rects in rects_by_line.values():
+            if not line_rects:
+                continue
+            rects_pdf.append(
+                [
+                    min(r.x0 for r in line_rects),
+                    min(r.y0 for r in line_rects),
+                    max(r.x1 for r in line_rects),
+                    max(r.y1 for r in line_rects),
+                ]
+            )
+        return rects_pdf
+
+    def _get_indices_from_drag_rect(self) -> Optional[Tuple[int, int]]:
+        """ドラッグ矩形に交差した文字の先頭/末尾インデックスを返す（フォールバック）"""
+        if not self.drag_start_pos or not self.drag_current_pos:
+            return None
+
+        page_chars = self._get_page_chars(self.current_page_num)
+        if not page_chars:
+            return None
+
+        x1, y1 = self.drag_start_pos
+        x2, y2 = self.drag_current_pos
+        pdf_x1, pdf_y1 = self._view_to_pdf(x1, y1)
+        pdf_x2, pdf_y2 = self._view_to_pdf(x2, y2)
+        clip_rect = fitz.Rect(
+            min(pdf_x1, pdf_x2),
+            min(pdf_y1, pdf_y2),
+            max(pdf_x1, pdf_x2),
+            max(pdf_y1, pdf_y2),
+        )
+
+        hit_indices: List[int] = []
+        for i, item in enumerate(page_chars):
+            rect = item.get("rect")
+            if isinstance(rect, fitz.Rect) and rect.intersects(clip_rect):
+                hit_indices.append(i)
+
+        if not hit_indices:
+            return None
+        return min(hit_indices), max(hit_indices)
+
+    def _on_preview_mouse_press(self, event):
+        """プレビュー画像上のマウス押下（ドラッグ開始またはエンティティクリック）"""
         # ラベル内のPixmapオフセットを計算（中央揃えによるずれを補正）
         pixmap = self.preview_label.pixmap()
         if pixmap is None or pixmap.isNull():
@@ -307,6 +491,83 @@ class PDFPreviewWidget(QWidget):
         if click_x < 0 or click_y < 0 or click_x > pixmap_w or click_y > pixmap_h:
             return
 
+        # テキスト上以外ではドラッグを開始しない（クリック判定のみ）
+        if not self._is_text_hit(click_x, click_y):
+            self._handle_entity_click(click_x, click_y)
+            return
+
+        # ドラッグ開始
+        self.is_dragging = True
+        self.drag_start_pos = (click_x, click_y)
+        self.drag_current_pos = (click_x, click_y)
+        self.drag_start_char_index = self._find_drag_target_char_index(
+            self.drag_start_pos, snap_nearest=False
+        )
+
+    def _on_preview_mouse_move(self, event):
+        """プレビュー画像上のマウス移動（ドラッグ中）"""
+        if not self.is_dragging:
+            return
+
+        pixmap = self.preview_label.pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+
+        label_w = self.preview_label.width()
+        label_h = self.preview_label.height()
+        pixmap_w = pixmap.width()
+        pixmap_h = pixmap.height()
+
+        offset_x = max((label_w - pixmap_w) / 2, 0)
+        offset_y = max((label_h - pixmap_h) / 2, 0)
+
+        current_x = event.position().x() - offset_x
+        current_y = event.position().y() - offset_y
+
+        # Pixmap範囲内に制限
+        current_x = max(0, min(current_x, pixmap_w))
+        current_y = max(0, min(current_y, pixmap_h))
+
+        self.drag_current_pos = (current_x, current_y)
+
+        # 選択矩形をオーバーレイ描画
+        self._draw_selection_overlay()
+
+    def _on_preview_mouse_release(self, event):
+        """プレビュー画像上のマウスリリース（ドラッグ終了）"""
+        if not self.is_dragging:
+            return
+
+        self.is_dragging = False
+
+        # ドラッグ範囲が小さい場合はエンティティクリックとして処理
+        if self.drag_start_pos and self.drag_current_pos:
+            dx = abs(self.drag_current_pos[0] - self.drag_start_pos[0])
+            dy = abs(self.drag_current_pos[1] - self.drag_start_pos[1])
+
+            if dx < 5 and dy < 5:
+                # クリックとして処理
+                self._handle_entity_click(self.drag_start_pos[0], self.drag_start_pos[1])
+                self.drag_start_pos = None
+                self.drag_current_pos = None
+                self.drag_start_char_index = None
+                self.update_preview()
+                return
+
+        # ドラッグ範囲からテキストを抽出
+        self._extract_selected_text()
+
+        # ドラッグ状態をリセット
+        self.drag_start_pos = None
+        self.drag_current_pos = None
+        self.drag_start_char_index = None
+        self.update_preview()
+
+    def _handle_entity_click(self, click_x: float, click_y: float):
+        """エンティティクリック処理"""
+        if not self.highlighted_entities:
+            return
+
         scale = self.zoom_level * 2
 
         for i, entity in enumerate(self.highlighted_entities):
@@ -320,6 +581,171 @@ class PDFPreviewWidget(QWidget):
                 if rect[0] <= click_x <= rect[2] and rect[1] <= click_y <= rect[3]:
                     self.entity_clicked.emit(i)
                     return
+
+    def _draw_selection_overlay(self):
+        """選択矩形をオーバーレイ描画"""
+        if not self.drag_start_pos or not self.drag_current_pos:
+            return
+
+        # 現在のプレビューを再描画
+        self.update_preview()
+
+        # 選択矩形を追加描画
+        pixmap = self.preview_label.pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        drew_text_overlay = False
+        scale = self.zoom_level * 2
+
+        if self.drag_start_char_index is not None:
+            page_chars = self._get_page_chars(self.current_page_num)
+            end_char_index = self._find_drag_target_char_index(
+                self.drag_current_pos, snap_nearest=True
+            )
+
+            if (
+                end_char_index is None
+                and page_chars
+                and 0 <= self.drag_start_char_index < len(page_chars)
+            ):
+                end_char_index = self.drag_start_char_index
+
+            if end_char_index is not None and page_chars:
+                start_idx = max(0, min(self.drag_start_char_index, len(page_chars) - 1))
+                end_idx = max(0, min(end_char_index, len(page_chars) - 1))
+                lo, hi = (start_idx, end_idx) if start_idx <= end_idx else (end_idx, start_idx)
+
+                selected_chars = page_chars[lo:hi + 1]
+                line_rects_pdf = self._build_selection_line_rects(selected_chars)
+                if line_rects_pdf:
+                    painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.SolidLine))
+                    painter.setBrush(QColor(0, 120, 215, 50))
+                    for r in line_rects_pdf:
+                        painter.drawRect(
+                            int(r[0] * scale),
+                            int(r[1] * scale),
+                            int((r[2] - r[0]) * scale),
+                            int((r[3] - r[1]) * scale),
+                        )
+                    drew_text_overlay = True
+
+        if not drew_text_overlay:
+            # フォールバック: 選択矩形
+            x1, y1 = self.drag_start_pos
+            x2, y2 = self.drag_current_pos
+            x_min, x_max = (x1, x2) if x1 < x2 else (x2, x1)
+            y_min, y_max = (y1, y2) if y1 < y2 else (y2, y1)
+
+            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.SolidLine))
+            painter.setBrush(QColor(0, 120, 215, 50))
+            painter.drawRect(int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
+
+        painter.end()
+        self.preview_label.setPixmap(pixmap)
+
+    def _extract_selected_text(self):
+        """選択範囲からテキストを抽出してシグナル発行"""
+        if not self.pdf_document or not self.drag_start_pos or not self.drag_current_pos:
+            return
+
+        try:
+            page_chars = self._get_page_chars(self.current_page_num)
+            if not page_chars:
+                return
+
+            start_char_index = self.drag_start_char_index
+            end_char_index = self._find_drag_target_char_index(
+                self.drag_current_pos, snap_nearest=True
+            )
+
+            if start_char_index is None:
+                drag_indices = self._get_indices_from_drag_rect()
+                if not drag_indices:
+                    return
+                start_char_index, end_char_index = drag_indices
+            elif end_char_index is None:
+                drag_indices = self._get_indices_from_drag_rect()
+                if drag_indices:
+                    _, end_char_index = drag_indices
+                else:
+                    end_char_index = start_char_index
+
+            start_char_index = max(0, min(int(start_char_index), len(page_chars) - 1))
+            end_char_index = max(0, min(int(end_char_index), len(page_chars) - 1))
+            lo, hi = (
+                (start_char_index, end_char_index)
+                if start_char_index <= end_char_index
+                else (end_char_index, start_char_index)
+            )
+            selected_chars = page_chars[lo:hi + 1]
+            if not selected_chars:
+                return
+
+            # 先頭・末尾の空白を除去し、位置情報を同期
+            start_idx = 0
+            end_idx = len(selected_chars) - 1
+            while start_idx <= end_idx and str(selected_chars[start_idx]["char"]).isspace():
+                start_idx += 1
+            while end_idx >= start_idx and str(selected_chars[end_idx]["char"]).isspace():
+                end_idx -= 1
+            if start_idx > end_idx:
+                return
+
+            trimmed_chars = selected_chars[start_idx:end_idx + 1]
+            selected_text = "".join(str(c["char"]) for c in trimmed_chars)
+            if not selected_text.strip():
+                return
+
+            first_char = trimmed_chars[0]
+            last_char = trimmed_chars[-1]
+
+            # 行単位の矩形（ハイライト描画用）
+            rects_pdf = self._build_selection_line_rects(trimmed_chars)
+
+            selection_data = {
+                "text": selected_text,
+                "start": {
+                    "page_num": self.current_page_num,
+                    "block_num": int(first_char["block_num"]),
+                    "offset": int(first_char["offset"]),
+                },
+                "end": {
+                    "page_num": self.current_page_num,
+                    "block_num": int(last_char["block_num"]),
+                    "offset": int(last_char["offset"]),
+                },
+                # 互換用フィールド
+                "page_num": self.current_page_num,
+                "block_num": int(first_char["block_num"]),
+                "offset": int(first_char["offset"]),
+                "end_offset": int(last_char["offset"]),
+                "rects_pdf": rects_pdf,
+            }
+            self.text_selected.emit(selection_data)
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"テキスト抽出エラー: {e}")
+
+    def _is_text_hit(self, view_x: float, view_y: float) -> bool:
+        """ビュー座標がテキスト領域上かを判定"""
+        if not self.pdf_document:
+            return False
+
+        try:
+            return (
+                self._find_drag_target_char_index(
+                    (float(view_x), float(view_y)),
+                    snap_nearest=False,
+                )
+                is not None
+            )
+        except Exception:
+            return False
 
     def zoom_in(self):
         """ズームイン"""
@@ -355,6 +781,10 @@ class PDFPreviewWidget(QWidget):
         if self.pdf_document:
             self.pdf_document.close()
             self.pdf_document = None
+            self._page_chars_cache = {}
+            self.drag_start_char_index = None
+            self.drag_start_pos = None
+            self.drag_current_pos = None
             self.preview_label.clear()
             self.preview_label.setText("PDFファイルを読み込んでください")
             self.update_navigation_buttons()

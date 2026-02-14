@@ -394,7 +394,6 @@ class PipelineService:
 
         import fitz
         from src.pdf.pdf_locator import PDFTextLocator
-        from src.pdf.pdf_masker import PDFMasker
 
         # 入力検証
         if not isinstance(detect_result, dict):
@@ -404,8 +403,6 @@ class PipelineService:
         if not Path(pdf_path).exists():
             logger.error(f"入力PDFファイルが見つかりません: {pdf_path}")
             raise FileNotFoundError(f"PDFファイルが見つかりません: {pdf_path}")
-
-        cfg = ConfigManager()
 
         # detect配列を取得
         detect_list = detect_result.get("detect", [])
@@ -428,8 +425,8 @@ class PipelineService:
                     block_start_global[(p, b)] = global_cursor
                     global_cursor += len(s)
 
-        # エンティティリストの構築
-        entities = []
+        # マスク対象（ページ・矩形・置換文字列）の構築
+        redactions: List[Dict[str, Any]] = []
 
         def _normalize_entity_key(name: str) -> str:
             n = str(name or "").strip()
@@ -472,6 +469,12 @@ class PipelineService:
                 ys1 = [rr[3] for rr in grp]
                 out.append([min(xs0), min(ys0), max(xs1), max(ys1)])
             return out
+
+        def _mask_text_with_question(text: str) -> str:
+            """テキストを?置換する（空白は維持）"""
+            s = str(text or "")
+            masked = "".join("?" if not ch.isspace() else ch for ch in s).strip()
+            return masked if masked else "?"
 
         with fitz.open(str(pdf_path)) as doc:
             locator = PDFTextLocator(doc)
@@ -553,46 +556,66 @@ class PipelineService:
                         line_rects_items = []
 
                 if line_rects_items:
-                    origin = str(detect_item.get("origin", "auto"))
-                    ent_u = _normalize_entity_key(entity_type)
-
-                    entity_dict = {
-                        "entity_type": ent_u,
-                        "text": text,
-                        "origin": origin,
-                        "join_as_quads": True,
-                        "line_rects": [
+                    replacement_text = _mask_text_with_question(text)
+                    for idx, item in enumerate(line_rects_items):
+                        rect_info = item.get("rect", {})
+                        try:
+                            x0 = float(rect_info["x0"])
+                            y0 = float(rect_info["y0"])
+                            x1 = float(rect_info["x1"])
+                            y1 = float(rect_info["y1"])
+                        except Exception:
+                            continue
+                        if x1 <= x0 or y1 <= y0:
+                            continue
+                        redactions.append(
                             {
-                                "rect": {
-                                    "x0": float(item["rect"]["x0"]),
-                                    "y0": float(item["rect"]["y0"]),
-                                    "x1": float(item["rect"]["x1"]),
-                                    "y1": float(item["rect"]["y1"]),
-                                },
                                 "page_num": int(item.get("page_num", page_num)),
+                                "rect": [x0, y0, x1, y1],
+                                "replace_text": replacement_text if idx == 0 else "?",
+                                "entity_type": _normalize_entity_key(entity_type),
                             }
-                            for item in line_rects_items
-                        ],
-                    }
+                        )
 
-                    # マスクスタイルの適用
-                    if mask_styles and ent_u in mask_styles:
-                        style = mask_styles[ent_u]
-                        entity_dict["mask_rgb"] = [style["r"], style["g"], style["b"]]
-                        entity_dict["mask_alpha"] = style["a"]
-
-                    entities.append(entity_dict)
-
-        # PDFにマスキングを適用
-        masker = PDFMasker(cfg)
+        # PDFに黒塗り + ?置換を適用
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        with fitz.open(str(pdf_path)) as out_doc:
+            redaction_count = 0
 
-        # 元のPDFを出力先にコピー
-        with open(str(pdf_path), "rb") as r, open(str(output_path), "wb") as w:
-            w.write(r.read())
+            # ページ単位でredactionを追加・適用
+            redactions_by_page: Dict[int, List[Dict[str, Any]]] = {}
+            for item in redactions:
+                redactions_by_page.setdefault(int(item["page_num"]), []).append(item)
 
-        # ハイライト注釈を追加
-        masker._apply_highlight_masking_with_mode(str(output_path), entities, cfg.get_operation_mode())
+            for page_num, page_redactions in redactions_by_page.items():
+                if page_num < 0 or page_num >= len(out_doc):
+                    continue
+                page = out_doc[page_num]
+
+                for item in page_redactions:
+                    rect = fitz.Rect(item["rect"]) & page.rect
+                    if (not rect) or rect.width <= 0 or rect.height <= 0:
+                        continue
+
+                    replace_text = item.get("replace_text") or "?"
+                    try:
+                        page.add_redact_annot(
+                            rect,
+                            text=replace_text,
+                            fill=(0, 0, 0),        # 黒塗り
+                            text_color=(1, 1, 1),  # 置換文字は白
+                            fontsize=8,
+                            align=0,
+                        )
+                    except TypeError:
+                        # 互換: 古いPyMuPDFでは一部引数が使えない
+                        page.add_redact_annot(rect, text=replace_text, fill=(0, 0, 0))
+                    redaction_count += 1
+
+                # 追加したredactionをこのページへ反映
+                page.apply_redactions()
+
+            out_doc.save(str(output_path), garbage=4, deflate=True, clean=True)
 
         # 座標マップの埋め込み
         if embed_coordinates:
@@ -608,9 +631,9 @@ class PipelineService:
                 logger.warning(f"座標マップの埋め込みに失敗")
                 pass
 
-        logger.info(f"run_mask完了: {len(entities)} 件のマスキング")
+        logger.info(f"run_mask完了: {redaction_count} 件のマスキング")
         return {
             "output_path": str(output_path),
-            "entity_count": len(entities),
+            "entity_count": redaction_count,
             "success": True,
         }

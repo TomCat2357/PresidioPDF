@@ -28,6 +28,94 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 
 
+class ManualAddDialog(QDialog):
+    """手動PII追記ダイアログ"""
+
+    def __init__(self, preset_data: Optional[Dict] = None, parent=None):
+        super().__init__(parent)
+        self.preset_data = preset_data or {}
+        self.init_ui()
+
+    def init_ui(self):
+        """UIの初期化"""
+        self.setWindowTitle("エンティティ追加")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+
+        layout = QFormLayout()
+
+        # 選択テキスト（読み取り専用）
+        preset_text = str(self.preset_data.get("text", "") or "")
+        self.text_label = QLabel(preset_text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addRow("選択テキスト:", self.text_label)
+
+        # エンティティタイプの選択
+        self.entity_type_combo = QComboBox()
+        entity_types = [
+            "PERSON",
+            "LOCATION",
+            "DATE_TIME",
+            "PHONE_NUMBER",
+            "INDIVIDUAL_NUMBER",
+            "YEAR",
+            "PROPER_NOUN",
+            "OTHER",
+        ]
+        self.entity_type_combo.addItems(entity_types)
+        layout.addRow("エンティティタイプ:", self.entity_type_combo)
+
+        # ボタン
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addRow(button_box)
+
+        self.setLayout(layout)
+
+    def get_entity_data(self) -> Dict:
+        """入力されたエンティティデータを取得"""
+        text = str(self.preset_data.get("text", "") or "").strip()
+        entity_type = self.entity_type_combo.currentText()
+        if not text:
+            return {}
+
+        # プリセットにstart/endがあればそれを優先。無ければ旧形式から補完。
+        start_pos = self.preset_data.get("start")
+        end_pos = self.preset_data.get("end")
+        if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
+            page_num = int(self.preset_data.get("page_num", 0) or 0)
+            block_num = int(self.preset_data.get("block_num", 0) or 0)
+            offset = int(self.preset_data.get("offset", 0) or 0)
+            start_pos = {"page_num": page_num, "block_num": block_num, "offset": offset}
+            end_pos = {
+                "page_num": page_num,
+                "block_num": block_num,
+                "offset": offset + max(len(text) - 1, 0),
+            }
+
+        entity = {
+            "word": text,
+            "entity": entity_type,
+            "start": start_pos,
+            "end": end_pos,
+            "origin": "manual",
+            "manual": True,
+        }
+
+        # プリセットから rects_pdf を取得（存在する場合）
+        rects_pdf = self.preset_data.get("rects_pdf")
+        if rects_pdf:
+            entity["rects_pdf"] = rects_pdf
+
+        return entity
+
+
 class EntityEditDialog(QDialog):
     """エンティティ編集ダイアログ"""
 
@@ -90,6 +178,7 @@ class ResultPanel(QWidget):
     entity_selected = pyqtSignal(list)  # 選択されたエンティティ（複数）
     entity_deleted = pyqtSignal(int)  # 削除されたエンティティのインデックス
     entity_updated = pyqtSignal(int, dict)  # 更新されたエンティティ（インデックス、新しいデータ）
+    entity_added = pyqtSignal(dict)  # 追加されたエンティティ
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,7 +199,6 @@ class ResultPanel(QWidget):
         header_layout.addWidget(self.count_label)
         header_layout.addStretch()
 
-        # 操作ボタン
         self.delete_button = QPushButton("🗑 選択を削除")
         self.delete_button.clicked.connect(self.delete_selected)
         self.delete_button.setEnabled(False)
@@ -152,14 +240,14 @@ class ResultPanel(QWidget):
         self.update_table()
 
     def update_table(self):
-        """テーブル表示を更新"""
+        """テーブル表示を更新（1始まりで表示）"""
         self.results_table.setRowCount(len(self.entities))
 
         for i, entity in enumerate(self.entities):
-            # ページ番号
+            # ページ番号（1始まりで表示）
             start_pos = entity.get("start", {})
-            page_num = start_pos.get("page_num", "") if isinstance(start_pos, dict) else ""
-            self.results_table.setItem(i, 0, QTableWidgetItem(str(page_num)))
+            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            self.results_table.setItem(i, 0, QTableWidgetItem(str(page_num + 1)))
 
             # エンティティタイプ
             entity_type = entity.get("entity", "")
@@ -173,10 +261,12 @@ class ResultPanel(QWidget):
             origin = entity.get("origin", "")
             self.results_table.setItem(i, 3, QTableWidgetItem(origin))
 
-            # 位置情報（簡略表示）
+            # 位置情報（1始まりで表示）
             end_pos = entity.get("end", {})
             if isinstance(start_pos, dict) and isinstance(end_pos, dict):
-                position_str = f"p{page_num}:b{start_pos.get('block_num', '')}:{start_pos.get('offset', '')}"
+                block_num = start_pos.get('block_num', 0)
+                offset = start_pos.get('offset', 0)
+                position_str = f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
             else:
                 position_str = ""
             self.results_table.setItem(i, 4, QTableWidgetItem(position_str))
@@ -297,3 +387,17 @@ class ResultPanel(QWidget):
     def get_entities(self) -> List[Dict]:
         """現在のエンティティリストを取得"""
         return self.entities
+
+    def add_manual_entity(self, preset_data: Optional[Dict] = None):
+        """手動PII追加ダイアログを表示"""
+        dialog = ManualAddDialog(preset_data, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            entity = dialog.get_entity_data()
+            if not entity:
+                return
+            # エンティティをリストに追加
+            self.entities.append(entity)
+            # テーブルを更新
+            self.update_table()
+            # シグナル発行
+            self.entity_added.emit(entity)
