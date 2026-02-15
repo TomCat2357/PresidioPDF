@@ -68,9 +68,14 @@ class MainWindow(QMainWindow):
         self.detect_config_service = DetectConfigService(Path.cwd())
         try:
             self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
+            duplicate_settings = self.detect_config_service.load_duplicate_settings()
+            self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
+            self.duplicate_overlap_mode = duplicate_settings["overlap"]
         except Exception as e:
             logger.warning(f"検出設定の初期化に失敗: {e}")
             self.enabled_detect_entities = list(DetectConfigService.ENTITY_TYPES)
+            self.duplicate_entity_overlap_mode = "any"
+            self.duplicate_overlap_mode = "overlap"
 
         # Detect実行スコープの管理
         self._detect_scope = "all"
@@ -109,9 +114,9 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.on_open_pdf)
         toolbar.addAction(open_action)
 
-        # 設定（検出対象エンティティ）
+        # 設定（検出/重複設定）
         config_action = QAction("設定", self)
-        config_action.setStatusTip("検出対象エンティティ設定（.config.json）")
+        config_action.setStatusTip("検出対象と重複削除設定（.config.json）")
         config_action.triggered.connect(self.on_open_config_dialog)
         toolbar.addAction(config_action)
         self.config_action = config_action
@@ -317,11 +322,16 @@ class MainWindow(QMainWindow):
         current_enabled = self.detect_config_service.ensure_config_file()
         if current_enabled:
             self.enabled_detect_entities = current_enabled
+        duplicate_settings = self.detect_config_service.load_duplicate_settings()
+        self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
+        self.duplicate_overlap_mode = duplicate_settings["overlap"]
 
         dialog = DetectConfigDialog(
             entity_types=DetectConfigService.ENTITY_TYPES,
             enabled_entities=self.enabled_detect_entities,
             config_path=self.detect_config_service.config_path,
+            duplicate_entity_overlap_mode=self.duplicate_entity_overlap_mode,
+            duplicate_overlap_mode=self.duplicate_overlap_mode,
             parent=self,
         )
         if dialog.import_button:
@@ -341,9 +351,18 @@ class MainWindow(QMainWindow):
         self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
             dialog.get_enabled_entities()
         )
+        duplicate_settings = dialog.get_duplicate_settings()
+        saved_duplicate_settings = self.detect_config_service.save_duplicate_settings(
+            duplicate_settings["entity_overlap_mode"],
+            duplicate_settings["overlap"],
+        )
+        self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
+        self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
         self.log_message(
             f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
-            f"({self.detect_config_service.config_path.name})"
+            f"({self.detect_config_service.config_path.name}), "
+            f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
+            f"overlap:{self.duplicate_overlap_mode}"
         )
 
     def _on_open_json_config_clicked(self):
@@ -381,7 +400,14 @@ class MainWindow(QMainWindow):
         try:
             imported_entities = self.detect_config_service.import_from(Path(file_path))
             self.enabled_detect_entities = imported_entities
+            imported_duplicate_settings = self.detect_config_service.load_duplicate_settings()
+            self.duplicate_entity_overlap_mode = imported_duplicate_settings["entity_overlap_mode"]
+            self.duplicate_overlap_mode = imported_duplicate_settings["overlap"]
             dialog.set_enabled_entities(imported_entities)
+            dialog.set_duplicate_settings(
+                self.duplicate_entity_overlap_mode,
+                self.duplicate_overlap_mode,
+            )
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
             )
@@ -422,6 +448,13 @@ class MainWindow(QMainWindow):
             self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
                 current_entities
             )
+            duplicate_settings = dialog.get_duplicate_settings()
+            saved_duplicate_settings = self.detect_config_service.save_duplicate_settings(
+                duplicate_settings["entity_overlap_mode"],
+                duplicate_settings["overlap"],
+            )
+            self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
+            self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
             exported_path = self.detect_config_service.export_to(export_target)
             self.log_message(f"設定エクスポート: {exported_path}")
             QMessageBox.information(
@@ -510,13 +543,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        self.log_message("Duplicate処理を開始...")
+        self.log_message(
+            "Duplicate処理を開始... "
+            f"(entity_overlap_mode={self.duplicate_entity_overlap_mode}, "
+            f"overlap={self.duplicate_overlap_mode})"
+        )
 
         # TaskRunnerで非同期実行
         self.current_task = "duplicate"
         self.task_runner.start_task(
             PipelineService.run_duplicate,
-            self.app_state.detect_result
+            self.app_state.detect_result,
+            overlap=self.duplicate_overlap_mode,
+            entity_overlap_mode=self.duplicate_entity_overlap_mode,
         )
 
     def on_mask(self):

@@ -348,7 +348,7 @@ class PipelineService:
     def run_duplicate(
         detect_result: Dict[str, Any],
         overlap: str = "overlap",
-        entity_overlap_mode: str = "same",
+        entity_overlap_mode: str = "any",
         entity_priority: Optional[List[str]] = None,
         tie_break: Optional[List[str]] = None,
         origin_priority: Optional[List[str]] = None,

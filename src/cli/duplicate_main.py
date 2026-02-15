@@ -103,6 +103,25 @@ def _span_contains(a: Tuple[int, int], b: Tuple[int, int]) -> bool:
     return a[0] <= b[0] and b[1] <= a[1]
 
 
+def _should_compare_entities(
+    left: Dict[str, Any],
+    right: Dict[str, Any],
+    entity_overlap_mode: str,
+) -> bool:
+    """same モード時のエンティティ比較可否を判定"""
+    if entity_overlap_mode != "same":
+        return True
+
+    left_entity = str(left.get("entity", "")).strip().upper()
+    right_entity = str(right.get("entity", "")).strip().upper()
+    if left_entity == right_entity:
+        return True
+
+    # PROPER_NOUN は汎用候補として他エンティティとの比較候補に含める
+    # （最終的に包含関係がある場合のみ重複として採用）
+    return "PROPER_NOUN" in {left_entity, right_entity}
+
+
 def _dedupe_detections_spec_format(
     detect_list: List,
     overlap: str,
@@ -128,13 +147,22 @@ def _dedupe_detections_spec_format(
         for j in range(i + 1, n):
             right = detect_list[j]
 
-            if (
-                entity_overlap_mode == "same"
-                and str(left.get("entity", "")) != str(right.get("entity", ""))
-            ):
+            if not _should_compare_entities(left, right, entity_overlap_mode):
                 continue
 
             if _positions_overlap(left, right, overlap, block_start_map):
+                # sameモードの異種エンティティ比較は、包含関係がある場合のみ重複扱い
+                if entity_overlap_mode == "same":
+                    left_entity = str(left.get("entity", "")).strip().upper()
+                    right_entity = str(right.get("entity", "")).strip().upper()
+                    if left_entity != right_entity:
+                        left_span = _entity_span(left, block_start_map)
+                        right_span = _entity_span(right, block_start_map)
+                        if not (
+                            _span_contains(left_span, right_span)
+                            or _span_contains(right_span, left_span)
+                        ):
+                            continue
                 adjacency[i].append(j)
                 adjacency[j].append(i)
 

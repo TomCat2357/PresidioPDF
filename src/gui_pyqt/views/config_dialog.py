@@ -9,9 +9,11 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
 )
 
@@ -24,6 +26,8 @@ class DetectConfigDialog(QDialog):
         entity_types: List[str],
         enabled_entities: List[str],
         config_path: Path,
+        duplicate_entity_overlap_mode: str = "any",
+        duplicate_overlap_mode: str = "overlap",
         parent=None,
     ):
         super().__init__(parent)
@@ -34,12 +38,20 @@ class DetectConfigDialog(QDialog):
         self.open_json_button: Optional[QPushButton] = None
         self.import_button: Optional[QPushButton] = None
         self.export_button: Optional[QPushButton] = None
+        self.entity_overlap_same_radio: Optional[QRadioButton] = None
+        self.entity_overlap_any_radio: Optional[QRadioButton] = None
+        self.overlap_contain_radio: Optional[QRadioButton] = None
+        self.overlap_overlap_radio: Optional[QRadioButton] = None
         self._init_ui()
         self.set_enabled_entities(enabled_entities)
+        self.set_duplicate_settings(
+            duplicate_entity_overlap_mode,
+            duplicate_overlap_mode,
+        )
 
     def _init_ui(self):
-        self.setWindowTitle("検出設定")
-        self.setMinimumWidth(420)
+        self.setWindowTitle("設定")
+        self.setMinimumWidth(520)
 
         layout = QVBoxLayout()
 
@@ -61,6 +73,26 @@ class DetectConfigDialog(QDialog):
         select_row.addWidget(self.select_all_button)
         select_row.addStretch()
         layout.addLayout(select_row)
+
+        duplicate_group = QGroupBox("重複削除設定")
+        duplicate_layout = QVBoxLayout()
+
+        entity_mode_label = QLabel("エンティティ重複判定")
+        self.entity_overlap_any_radio = QRadioButton("異なるエンティティでも同一扱い")
+        self.entity_overlap_same_radio = QRadioButton("同じエンティティのみ")
+        duplicate_layout.addWidget(entity_mode_label)
+        duplicate_layout.addWidget(self.entity_overlap_any_radio)
+        duplicate_layout.addWidget(self.entity_overlap_same_radio)
+
+        overlap_mode_label = QLabel("重複判定")
+        self.overlap_contain_radio = QRadioButton("包含関係のみ")
+        self.overlap_overlap_radio = QRadioButton("一部重なりも含む")
+        duplicate_layout.addWidget(overlap_mode_label)
+        duplicate_layout.addWidget(self.overlap_contain_radio)
+        duplicate_layout.addWidget(self.overlap_overlap_radio)
+
+        duplicate_group.setLayout(duplicate_layout)
+        layout.addWidget(duplicate_group)
 
         action_row = QHBoxLayout()
         self.open_json_button = QPushButton(".config.jsonを開く")
@@ -94,6 +126,35 @@ class DetectConfigDialog(QDialog):
             if checkbox and checkbox.isChecked():
                 result.append(entity)
         return result
+
+    def set_duplicate_settings(self, entity_overlap_mode: str, overlap_mode: str):
+        entity_mode = str(entity_overlap_mode or "any").strip().lower()
+        if self.entity_overlap_same_radio and self.entity_overlap_any_radio:
+            if entity_mode == "same":
+                self.entity_overlap_same_radio.setChecked(True)
+            else:
+                self.entity_overlap_any_radio.setChecked(True)
+
+        overlap = str(overlap_mode or "overlap").strip().lower()
+        if self.overlap_contain_radio and self.overlap_overlap_radio:
+            if overlap == "contain":
+                self.overlap_contain_radio.setChecked(True)
+            else:
+                self.overlap_overlap_radio.setChecked(True)
+
+    def get_duplicate_settings(self) -> Dict[str, str]:
+        entity_overlap_mode = "any"
+        if self.entity_overlap_same_radio and self.entity_overlap_same_radio.isChecked():
+            entity_overlap_mode = "same"
+
+        overlap_mode = "overlap"
+        if self.overlap_contain_radio and self.overlap_contain_radio.isChecked():
+            overlap_mode = "contain"
+
+        return {
+            "entity_overlap_mode": entity_overlap_mode,
+            "overlap": overlap_mode,
+        }
 
     def _on_select_all_clicked(self):
         for checkbox in self.checkboxes.values():

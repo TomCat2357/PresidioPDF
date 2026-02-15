@@ -35,6 +35,12 @@ class DetectConfigService:
         "ADDRESS": "LOCATION",
         "PEARSON": "PERSON",
     }
+    DUPLICATE_ENTITY_OVERLAP_MODES = ["same", "any"]
+    DUPLICATE_OVERLAP_MODES = ["contain", "overlap"]
+    DEFAULT_DUPLICATE_SETTINGS = {
+        "entity_overlap_mode": "any",
+        "overlap": "overlap",
+    }
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else Path.cwd()
@@ -83,6 +89,53 @@ class DetectConfigService:
         data["enabled_entities"] = normalized
         self._write_json(data)
         return normalized
+
+    def load_duplicate_settings(self) -> Dict[str, str]:
+        """重複削除設定を読み込む"""
+        self.ensure_config_file()
+        try:
+            data = self._normalize_config_data(self._load_json(self.config_path))
+            self._write_json(data)
+            settings = data.get("duplicate_settings", {})
+            if isinstance(settings, dict):
+                return {
+                    "entity_overlap_mode": str(
+                        settings.get(
+                            "entity_overlap_mode",
+                            self.DEFAULT_DUPLICATE_SETTINGS["entity_overlap_mode"],
+                        )
+                    ),
+                    "overlap": str(
+                        settings.get(
+                            "overlap",
+                            self.DEFAULT_DUPLICATE_SETTINGS["overlap"],
+                        )
+                    ),
+                }
+        except Exception as exc:
+            logger.warning(f"重複設定の読み込みに失敗: {self.config_path} ({exc})")
+        return dict(self.DEFAULT_DUPLICATE_SETTINGS)
+
+    def save_duplicate_settings(
+        self,
+        entity_overlap_mode: str,
+        overlap: str,
+    ) -> Dict[str, str]:
+        """重複削除設定を保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+        data["duplicate_settings"] = self._extract_duplicate_settings(
+            {
+                "duplicate_settings": {
+                    "entity_overlap_mode": entity_overlap_mode,
+                    "overlap": overlap,
+                }
+            }
+        )
+        self._write_json(data)
+        return dict(data["duplicate_settings"])
 
     def import_from(self, source_path: Path) -> List[str]:
         """外部JSONを読み込み、同一フォルダの.config.jsonへ反映"""
@@ -195,12 +248,42 @@ class DetectConfigService:
             result.append(pattern)
         return result
 
+    def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
+        if not isinstance(data, dict):
+            return dict(self.DEFAULT_DUPLICATE_SETTINGS)
+
+        duplicate_section = data.get("duplicate_settings", {})
+        if not isinstance(duplicate_section, dict):
+            duplicate_section = {}
+
+        raw_entity_overlap_mode = duplicate_section.get(
+            "entity_overlap_mode",
+            self.DEFAULT_DUPLICATE_SETTINGS["entity_overlap_mode"],
+        )
+        entity_overlap_mode = str(raw_entity_overlap_mode or "").strip().lower()
+        if entity_overlap_mode not in self.DUPLICATE_ENTITY_OVERLAP_MODES:
+            entity_overlap_mode = self.DEFAULT_DUPLICATE_SETTINGS["entity_overlap_mode"]
+
+        raw_overlap = duplicate_section.get(
+            "overlap",
+            self.DEFAULT_DUPLICATE_SETTINGS["overlap"],
+        )
+        overlap = str(raw_overlap or "").strip().lower()
+        if overlap not in self.DUPLICATE_OVERLAP_MODES:
+            overlap = self.DEFAULT_DUPLICATE_SETTINGS["overlap"]
+
+        return {
+            "entity_overlap_mode": entity_overlap_mode,
+            "overlap": overlap,
+        }
+
     @classmethod
     def _default_json_config(cls) -> Dict[str, Any]:
         return {
             "enabled_entities": list(cls.ENTITY_TYPES),
             "add_entity": {entity: [] for entity in cls.ENTITY_TYPES},
             "ommit_entity": [],
+            "duplicate_settings": dict(cls.DEFAULT_DUPLICATE_SETTINGS),
         }
 
     def _normalize_config_data(self, data: Any) -> Dict[str, Any]:
@@ -225,6 +308,8 @@ class DetectConfigService:
             raw_ommit = normalized.get("omit_entity", [])
         normalized["ommit_entity"] = self._normalize_pattern_list(raw_ommit)
         normalized.pop("omit_entity", None)
+
+        normalized["duplicate_settings"] = self._extract_duplicate_settings(normalized)
 
         return normalized
 
