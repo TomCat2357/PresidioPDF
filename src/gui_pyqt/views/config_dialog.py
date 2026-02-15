@@ -30,6 +30,8 @@ class DetectConfigDialog(QDialog):
         self.entity_types = list(entity_types or [])
         self.config_path = Path(config_path)
         self.checkboxes: Dict[str, QCheckBox] = {}
+        self.select_all_button: Optional[QPushButton] = None
+        self.open_json_button: Optional[QPushButton] = None
         self.import_button: Optional[QPushButton] = None
         self.export_button: Optional[QPushButton] = None
         self._init_ui()
@@ -53,9 +55,18 @@ class DetectConfigDialog(QDialog):
             self.checkboxes[entity] = checkbox
             layout.addWidget(checkbox)
 
+        select_row = QHBoxLayout()
+        self.select_all_button = QPushButton("全選択")
+        self.select_all_button.clicked.connect(self._on_select_all_clicked)
+        select_row.addWidget(self.select_all_button)
+        select_row.addStretch()
+        layout.addLayout(select_row)
+
         action_row = QHBoxLayout()
+        self.open_json_button = QPushButton(".config.jsonを開く")
         self.import_button = QPushButton("インポート")
         self.export_button = QPushButton("エクスポート")
+        action_row.addWidget(self.open_json_button)
         action_row.addWidget(self.import_button)
         action_row.addWidget(self.export_button)
         action_row.addStretch()
@@ -83,3 +94,7 @@ class DetectConfigDialog(QDialog):
             if checkbox and checkbox.isChecked():
                 result.append(entity)
         return result
+
+    def _on_select_all_clicked(self):
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(True)

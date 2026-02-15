@@ -144,13 +144,11 @@ class PipelineService:
         logger.info("run_detect開始")
 
         import re
-        import json
         from datetime import datetime
         from src.analysis.analyzer import Analyzer
         import fitz
         from src.pdf.pdf_locator import PDFTextLocator
-        from src.cli.detect_main import _convert_offsets_to_position, ALLOWED_ENTITIES
-        from src.cli.common import sha256_bytes
+        from src.cli.detect_main import _convert_offsets_to_position
 
         # 入力検証
         if not isinstance(read_result, dict):
@@ -206,6 +204,8 @@ class PipelineService:
         # Analyzerでモデル検出
         analyzer = Analyzer(cfg)
         detections_plain = []
+        compiled_excludes = []
+        exclude_spans: List[Tuple[int, int]] = []
 
         with fitz.open(pdf_path) as doc:
             locator = PDFTextLocator(doc)
@@ -232,7 +232,8 @@ class PipelineService:
                     "end": end_pos,
                     "entity": ent,
                     "word": txt,
-                    "origin": "auto"
+                    "origin": "auto",
+                    "_span": (s, e),
                 }
                 detections_plain.append(entry_plain)
 
@@ -255,32 +256,23 @@ class PipelineService:
                                 "end": end_pos,
                                 "entity": ent_name,
                                 "word": txt,
-                                "origin": "custom"
+                                "origin": "custom",
+                                "_span": (s, e),
                             })
-                    except re.error:
+                    except re.error as exc:
                         # 無効な正規表現はスキップ
-                        pass
+                        logger.warning(f"無効な追加正規表現をスキップ: {rx_str} ({exc})")
 
-            # 除外パターンの適用
+            # 除外パターンのマッチ範囲を収集
             if exclude_patterns:
-                exclude_spans = []
                 for rx_str in exclude_patterns:
                     try:
                         rx = re.compile(rx_str)
+                        compiled_excludes.append(rx)
                         for m in rx.finditer(target_text):
                             exclude_spans.append((m.start(), m.end()))
-                    except re.error:
-                        pass
-
-                if exclude_spans:
-                    def is_auto(entry: Dict[str, Any]) -> bool:
-                        return entry.get("origin") == "auto"
-
-                    # 除外は自動検出のみに適用（簡略化）
-                    detections_plain = [
-                        d for d in detections_plain
-                        if not is_auto(d)
-                    ]
+                    except re.error as exc:
+                        logger.warning(f"無効な除外正規表現をスキップ: {rx_str} ({exc})")
 
         # 既存検出情報の統合
         existing_detect = read_result.get("detect", [])
@@ -288,6 +280,46 @@ class PipelineService:
             merged_detect = list(existing_detect) + detections_plain
         else:
             merged_detect = detections_plain
+
+        # ommitはaddより優先: 最終検出結果に対して除外を適用
+        if compiled_excludes:
+            def overlaps(span_a: Tuple[int, int], span_b: Tuple[int, int]) -> bool:
+                return max(span_a[0], span_b[0]) < min(span_a[1], span_b[1])
+
+            def should_omit(entry: Dict[str, Any]) -> bool:
+                # 手動マークはユーザー編集を優先して除外しない
+                if str(entry.get("origin", "")).lower() == "manual":
+                    return False
+
+                word = str(entry.get("word", ""))
+                for rx in compiled_excludes:
+                    if rx.search(word):
+                        return True
+
+                span = entry.get("_span")
+                if isinstance(span, tuple) and len(span) == 2:
+                    try:
+                        current_span = (int(span[0]), int(span[1]))
+                    except (TypeError, ValueError):
+                        return False
+                    if any(overlaps(current_span, ex_span) for ex_span in exclude_spans):
+                        return True
+
+                return False
+
+            filtered_detect: List[Any] = []
+            for detection in merged_detect:
+                if not isinstance(detection, dict):
+                    filtered_detect.append(detection)
+                    continue
+                if should_omit(detection):
+                    continue
+                filtered_detect.append(detection)
+            merged_detect = filtered_detect
+
+        for detection in merged_detect:
+            if isinstance(detection, dict):
+                detection.pop("_span", None)
 
         # 座標マップの継承
         offset2coords_map = read_result.get("offset2coordsMap", {})

@@ -1,18 +1,18 @@
 """
-PresidioPDF PyQt - 検出設定(.config.toml)管理
+PresidioPDF PyQt - 検出設定(.config.json)管理
 
-- 同一フォルダの .config.toml を読み込み
+- 同一フォルダの .config.json を読み込み
 - 未存在時は自動生成
 - インポート/エクスポートを提供
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
-import tomllib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class DetectConfigService:
     """GUI用検出設定の管理サービス"""
 
-    CONFIG_FILE_NAME = ".config.toml"
+    CONFIG_FILE_NAME = ".config.json"
     ENTITY_TYPES = [
         "PERSON",
         "LOCATION",
@@ -31,6 +31,10 @@ class DetectConfigService:
         "PROPER_NOUN",
         "OTHER",
     ]
+    ENTITY_ALIASES = {
+        "ADDRESS": "LOCATION",
+        "PEARSON": "PERSON",
+    }
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else Path.cwd()
@@ -38,84 +42,95 @@ class DetectConfigService:
 
     def ensure_config_file(self) -> List[str]:
         """設定ファイルを保証し、有効エンティティ一覧を返す"""
-        if not self.config_path.exists():
-            self.save_enabled_entities(list(self.ENTITY_TYPES))
-        return self.load_enabled_entities()
+        try:
+            if not self.config_path.exists():
+                self._write_json(self._default_json_config())
+            else:
+                # 既存JSONがあれば、必要キーを補完した正規化データで保存し直す
+                normalized_data = self._normalize_config_data(self._load_json(self.config_path))
+                self._write_json(normalized_data)
+            return self._extract_enabled_entities(self._load_json(self.config_path))
+        except Exception as exc:
+            logger.warning(f"設定ファイル初期化に失敗: {self.config_path} ({exc})")
+            fallback = self._default_json_config()
+            self._write_json(fallback)
+            return list(fallback.get("enabled_entities", list(self.ENTITY_TYPES)))
+
+    def ensure_json_config_file(self) -> Path:
+        """互換: .config.json の存在を保証してパスを返す"""
+        self.ensure_config_file()
+        return self.config_path
 
     def load_enabled_entities(self) -> List[str]:
-        """設定ファイルから有効エンティティ一覧を読み込む"""
+        """設定ファイル(.config.json)から有効エンティティ一覧を読み込む"""
         if not self.config_path.exists():
             return list(self.ENTITY_TYPES)
 
         try:
-            text = self.config_path.read_text(encoding="utf-8")
-            return self._parse_enabled_entities(text)
+            data = self._load_json(self.config_path)
+            return self._extract_enabled_entities(data)
         except Exception as exc:
             logger.warning(f"設定ファイルの読み込みに失敗: {self.config_path} ({exc})")
             return list(self.ENTITY_TYPES)
 
     def save_enabled_entities(self, entities: List[str]) -> List[str]:
-        """有効エンティティ一覧を設定ファイルへ保存"""
+        """有効エンティティ一覧を .config.json へ保存（他設定は保持）"""
         normalized = self._normalize_entities(entities)
-        toml_text = self._render_toml(normalized)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(toml_text, encoding="utf-8")
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+        data["enabled_entities"] = normalized
+        self._write_json(data)
         return normalized
 
     def import_from(self, source_path: Path) -> List[str]:
-        """外部TOMLを読み込み、同一フォルダの.config.tomlへ反映"""
-        text = Path(source_path).read_text(encoding="utf-8")
-        entities = self._parse_enabled_entities(text)
-        self.save_enabled_entities(entities)
-        return entities
+        """外部JSONを読み込み、同一フォルダの.config.jsonへ反映"""
+        data = self._load_json(Path(source_path))
+        normalized_data = self._normalize_config_data(data)
+        self._write_json(normalized_data)
+        return list(normalized_data.get("enabled_entities", list(self.ENTITY_TYPES)))
 
     def export_to(self, output_path: Path) -> Path:
-        """同一フォルダの.config.tomlを指定先へ出力"""
+        """同一フォルダの.config.jsonを指定先へ出力"""
         if not self.config_path.exists():
-            self.save_enabled_entities(list(self.ENTITY_TYPES))
+            self._write_json(self._default_json_config())
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.config_path, output_path)
         return output_path
 
-    def _parse_enabled_entities(self, toml_text: str) -> List[str]:
-        data = tomllib.loads(toml_text or "")
-        raw = self._extract_entities(data)
-        if raw is None:
-            return list(self.ENTITY_TYPES)
-        return self._normalize_entities(raw)
-
-    @staticmethod
-    def _extract_entities(data: Dict[str, Any]) -> Optional[List[Any]]:
+    def _extract_enabled_entities(self, data: Any) -> List[str]:
         if not isinstance(data, dict):
-            return None
+            return list(self.ENTITY_TYPES)
 
+        raw_entities: Optional[List[Any]] = None
         if "enabled_entities" in data:
             raw = data.get("enabled_entities")
-            return raw if isinstance(raw, list) else None
-        if "entities" in data:
+            raw_entities = raw if isinstance(raw, list) else None
+        elif "entities" in data:
             raw = data.get("entities")
-            return raw if isinstance(raw, list) else None
-
-        detect_section = data.get("detect")
-        if isinstance(detect_section, dict):
+            raw_entities = raw if isinstance(raw, list) else None
+        elif isinstance(data.get("detect"), dict):
+            detect_section = data.get("detect", {})
             raw = detect_section.get("enabled_entities")
             if isinstance(raw, list):
-                return raw
-            raw = detect_section.get("entities")
-            if isinstance(raw, list):
-                return raw
+                raw_entities = raw
+            else:
+                raw = detect_section.get("entities")
+                raw_entities = raw if isinstance(raw, list) else None
 
-        return None
+        if raw_entities is None:
+            return list(self.ENTITY_TYPES)
+        normalized = self._normalize_entities(raw_entities)
+        return normalized if normalized else list(self.ENTITY_TYPES)
 
     def _normalize_entities(self, entities: List[Any]) -> List[str]:
         normalized: List[str] = []
         seen = set()
         for raw in entities:
-            name = str(raw or "").strip().upper()
-            if name == "ADDRESS":
-                name = "LOCATION"
+            name = self._normalize_entity_name(raw)
             if name not in self.ENTITY_TYPES:
                 continue
             if name in seen:
@@ -124,14 +139,101 @@ class DetectConfigService:
             normalized.append(name)
         return normalized
 
+    def load_custom_patterns(self) -> Tuple[List[Tuple[str, str]], List[str]]:
+        """追加検出(add_entity)と除外(ommit_entity)を読み込む"""
+        self.ensure_config_file()
+        try:
+            data = self._load_json(self.config_path)
+        except Exception as exc:
+            logger.warning(f".config.json の読み込みに失敗: {self.config_path} ({exc})")
+            return [], []
+
+        add_patterns: List[Tuple[str, str]] = []
+        seen_add = set()
+
+        raw_add = data.get("add_entity", {})
+        if isinstance(raw_add, dict):
+            for raw_entity, raw_patterns in raw_add.items():
+                entity = self._normalize_entity_name(raw_entity)
+                if entity not in self.ENTITY_TYPES:
+                    continue
+                for pattern in self._normalize_pattern_list(raw_patterns):
+                    key = (entity, pattern)
+                    if key in seen_add:
+                        continue
+                    seen_add.add(key)
+                    add_patterns.append(key)
+
+        raw_ommit = data.get("ommit_entity")
+        if raw_ommit is None:
+            raw_ommit = data.get("omit_entity", [])
+        omit_patterns = self._normalize_pattern_list(raw_ommit)
+
+        return add_patterns, omit_patterns
+
+    @classmethod
+    def _normalize_entity_name(cls, value: Any) -> str:
+        name = str(value or "").strip().upper()
+        return cls.ENTITY_ALIASES.get(name, name)
+
     @staticmethod
-    def _render_toml(entities: List[str]) -> str:
-        lines = [
-            "# PresidioPDF GUI detect config",
-            "enabled_entities = [",
-        ]
-        for entity in entities:
-            lines.append(f'  "{entity}",')
-        lines.append("]")
-        lines.append("")
-        return "\n".join(lines)
+    def _normalize_pattern_list(raw_patterns: Any) -> List[str]:
+        if isinstance(raw_patterns, str):
+            values = [raw_patterns]
+        elif isinstance(raw_patterns, list):
+            values = raw_patterns
+        else:
+            return []
+
+        result: List[str] = []
+        seen = set()
+        for raw in values:
+            pattern = str(raw or "").strip()
+            if not pattern or pattern in seen:
+                continue
+            seen.add(pattern)
+            result.append(pattern)
+        return result
+
+    @classmethod
+    def _default_json_config(cls) -> Dict[str, Any]:
+        return {
+            "enabled_entities": list(cls.ENTITY_TYPES),
+            "add_entity": {entity: [] for entity in cls.ENTITY_TYPES},
+            "ommit_entity": [],
+        }
+
+    def _normalize_config_data(self, data: Any) -> Dict[str, Any]:
+        if not isinstance(data, dict):
+            data = {}
+        normalized = dict(data)
+
+        normalized["enabled_entities"] = self._extract_enabled_entities(normalized)
+
+        raw_add = normalized.get("add_entity", {})
+        add_entity = {entity: [] for entity in self.ENTITY_TYPES}
+        if isinstance(raw_add, dict):
+            for raw_entity, raw_patterns in raw_add.items():
+                entity = self._normalize_entity_name(raw_entity)
+                if entity not in self.ENTITY_TYPES:
+                    continue
+                add_entity[entity] = self._normalize_pattern_list(raw_patterns)
+        normalized["add_entity"] = add_entity
+
+        raw_ommit = normalized.get("ommit_entity")
+        if raw_ommit is None:
+            raw_ommit = normalized.get("omit_entity", [])
+        normalized["ommit_entity"] = self._normalize_pattern_list(raw_ommit)
+        normalized.pop("omit_entity", None)
+
+        return normalized
+
+    @staticmethod
+    def _load_json(path: Path) -> Any:
+        text = Path(path).read_text(encoding="utf-8")
+        return json.loads(text or "{}")
+
+    def _write_json(self, data: Dict[str, Any]) -> None:
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        self.config_path.write_text(text, encoding="utf-8")

@@ -35,7 +35,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QAction, QDesktopServices
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class MainWindow(QMainWindow):
         # 全プレビューエンティティを保持（選択状態管理用）
         self._all_preview_entities: List[Dict] = []
 
-        # GUI検出設定（.config.toml）
+        # GUI検出設定（.config.json）
         self.detect_config_service = DetectConfigService(Path.cwd())
         try:
             self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
@@ -110,7 +111,7 @@ class MainWindow(QMainWindow):
 
         # 設定（検出対象エンティティ）
         config_action = QAction("設定", self)
-        config_action.setStatusTip("検出対象エンティティ設定（.config.toml）")
+        config_action.setStatusTip("検出対象エンティティ設定（.config.json）")
         config_action.triggered.connect(self.on_open_config_dialog)
         toolbar.addAction(config_action)
         self.config_action = config_action
@@ -331,6 +332,8 @@ class MainWindow(QMainWindow):
             dialog.export_button.clicked.connect(
                 lambda: self._on_export_config_clicked(dialog)
             )
+        if dialog.open_json_button:
+            dialog.open_json_button.clicked.connect(self._on_open_json_config_clicked)
 
         if not dialog.exec():
             return
@@ -343,13 +346,34 @@ class MainWindow(QMainWindow):
             f"({self.detect_config_service.config_path.name})"
         )
 
+    def _on_open_json_config_clicked(self):
+        """検出設定(.config.json)を既定アプリで開く"""
+        try:
+            self.detect_config_service.ensure_config_file()
+            json_path = self.detect_config_service.config_path
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(json_path)))
+            if not opened:
+                QMessageBox.warning(
+                    self,
+                    "警告",
+                    f".config.json を開けませんでした:\n{json_path}",
+                )
+                return
+            self.log_message(f".config.json を開きました: {json_path}")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f".config.json を開けませんでした: {e}",
+            )
+
     def _on_import_config_clicked(self, dialog: DetectConfigDialog):
         """設定ファイルのインポート"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "インポートするTOMLを選択",
+            "インポートするJSONを選択",
             str(self.detect_config_service.base_dir),
-            "TOML Files (*.toml);;All Files (*)",
+            "JSON Files (*.json);;All Files (*)",
         )
         if not file_path:
             return
@@ -378,20 +402,20 @@ class MainWindow(QMainWindow):
 
     def _on_export_config_clicked(self, dialog: DetectConfigDialog):
         """設定ファイルのエクスポート"""
-        default_path = self.detect_config_service.base_dir / ".config.toml"
+        default_path = self.detect_config_service.base_dir / ".config.json"
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "エクスポート先を選択",
             str(default_path),
-            "TOML Files (*.toml);;All Files (*)",
+            "JSON Files (*.json);;All Files (*)",
         )
         if not output_path:
             return
 
         try:
             export_target = Path(output_path)
-            if export_target.suffix.lower() != ".toml":
-                export_target = export_target.with_suffix(".toml")
+            if export_target.suffix.lower() != ".json":
+                export_target = export_target.with_suffix(".json")
 
             # ダイアログ上の最新チェック状態を同一フォルダ設定へ反映してから出力
             current_entities = dialog.get_enabled_entities()
@@ -455,6 +479,16 @@ class MainWindow(QMainWindow):
         task_kwargs: Dict[str, Any] = {
             "entities": list(self.enabled_detect_entities),
         }
+        add_patterns, omit_patterns = self.detect_config_service.load_custom_patterns()
+        if add_patterns:
+            task_kwargs["add_patterns"] = add_patterns
+        if omit_patterns:
+            task_kwargs["exclude_patterns"] = omit_patterns
+        if add_patterns or omit_patterns:
+            self.log_message(
+                "追加/除外設定を反映: "
+                f"add={len(add_patterns)}件, ommit={len(omit_patterns)}件"
+            )
         if page_filter:
             task_kwargs["page_filter"] = list(page_filter)
 

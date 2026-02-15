@@ -1,5 +1,0 @@
-# PresidioPDF GUI detect config
-enabled_entities = [
-  "PERSON",
-  "PROPER_NOUN",
-]
