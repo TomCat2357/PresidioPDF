@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -110,6 +111,9 @@ class DetectConfigDialog(QDialog):
         entity_mode_label = QLabel("エンティティ重複判定")
         self.entity_overlap_any_radio = QRadioButton("異なるエンティティでも同一扱い")
         self.entity_overlap_same_radio = QRadioButton("同じエンティティのみ")
+        self._entity_overlap_group = QButtonGroup(self)
+        self._entity_overlap_group.addButton(self.entity_overlap_any_radio)
+        self._entity_overlap_group.addButton(self.entity_overlap_same_radio)
         duplicate_layout.addWidget(entity_mode_label)
         duplicate_layout.addWidget(self.entity_overlap_any_radio)
         duplicate_layout.addWidget(self.entity_overlap_same_radio)
@@ -117,6 +121,9 @@ class DetectConfigDialog(QDialog):
         overlap_mode_label = QLabel("重複判定")
         self.overlap_contain_radio = QRadioButton("包含関係のみ")
         self.overlap_overlap_radio = QRadioButton("一部重なりも含む")
+        self._overlap_group = QButtonGroup(self)
+        self._overlap_group.addButton(self.overlap_contain_radio)
+        self._overlap_group.addButton(self.overlap_overlap_radio)
         duplicate_layout.addWidget(overlap_mode_label)
         duplicate_layout.addWidget(self.overlap_contain_radio)
         duplicate_layout.addWidget(self.overlap_overlap_radio)
