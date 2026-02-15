@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ブロック単位PDF文字座標マッピングシステム
-Fitzを使用してブロックごとのプレーンテキストと座標のマッピングを管理
+ページベース PDF文字座標マッピングシステム
+グローバル構造を完全削除し、双方向座標変換機能を追加
 """
 
 import logging
@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 class BlockInfo(NamedTuple):
     """ブロック情報を格納する構造体"""
     page_block_id: int  # ページ内でのブロックID (0から開始)
-    global_block_id: int  # 全体でのブロックID
     page_num: int
     text: str
     bbox: Tuple[float, float, float, float]
@@ -25,9 +24,7 @@ class BlockInfo(NamedTuple):
 class CharPosition(NamedTuple):
     """文字位置情報を格納する構造体"""
     page_block_id: int  # ページ内でのブロックID
-    global_block_id: int  # 全体でのブロックID
     block_offset: int  # ブロック内でのオフセット
-    global_offset: int  # 全体でのオフセット
     page_num: int
     bbox: Optional[Tuple[float, float, float, float]]
     character: str
@@ -35,41 +32,39 @@ class CharPosition(NamedTuple):
 
 class PDFBlockTextMapper:
     """
-    ブロック単位でのPDFテキストと座標のマッピングクラス
+    ページベースPDFテキストと座標の双方向マッピングクラス
     
     Features:
-    - ブロックごとのプレーンテキスト分割
-    - ブロック内オフセット管理
-    - プレーンテキスト位置からPDF座標への高速マッピング
-    - Webアプリケーションでの間接的座標管理をサポート
+    - ページ・ブロック単位での完全管理
+    - オフセット→座標変換
+    - 座標→オフセット逆引き（空間インデックス）
+    - グローバル構造完全削除
     """
 
-    def __init__(self, pdf_document: fitz.Document, enable_cache: bool = True):
+    def __init__(self, pdf_document: fitz.Document, enable_cache: bool = True, enable_spatial_index: bool = True):
         """
         初期化
         
         Args:
             pdf_document: PyMuPDFドキュメント
             enable_cache: キャッシュ有効化フラグ
+            enable_spatial_index: 空間インデックス有効化フラグ
         """
         self.pdf_document = pdf_document
         self.enable_cache = enable_cache
+        self.enable_spatial_index = enable_spatial_index
         
-        # ページ別ブロックデータ
+        # ページベースデータ構造
         self.page_blocks: List[List[BlockInfo]] = []  # page_num → [BlockInfo]
         self.page_block_texts: List[List[str]] = []  # page_num → [block_text]
-        
-        # 全体データ（後方互換性のため）
-        self.blocks: List[BlockInfo] = []
-        self.block_texts: List[str] = []
-        
-        # 文字位置データ
-        self.char_positions: List[CharPosition] = []
+        self.char_positions: List[CharPosition] = []  # 全文字位置（インデックス用のみ）
         
         # 高速検索用マッピング
-        self.global_offset_to_char: Dict[int, int] = {}  # グローバルオフセット → char_positions index
         self.page_block_offset_mapping: Dict[int, Dict[int, Dict[int, int]]] = {}  # page_num → page_block_id → {block_offset: char_positions index}
-        self.global_block_offset_mapping: Dict[int, Dict[int, int]] = {}  # global_block_id → {block_offset: char_positions index}
+        
+        # 空間インデックス（座標逆引き用）
+        self.spatial_grids: Dict[int, Dict[Tuple[int, int], List[int]]] = {}  # page_num → {(grid_x, grid_y): [char_indices]}
+        self.grid_size = 50  # グリッドサイズ（ピクセル）
         
         # キャッシュ
         self._coordinate_cache: Optional[Dict[str, List[Dict]]] = {} if enable_cache else None
@@ -79,7 +74,8 @@ class PDFBlockTextMapper:
             "total_blocks": 0,
             "total_chars": 0,
             "total_pages": 0,
-            "processing_time": 0.0
+            "processing_time": 0.0,
+            "spatial_index_enabled": enable_spatial_index
         }
         
         # 初期化実行
@@ -95,33 +91,23 @@ class PDFBlockTextMapper:
         try:
             self.page_blocks.clear()
             self.page_block_texts.clear()
-            self.blocks.clear()
-            self.block_texts.clear()
             self.char_positions.clear()
             
-            global_block_counter = 0
-            global_char_index = 0
+            char_index = 0
             
             for page_num in range(len(self.pdf_document)):
                 page = self.pdf_document[page_num]
-                page_blocks_data = self._extract_page_blocks(page, page_num, global_block_counter, global_char_index)
+                page_blocks_data = self._extract_page_blocks(page, page_num, char_index)
                 
                 # ページ別データ構築
                 page_block_infos = []
                 page_block_text_list = []
                 
                 for block_info, block_chars in page_blocks_data:
-                    # ページ別リストに追加
                     page_block_infos.append(block_info)
                     page_block_text_list.append(block_info.text)
-                    
-                    # 全体リストに追加（後方互換性）
-                    self.blocks.append(block_info)
-                    self.block_texts.append(block_info.text)
                     self.char_positions.extend(block_chars)
-                    
-                    global_block_counter += 1
-                    global_char_index += len(block_chars)
+                    char_index += len(block_chars)
                 
                 self.page_blocks.append(page_block_infos)
                 self.page_block_texts.append(page_block_text_list)
@@ -129,9 +115,14 @@ class PDFBlockTextMapper:
             # マッピング構築
             self._build_mappings()
             
+            # 空間インデックス構築
+            if self.enable_spatial_index:
+                self._build_spatial_index()
+            
             # 統計更新
+            total_blocks = sum(len(page_blocks) for page_blocks in self.page_blocks)
             self.stats.update({
-                "total_blocks": len(self.blocks),
+                "total_blocks": total_blocks,
                 "total_chars": len(self.char_positions),
                 "total_pages": len(self.pdf_document),
                 "processing_time": time.time() - start_time
@@ -150,8 +141,7 @@ class PDFBlockTextMapper:
         self, 
         page: fitz.Page, 
         page_num: int, 
-        start_global_block_id: int, 
-        start_global_char_index: int
+        start_char_index: int
     ) -> List[Tuple[BlockInfo, List[CharPosition]]]:
         """
         単一ページからブロック情報を抽出
@@ -164,8 +154,7 @@ class PDFBlockTextMapper:
         try:
             rawdict = page.get_text("rawdict")
             page_block_id = 0  # ページ内ブロックID（0から開始）
-            global_block_id = start_global_block_id
-            global_char_index = start_global_char_index
+            char_index = start_char_index
             
             for block_data in rawdict.get("blocks", []):
                 if "lines" not in block_data:
@@ -192,9 +181,7 @@ class PDFBlockTextMapper:
                             # 文字位置情報を作成
                             char_pos = CharPosition(
                                 page_block_id=page_block_id,
-                                global_block_id=global_block_id,
                                 block_offset=block_offset,
-                                global_offset=global_char_index,
                                 page_num=page_num,
                                 bbox=tuple(bbox) if bbox else None,
                                 character=char
@@ -204,13 +191,12 @@ class PDFBlockTextMapper:
                             block_char_positions.append(char_pos)
                             
                             block_offset += 1
-                            global_char_index += 1
+                            char_index += 1
                 
                 if block_text_chars:
                     # ブロック情報を作成
                     block_info = BlockInfo(
                         page_block_id=page_block_id,
-                        global_block_id=global_block_id,
                         page_num=page_num,
                         text="".join(block_text_chars),
                         bbox=tuple(block_bbox),
@@ -219,7 +205,6 @@ class PDFBlockTextMapper:
                     
                     page_blocks.append((block_info, block_char_positions))
                     page_block_id += 1
-                    global_block_id += 1
             
             return page_blocks
             
@@ -230,15 +215,9 @@ class PDFBlockTextMapper:
     def _build_mappings(self):
         """高速検索用マッピングを構築"""
         try:
-            self.global_offset_to_char.clear()
             self.page_block_offset_mapping.clear()
-            self.global_block_offset_mapping.clear()
             
             for i, char_pos in enumerate(self.char_positions):
-                # グローバルオフセットマッピング
-                self.global_offset_to_char[char_pos.global_offset] = i
-                
-                # ページ・ブロック内オフセットマッピング
                 page_num = char_pos.page_num
                 page_block_id = char_pos.page_block_id
                 
@@ -249,28 +228,60 @@ class PDFBlockTextMapper:
                     self.page_block_offset_mapping[page_num][page_block_id] = {}
                 
                 self.page_block_offset_mapping[page_num][page_block_id][char_pos.block_offset] = i
-                
-                # グローバルブロック内オフセットマッピング（後方互換性）
-                global_block_id = char_pos.global_block_id
-                if global_block_id not in self.global_block_offset_mapping:
-                    self.global_block_offset_mapping[global_block_id] = {}
-                
-                self.global_block_offset_mapping[global_block_id][char_pos.block_offset] = i
             
             logger.debug(f"マッピング構築完了: {len(self.char_positions)}文字位置")
             
         except Exception as e:
             logger.error(f"マッピング構築エラー: {e}")
 
-    def get_block_texts(self) -> List[str]:
-        """
-        ブロックごとのプレーンテキストリストを取得（後方互換性）
+    def _build_spatial_index(self):
+        """空間インデックス（グリッド分割）を構築"""
+        try:
+            logger.debug("空間インデックス構築開始")
+            start_time = __import__('time').time()
+            
+            self.spatial_grids.clear()
+            
+            for page_num in range(len(self.page_blocks)):
+                self.spatial_grids[page_num] = {}
+                
+                # ページ内の全文字を処理
+                for char_idx, char_pos in enumerate(self.char_positions):
+                    if char_pos.page_num == page_num and char_pos.bbox:
+                        bbox = char_pos.bbox
+                        
+                        # 文字が占有するグリッドセルを計算
+                        grid_cells = self._get_grid_cells(bbox)
+                        
+                        for grid_cell in grid_cells:
+                            if grid_cell not in self.spatial_grids[page_num]:
+                                self.spatial_grids[page_num][grid_cell] = []
+                            self.spatial_grids[page_num][grid_cell].append(char_idx)
+            
+            build_time = __import__('time').time() - start_time
+            logger.debug(f"空間インデックス構築完了: {build_time:.3f}秒")
+            
+        except Exception as e:
+            logger.error(f"空間インデックス構築エラー: {e}")
+
+    def _get_grid_cells(self, bbox: Tuple[float, float, float, float]) -> List[Tuple[int, int]]:
+        """bbox が占有するグリッドセルのリストを取得"""
+        x0, y0, x1, y1 = bbox
         
-        Returns:
-            List[str]: ブロックごとのプレーンテキスト
-        """
-        return self.block_texts.copy()
-    
+        # 開始・終了グリッド座標を計算
+        start_grid_x = int(x0 // self.grid_size)
+        start_grid_y = int(y0 // self.grid_size)
+        end_grid_x = int(x1 // self.grid_size)
+        end_grid_y = int(y1 // self.grid_size)
+        
+        # 占有するすべてのグリッドセルを列挙
+        grid_cells = []
+        for gx in range(start_grid_x, end_grid_x + 1):
+            for gy in range(start_grid_y, end_grid_y + 1):
+                grid_cells.append((gx, gy))
+        
+        return grid_cells
+
     def get_page_block_texts(self, page_num: int) -> List[str]:
         """
         指定ページのブロックテキストリストを取得
@@ -294,21 +305,6 @@ class PDFBlockTextMapper:
         """
         return [page_texts.copy() for page_texts in self.page_block_texts]
 
-    def get_block_info(self, global_block_id: int) -> Optional[BlockInfo]:
-        """
-        指定グローバルブロックの情報を取得（後方互換性）
-        
-        Args:
-            global_block_id: グローバルブロックID
-            
-        Returns:
-            Optional[BlockInfo]: ブロック情報（存在しない場合はNone）
-        """
-        for block in self.blocks:
-            if block.global_block_id == global_block_id:
-                return block
-        return None
-    
     def get_page_block_info(self, page_num: int, page_block_id: int) -> Optional[BlockInfo]:
         """
         指定ページの指定ブロック情報を取得
@@ -418,192 +414,82 @@ class PDFBlockTextMapper:
                 f"ページ{page_num}, ブロック{page_block_id}, オフセット{start_offset}-{end_offset}, エラー: {e}"
             )
             return []
-    
-    def map_block_offset_to_coordinates(
-        self, 
-        global_block_id: int, 
-        start_offset: int, 
-        end_offset: int
-    ) -> List[Dict[str, Any]]:
-        """
-        グローバルブロック内オフセットからPDF座標を取得（後方互換性）
-        
-        Args:
-            global_block_id: グローバルブロックID
-            start_offset: 開始オフセット（ブロック内）
-            end_offset: 終了オフセット（ブロック内）
-            
-        Returns:
-            List[Dict]: 座標情報リスト
-        """
-        try:
-            # キャッシュチェック
-            cache_key = f"global_block_{global_block_id}_{start_offset}_{end_offset}"
-            if self._coordinate_cache and cache_key in self._coordinate_cache:
-                return self._coordinate_cache[cache_key]
-            
-            # 範囲検証
-            if global_block_id not in self.global_block_offset_mapping:
-                logger.warning(f"存在しないグローバルブロックID: {global_block_id}")
-                return []
-            
-            block_mapping = self.global_block_offset_mapping[global_block_id]
-            if start_offset >= end_offset or start_offset < 0:
-                logger.warning(f"無効なオフセット範囲: {start_offset}-{end_offset}")
-                return []
-            
-            # 対象文字位置を収集
-            char_coords = []
-            for offset in range(start_offset, end_offset):
-                if offset in block_mapping:
-                    char_idx = block_mapping[offset]
-                    char_pos = self.char_positions[char_idx]
-                    
-                    if char_pos.bbox:
-                        char_coords.append({
-                            "bbox": char_pos.bbox,
-                            "page": char_pos.page_num,
-                            "char": char_pos.character
-                        })
-            
-            if not char_coords:
-                logger.warning(f"座標取得失敗: グローバルブロック{global_block_id}, オフセット{start_offset}-{end_offset}")
-                return []
-            
-            # ページごとにグループ化して矩形作成
-            page_groups: Dict[int, List] = {}
-            for coord in char_coords:
-                page = coord["page"]
-                if page not in page_groups:
-                    page_groups[page] = []
-                page_groups[page].append(coord["bbox"])
-            
-            # 各ページの境界矩形を計算
-            result_rects = []
-            for page, bboxes in page_groups.items():
-                if bboxes:
-                    x0 = min(bbox[0] for bbox in bboxes)
-                    y0 = min(bbox[1] for bbox in bboxes)
-                    x1 = max(bbox[2] for bbox in bboxes)
-                    y1 = max(bbox[3] for bbox in bboxes)
-                    
-                    text_chars = [coord["char"] for coord in char_coords if coord["page"] == page]
-                    text = "".join(text_chars)
-                    
-                    result_rects.append({
-                        "page_num": page,
-                        "rect": fitz.Rect(x0, y0, x1, y1),
-                        "text": text
-                    })
-            
-            # キャッシュに保存
-            if self._coordinate_cache:
-                self._coordinate_cache[cache_key] = result_rects
-            
-            logger.debug(
-                f"グローバルブロック座標マッピング成功: ブロック{global_block_id}, "
-                f"オフセット{start_offset}-{end_offset} -> {len(result_rects)}矩形"
-            )
-            
-            return result_rects
-            
-        except Exception as e:
-            logger.error(
-                f"グローバルブロックオフセット座標マッピングエラー: "
-                f"ブロック{global_block_id}, オフセット{start_offset}-{end_offset}, エラー: {e}"
-            )
-            return []
 
-    def map_global_offset_to_coordinates(
-        self, 
-        start_offset: int, 
-        end_offset: int
-    ) -> List[Dict[str, Any]]:
+    def find_offset_at_coordinates(self, page_num: int, x: float, y: float) -> Optional[Dict[str, Any]]:
         """
-        グローバルオフセットからPDF座標を取得
+        指定座標のページ・ブロック・オフセット情報を取得（座標→オフセット逆引き）
         
         Args:
-            start_offset: 開始オフセット（全体）
-            end_offset: 終了オフセット（全体）
+            page_num: ページ番号
+            x: X座標
+            y: Y座標
             
         Returns:
-            List[Dict]: 座標情報リスト
+            Optional[Dict]: 座標にある文字の詳細情報
+                {'page_num': int, 'page_block_id': int, 'block_offset': int, 'character': str, 'char_index': int}
         """
+        if not self.enable_spatial_index:
+            # 空間インデックスが無効な場合は線形検索
+            return self._find_offset_linear(page_num, x, y)
+        
+        return self._find_offset_spatial(page_num, x, y)
+
+    def _find_offset_spatial(self, page_num: int, x: float, y: float) -> Optional[Dict[str, Any]]:
+        """空間インデックスでの座標逆引き"""
         try:
-            # キャッシュチェック
-            cache_key = f"global_{start_offset}_{end_offset}"
-            if self._coordinate_cache and cache_key in self._coordinate_cache:
-                return self._coordinate_cache[cache_key]
+            if page_num not in self.spatial_grids:
+                return None
             
-            # 範囲検証
-            if start_offset >= end_offset or start_offset < 0 or end_offset > len(self.char_positions):
-                logger.warning(f"無効なグローバルオフセット範囲: {start_offset}-{end_offset}")
-                return []
+            # 対象グリッドセルを計算
+            grid_x = int(x // self.grid_size)
+            grid_y = int(y // self.grid_size)
+            grid_cell = (grid_x, grid_y)
             
-            # 対象文字位置を収集
-            char_coords = []
-            for offset in range(start_offset, end_offset):
-                if offset in self.global_offset_to_char:
-                    char_idx = self.global_offset_to_char[offset]
+            # グリッドセル内の候補文字を検索
+            if grid_cell in self.spatial_grids[page_num]:
+                for char_idx in self.spatial_grids[page_num][grid_cell]:
                     char_pos = self.char_positions[char_idx]
-                    
-                    if char_pos.bbox:
-                        char_coords.append({
-                            "bbox": char_pos.bbox,
-                            "page": char_pos.page_num,
-                            "global_block": char_pos.global_block_id,
-                            "char": char_pos.character
-                        })
+                    if (char_pos.bbox and 
+                        self._point_in_bbox(x, y, char_pos.bbox)):
+                        return {
+                            "page_num": char_pos.page_num,
+                            "page_block_id": char_pos.page_block_id,
+                            "block_offset": char_pos.block_offset,
+                            "character": char_pos.character,
+                            "char_index": char_idx
+                        }
             
-            if not char_coords:
-                logger.warning(f"グローバル座標取得失敗: オフセット{start_offset}-{end_offset}")
-                return []
-            
-            # ブロックとページでグループ化
-            groups: Dict[Tuple[int, int], List] = {}
-            for coord in char_coords:
-                key = (coord["page"], coord["global_block"])
-                if key not in groups:
-                    groups[key] = []
-                groups[key].append(coord)
-            
-            # 各グループの矩形を計算
-            result_rects = []
-            for (page, global_block), coords in groups.items():
-                bboxes = [coord["bbox"] for coord in coords]
-                
-                if bboxes:
-                    x0 = min(bbox[0] for bbox in bboxes)
-                    y0 = min(bbox[1] for bbox in bboxes)
-                    x1 = max(bbox[2] for bbox in bboxes)
-                    y1 = max(bbox[3] for bbox in bboxes)
-                    
-                    text = "".join(coord["char"] for coord in coords)
-                    
-                    result_rects.append({
-                        "page_num": page,
-                        "global_block_id": global_block,
-                        "rect": fitz.Rect(x0, y0, x1, y1),
-                        "text": text
-                    })
-            
-            # キャッシュに保存
-            if self._coordinate_cache:
-                self._coordinate_cache[cache_key] = result_rects
-            
-            logger.debug(
-                f"グローバル座標マッピング成功: オフセット{start_offset}-{end_offset} "
-                f"-> {len(result_rects)}矩形"
-            )
-            
-            return result_rects
+            return None
             
         except Exception as e:
-            logger.error(
-                f"グローバルオフセット座標マッピングエラー: "
-                f"オフセット{start_offset}-{end_offset}, エラー: {e}"
-            )
-            return []
+            logger.error(f"空間インデックス座標逆引きエラー: ページ{page_num}, 座標({x}, {y}), エラー: {e}")
+            return None
+
+    def _find_offset_linear(self, page_num: int, x: float, y: float) -> Optional[Dict[str, Any]]:
+        """線形検索での座標逆引き"""
+        try:
+            for char_idx, char_pos in enumerate(self.char_positions):
+                if (char_pos.page_num == page_num and 
+                    char_pos.bbox and 
+                    self._point_in_bbox(x, y, char_pos.bbox)):
+                    return {
+                        "page_num": char_pos.page_num,
+                        "page_block_id": char_pos.page_block_id,
+                        "block_offset": char_pos.block_offset,
+                        "character": char_pos.character,
+                        "char_index": char_idx
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"線形座標逆引きエラー: ページ{page_num}, 座標({x}, {y}), エラー: {e}")
+            return None
+
+    def _point_in_bbox(self, x: float, y: float, bbox: Tuple[float, float, float, float]) -> bool:
+        """点がbbox内にあるかチェック"""
+        x0, y0, x1, y1 = bbox
+        return x0 <= x <= x1 and y0 <= y <= y1
 
     def find_text_in_page_blocks(self, page_num: int, search_text: str) -> List[Dict[str, Any]]:
         """
@@ -656,30 +542,6 @@ class PDFBlockTextMapper:
         except Exception as e:
             logger.error(f"ページテキスト検索エラー: ページ{page_num}, '{search_text}', エラー: {e}")
             return []
-    
-    def find_text_in_blocks(self, search_text: str) -> List[Dict[str, Any]]:
-        """
-        全ブロックでテキストを検索（後方互換性）
-        
-        Args:
-            search_text: 検索テキスト
-            
-        Returns:
-            List[Dict]: 検索結果リスト
-        """
-        results = []
-        
-        try:
-            for page_num in range(len(self.page_block_texts)):
-                page_results = self.find_text_in_page_blocks(page_num, search_text)
-                results.extend(page_results)
-            
-            logger.debug(f"全ブロックテキスト検索完了: '{search_text}' -> {len(results)}件")
-            return results
-            
-        except Exception as e:
-            logger.error(f"全ブロックテキスト検索エラー: '{search_text}', エラー: {e}")
-            return []
 
     def get_page_block_summary(self, page_num: int) -> List[Dict[str, Any]]:
         """
@@ -701,7 +563,6 @@ class PDFBlockTextMapper:
             summary.append({
                 "page_num": block.page_num,
                 "page_block_id": block.page_block_id,
-                "global_block_id": block.global_block_id,
                 "char_count": block.char_count,
                 "text_preview": block.text[:100] + "..." if len(block.text) > 100 else block.text,
                 "bbox": block.bbox
@@ -717,27 +578,6 @@ class PDFBlockTextMapper:
             List[List[Dict]]: page_num → [block_summary]
         """
         return [self.get_page_block_summary(page_num) for page_num in range(len(self.page_blocks))]
-    
-    def get_block_summary(self) -> List[Dict[str, Any]]:
-        """
-        全ブロックの要約情報を取得（後方互換性）
-        
-        Returns:
-            List[Dict]: ブロック要約リスト
-        """
-        summary = []
-        
-        for block in self.blocks:
-            summary.append({
-                "page_block_id": block.page_block_id,
-                "global_block_id": block.global_block_id,
-                "page_num": block.page_num,
-                "char_count": block.char_count,
-                "text_preview": block.text[:100] + "..." if len(block.text) > 100 else block.text,
-                "bbox": block.bbox
-            })
-        
-        return summary
 
     def clear_cache(self):
         """キャッシュをクリア"""
@@ -749,16 +589,31 @@ class PDFBlockTextMapper:
         """統計情報を取得"""
         cache_size = len(self._coordinate_cache) if self._coordinate_cache else 0
         
+        # 空間インデックス統計
+        spatial_stats = {}
+        if self.enable_spatial_index:
+            total_grids = sum(len(page_grids) for page_grids in self.spatial_grids.values())
+            total_grid_entries = sum(
+                len(char_list) 
+                for page_grids in self.spatial_grids.values() 
+                for char_list in page_grids.values()
+            )
+            spatial_stats = {
+                "spatial_grids": total_grids,
+                "spatial_grid_entries": total_grid_entries,
+                "avg_chars_per_grid": total_grid_entries / max(total_grids, 1)
+            }
+        
         return {
             **self.stats,
             "cache_entries": cache_size,
-            "blocks_info": [
+            **spatial_stats,
+            "page_structure": [
                 {
-                    "page_block_id": block.page_block_id,
-                    "global_block_id": block.global_block_id,
-                    "page_num": block.page_num,
-                    "char_count": block.char_count
+                    "page_num": page_num,
+                    "block_count": len(self.page_blocks[page_num]),
+                    "char_count": sum(block.char_count for block in self.page_blocks[page_num])
                 }
-                for block in self.blocks[:10]  # 最初の10ブロックのみ表示
+                for page_num in range(min(5, len(self.page_blocks)))  # 最初の5ページのみ表示
             ]
         }

@@ -10,22 +10,13 @@ import sys
 import click
 
 from src.core.config_manager import ConfigManager
+from src.core.entity_types import ENTITY_ALIASES, ENTITY_TYPES, normalize_entity_key
 from src.cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
 
 
-# 許可されたエンティティリスト（仕様で固定）
-ALLOWED_ENTITIES = {
-    "person": "PERSON",
-    "location": "LOCATION", 
-    "date_time": "DATE_TIME",
-    "phone_number": "PHONE_NUMBER",
-    "individual_number": "INDIVIDUAL_NUMBER",
-    "year": "YEAR",
-    "proper_noun": "PROPER_NOUN",
-    "other": "OTHER",
-}
-
-ALLOWED_ENTITY_NAMES = list(ALLOWED_ENTITIES.values())
+# entity_types.py の定義を使用
+ALLOWED_ENTITIES = ENTITY_ALIASES
+ALLOWED_ENTITY_NAMES = ENTITY_TYPES
 
 def _convert_offsets_to_position(start_offset: int, end_offset_exclusive: int, text_2d: List[List[str]]) -> Tuple[Dict[str, int], Dict[str, int]]:
     """グローバルオフセットをpage_num,block_num,offset形式に変換

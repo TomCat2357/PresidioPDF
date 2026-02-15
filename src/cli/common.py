@@ -2,9 +2,13 @@
 # -*- coding: utf-8 -*-
 import json
 import hashlib
+import logging
+import sys
 from pathlib import Path
 from typing import Any, Optional
 import click
+
+logger = logging.getLogger(__name__)
 
 
 def dump_json(obj: Any, out_path: Optional[str], pretty: bool):
@@ -47,4 +51,32 @@ def validate_mutual_exclusion(flag1: bool, flag2: bool, name1: str, name2: str) 
     """相互排他オプションの確認"""
     if flag1 and flag2:
         raise click.ClickException(f"{name1}と{name2}は同時指定できません")
+
+
+def embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
+    """座標マップを出力PDFに埋め込む
+
+    mask_main / pdf_processor / embed_main で共通利用される処理。
+    """
+    try:
+        from src.pdf.pdf_coordinate_mapper import PDFCoordinateMapper  # Lazy import
+
+        mapper = PDFCoordinateMapper()
+
+        if not mapper.load_or_create_coordinate_map(original_pdf_path):
+            logger.warning(f"座標マップの生成に失敗しました: {original_pdf_path}")
+            return False
+
+        temp_path = output_pdf_path + ".temp"
+        if mapper.save_pdf_with_coordinate_map(output_pdf_path, temp_path):
+            Path(temp_path).replace(output_pdf_path)
+            logger.info(f"座標マップを埋め込みました: {output_pdf_path}")
+            return True
+        else:
+            logger.warning(f"座標マップの埋め込みに失敗しました: {output_pdf_path}")
+            return False
+
+    except Exception as e:
+        logger.error(f"座標マップ埋め込みエラー: {e}")
+        return False
 

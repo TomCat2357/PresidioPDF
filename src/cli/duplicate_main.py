@@ -7,13 +7,11 @@ from typing import Optional, Tuple, List, Dict, Any
 import click
 
 from src.cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
+from src.core.entity_types import ENTITY_TYPES, normalize_entity_key
 
 
-# 許可されたエンティティリスト（仕様で固定）
-ALLOWED_ENTITY_NAMES = [
-    "PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", 
-    "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"
-]
+# entity_types.py の定義を使用
+ALLOWED_ENTITY_NAMES = ENTITY_TYPES
 
 FALLBACK_PAGE_BASE = 10 ** 15
 FALLBACK_BLOCK_BASE = 10 ** 9
@@ -348,13 +346,9 @@ def main(
     # エンティティ順序（大文字小文字非依存、ADDRESSはLOCATIONに正規化）
     ent_order: List[str] = []
     for tok in ent_order_raw:
-        low = tok.lower()
-        if low == "address":
-            ent_order.append("LOCATION")
-            continue
-        up = tok.upper()
-        if up in ALLOWED_ENTITY_NAMES:
-            ent_order.append(up)
+        normalized = normalize_entity_key(tok)
+        if normalized in ALLOWED_ENTITY_NAMES:
+            ent_order.append(normalized)
             continue
         allowed_list = ", ".join(ALLOWED_ENTITY_NAMES + ["ADDRESS(=LOCATION)"])
         raise click.ClickException(f"未定義のエンティティ種別です: {tok}。許可されたエンティティ: {allowed_list}")

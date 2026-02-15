@@ -6,6 +6,8 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from pathlib import Path
 import json
 
+from src.core.entity_types import ENTITY_TYPES
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,17 +17,8 @@ class ConfigManager:
     優先順位: デフォルト < YAML設定ファイル < コマンドライン引数
     """
 
-    # サポートされているエンティティタイプ
-    ENTITY_TYPES = [
-        "PERSON",
-        "LOCATION",
-        "DATE_TIME",
-        "PHONE_NUMBER",
-        "INDIVIDUAL_NUMBER",
-        "YEAR",
-        "PROPER_NOUN",
-        "OTHER",
-    ]
+    # サポートされているエンティティタイプ（entity_types.py の定義を参照）
+    ENTITY_TYPES = ENTITY_TYPES
 
     def __init__(self, config_file: Optional[str] = None, args: Optional[Dict] = None):
         """

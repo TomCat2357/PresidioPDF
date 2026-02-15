@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 import click
 
 from src.core.config_manager import ConfigManager
-from src.cli.common import validate_input_file_exists, validate_output_parent_exists
+from src.core.entity_types import normalize_entity_key
+from src.cli.common import validate_input_file_exists, validate_output_parent_exists, embed_coordinate_map
 
 
 def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
@@ -31,33 +32,6 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
                 errs.append("detect.structured must be array")
     return errs
 
-
-def _embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
-    """座標マップを出力PDFに埋め込む"""
-    try:
-        from src.pdf.pdf_coordinate_mapper import PDFCoordinateMapper  # Lazy import
-        
-        mapper = PDFCoordinateMapper()
-        
-        # 元のPDFから座標マップを生成または読み込み
-        if not mapper.load_or_create_coordinate_map(original_pdf_path):
-            print(f"警告: 座標マップの生成に失敗しました: {original_pdf_path}", file=sys.stderr)
-            return False
-        
-        # 出力PDFに座標マップを埋め込み（一時ファイルを経由）
-        temp_path = output_pdf_path + ".temp"
-        if mapper.save_pdf_with_coordinate_map(output_pdf_path, temp_path):
-            # 一時ファイルを元のファイルに置き換え
-            Path(temp_path).replace(output_pdf_path)
-            print(f"座標マップを埋め込みました: {output_pdf_path}", file=sys.stderr)
-            return True
-        else:
-            print(f"警告: 座標マップの埋め込みに失敗しました: {output_pdf_path}", file=sys.stderr)
-            return False
-            
-    except Exception as e:
-        print(f"座標マップ埋め込みエラー: {e}", file=sys.stderr)
-        return False
 
 
 @click.command(help="検出JSON（新仕様フラット形式）を使ってPDFにハイライト注釈を追加（入力はファイル必須）")
@@ -156,14 +130,7 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
         return out
 
     # マスク指定のパース（ENTITY=color[@alpha] 形式、ENTITYは大文字小文字非依存・出力は全大文字。ADDRESSはLOCATIONのエイリアス）
-    def _normalize_entity_key(name: str) -> str:
-        n = str(name or "").strip()
-        if not n:
-            return ""
-        low = n.lower()
-        if low == "address":
-            return "LOCATION"
-        return n.upper()
+    # normalize_entity_key は entity_types.py から import 済み
 
     # 簡易CSSカラー名→RGBマップ（最小集合）
     CSS_COLORS = {
@@ -243,7 +210,7 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
             if not spec or '=' not in spec:
                 raise click.ClickException(f"--mask は <ENTITY>=<color>[@alpha] 形式で指定してください: {spec}")
             key, val = spec.split('=', 1)
-            ent = _normalize_entity_key(key)
+            ent = normalize_entity_key(key)
             if not ent:
                 raise click.ClickException(f"--mask のエンティティ名が空です: {spec}")
             # color[@alpha]
@@ -348,7 +315,7 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
             if line_rects_items:
                 # originを検出アイテムから引き継ぐ（auto/manual/custom）
                 origin = str(detect_item.get("origin", "auto"))
-                ent_u = _normalize_entity_key(entity_type)
+                ent_u = normalize_entity_key(entity_type)
                 # 出力・内部は全大文字を使用
                 entities.append({
                     "entity_type": ent_u,
@@ -386,16 +353,12 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
     # オプション指定時は座標マップを埋め込む
     if embed_coordinates:
         try:
-            _embed_coordinate_map(pdf, out)
+            embed_coordinate_map(pdf, out)
         except Exception:
             # テストでは埋め込み失敗時スキップするケースがあるため、例外は握りつぶす
             pass
     
     print(out)
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":

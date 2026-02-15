@@ -10,6 +10,12 @@ from typing import List, Dict, Optional
 from pathlib import Path
 
 from src.core.config_manager import ConfigManager
+from src.core.entity_types import (
+    get_annotation_color,
+    get_highlight_color,
+    get_entity_type_name_ja,
+)
+from src.pdf.annotation_utils import parse_annotation_content
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +132,9 @@ class PDFMasker:
                     ):  # 辞書からRectオブジェクトへ変換
                         rect = fitz.Rect(rect["x0"], rect["y0"], rect["x1"], rect["y1"])
 
-                    if self._is_duplicate_annotation(
-                        rect, entity, existing_annotations, page_num
+                    if self._is_duplicate_rect(
+                        rect, entity, existing_annotations, page_num,
+                        check_entity_type=True,
                     ):
                         logger.debug(
                             f"重複注釈をスキップ: {entity['text']} ({entity['entity_type']})"
@@ -240,7 +247,7 @@ class PDFMasker:
                         r = r & page.rect
                         if (not r) or r.width <= 0 or r.height <= 0:
                             continue
-                        if self._is_duplicate_highlight(r, entity, existing_highlights, page_num):
+                        if self._is_duplicate_rect(r, entity, existing_highlights, page_num):
                             continue
                         self._add_single_highlight(page, r, entity)
                         highlights_added += 1
@@ -350,29 +357,11 @@ class PDFMasker:
 
     def _get_annotation_color_pymupdf(self, entity_type: str) -> List[float]:
         """エンティティタイプに応じたPyMuPDF用注釈色を取得"""
-        color_mapping = {
-            "PERSON": [1.0, 0.0, 0.0],
-            "LOCATION": [0.0, 1.0, 0.0],
-            "DATE_TIME": [0.0, 0.0, 1.0],
-            "PHONE_NUMBER": [1.0, 1.0, 0.0],
-            "INDIVIDUAL_NUMBER": [1.0, 0.0, 1.0],
-            "YEAR": [0.5, 0.0, 1.0],
-            "PROPER_NOUN": [1.0, 0.5, 0.0],
-        }
-        return color_mapping.get(entity_type, [0.0, 0.0, 0.0])
+        return get_annotation_color(entity_type)
 
     def _get_highlight_color_pymupdf(self, entity_type: str) -> List[float]:
         """エンティティタイプに応じたPyMuPDF用ハイライト色を取得"""
-        color_mapping = {
-            "PERSON": [1.0, 0.8, 0.8],
-            "LOCATION": [0.8, 1.0, 0.8],
-            "DATE_TIME": [0.8, 0.8, 1.0],
-            "PHONE_NUMBER": [1.0, 1.0, 0.8],
-            "INDIVIDUAL_NUMBER": [1.0, 0.8, 1.0],
-            "YEAR": [0.9, 0.8, 1.0],
-            "PROPER_NOUN": [1.0, 0.9, 0.8],
-        }
-        return color_mapping.get(entity_type, [0.9, 0.9, 0.9])
+        return get_highlight_color(entity_type)
 
     def _generate_annotation_content(self, entity: Dict) -> str:
         """注釈内容を生成"""
@@ -384,16 +373,7 @@ class PDFMasker:
         entity_type = entity["entity_type"]
         text = entity.get("text", "")
 
-        type_names = {
-            "PERSON": "人名",
-            "LOCATION": "場所",
-            "DATE_TIME": "日時",
-            "PHONE_NUMBER": "電話番号",
-            "INDIVIDUAL_NUMBER": "マイナンバー",
-            "YEAR": "年号",
-            "PROPER_NOUN": "固有名詞",
-        }
-        type_name = type_names.get(entity_type, entity_type)
+        type_name = get_entity_type_name_ja(entity_type)
 
         if text_display_mode == "minimal":
             return type_name
@@ -409,106 +389,95 @@ class PDFMasker:
             )
             return f"【個人情報】{type_name}"
 
-    def _clear_all_annotations(self, doc):
-        """PDFから全ての注釈を削除（ハイライト以外）"""
+    def _clear_annotations_by_type(self, doc, *, highlight: bool):
+        """PDFから注釈をタイプ別に削除
+
+        Args:
+            doc: PyMuPDFドキュメント
+            highlight: Trueならハイライトのみ削除、Falseならハイライト以外を削除
+        """
         try:
             for page in doc:
                 for annot in list(page.annots()):
-                    if annot.type[1] != "Highlight":
+                    is_highlight = annot.type[1] == "Highlight"
+                    if is_highlight == highlight:
                         page.delete_annot(annot)
         except Exception as e:
-            logger.error(f"注釈削除エラー: {e}")
+            label = "ハイライト" if highlight else "注釈"
+            logger.error(f"{label}削除エラー: {e}")
+
+    def _clear_all_annotations(self, doc):
+        """PDFから全ての注釈を削除（ハイライト以外）"""
+        self._clear_annotations_by_type(doc, highlight=False)
 
     def _clear_all_highlights(self, doc):
         """PDFから全てのハイライトを削除"""
-        try:
-            for page in doc:
-                for annot in list(page.annots()):
-                    if annot.type[1] == "Highlight":
-                        page.delete_annot(annot)
-        except Exception as e:
-            logger.error(f"ハイライト削除エラー: {e}")
+        self._clear_annotations_by_type(doc, highlight=True)
 
-    def _get_existing_annotations(self, doc) -> List[Dict]:
-        """既存の注釈情報を取得"""
+    def _get_existing_items(self, doc, *, highlight: bool) -> List[Dict]:
+        """既存の注釈/ハイライト情報を取得
+
+        Args:
+            doc: PyMuPDFドキュメント
+            highlight: Trueならハイライト、Falseならハイライト以外
+        """
         existing = []
         try:
             for page_num, page in enumerate(doc):
                 for annot in page.annots():
-                    if annot.type[1] != "Highlight":
-                        existing.append(
-                            {
-                                "rect": annot.rect,
-                                "page_num": page_num,
-                                "content": annot.info.get("content", ""),
-                                "title": annot.info.get("title", ""),
-                            }
+                    is_highlight = annot.type[1] == "Highlight"
+                    if is_highlight != highlight:
+                        continue
+
+                    content = annot.info.get("content", "")
+                    item = {
+                        "rect": annot.rect,
+                        "page_num": page_num,
+                        "content": content,
+                        "title": annot.info.get("title", ""),
+                    }
+
+                    if highlight:
+                        item["creator"] = (
+                            getattr(annot, 'name', None)
+                            or getattr(annot.info, 'name', None)
+                            or ""
                         )
+                        parsed_data = parse_annotation_content(content)
+                        if parsed_data:
+                            item.update(parsed_data)
+
+                    existing.append(item)
         except Exception as e:
-            logger.debug(f"既存注釈取得エラー: {e}")
+            label = "ハイライト" if highlight else "注釈"
+            logger.debug(f"既存{label}取得エラー: {e}")
         return existing
+
+    def _get_existing_annotations(self, doc) -> List[Dict]:
+        """既存の注釈情報を取得（ハイライト以外）"""
+        return self._get_existing_items(doc, highlight=False)
 
     def _get_existing_highlights(self, doc) -> List[Dict]:
         """既存のハイライト情報を取得"""
-        existing = []
-        try:
-            for page_num, page in enumerate(doc):
-                for annot in page.annots():
-                    if annot.type[1] == "Highlight":
-                        # Creator情報を取得
-                        creator = getattr(annot, 'name', None) or getattr(annot.info, 'name', None) or ""
-                        
-                        # Content情報を取得してパース
-                        content = annot.info.get("content", "")
-                        parsed_data = self._parse_highlight_content(content)
-                        
-                        highlight_info = {
-                            "rect": annot.rect,
-                            "page_num": page_num,
-                            "content": content,
-                            "title": annot.info.get("title", ""),
-                            "creator": creator,
-                        }
-                        
-                        # パース済みデータがあれば追加
-                        if parsed_data:
-                            highlight_info.update(parsed_data)
-                            
-                        existing.append(highlight_info)
-        except Exception as e:
-            logger.debug(f"既存ハイライト取得エラー: {e}")
-        return existing
+        return self._get_existing_items(doc, highlight=True)
 
-    def _parse_highlight_content(self, content: str) -> Dict:
-        """ハイライトのcontent文字列をパースして構造化データを取得"""
-        result = {}
-        try:
-            # detect_word:"value",entity_type:"TYPE" 形式のパース
-            import re
-            
-            # detect_word:"..." の抽出
-            detect_word_match = re.search(r'detect_word:"([^"]*)"', content)
-            if detect_word_match:
-                result["detect_word"] = detect_word_match.group(1)
-            
-            # entity_type:"..." の抽出
-            entity_type_match = re.search(r'entity_type:"([^"]*)"', content)
-            if entity_type_match:
-                result["entity_type"] = entity_type_match.group(1)
-                
-        except Exception as e:
-            logger.debug(f"ハイライトコンテンツパースエラー: {e}")
-        
-        return result
-
-    def _is_duplicate_annotation(
+    def _is_duplicate_rect(
         self,
         rect: fitz.Rect,
         entity: Dict,
-        existing_annotations: List[Dict],
+        existing_items: List[Dict],
         page_num: int,
+        check_entity_type: bool = False,
     ) -> bool:
-        """注釈が重複しているかをチェック"""
+        """注釈/ハイライトが重複しているかをチェック
+
+        Args:
+            rect: 判定対象の矩形
+            entity: 判定対象のエンティティ情報
+            existing_items: 既存の注釈/ハイライトリスト
+            page_num: ページ番号
+            check_entity_type: Trueの場合、entity_typeも比較する（注釈用）
+        """
         if not self.config_manager.should_remove_identical_annotations():
             return False
 
@@ -516,7 +485,7 @@ class PDFMasker:
         entity_text = entity.get("text", "")
         entity_type = entity.get("entity_type", "")
 
-        for existing in existing_annotations:
+        for existing in existing_items:
             if existing["page_num"] != page_num:
                 continue
 
@@ -528,43 +497,10 @@ class PDFMasker:
                 and abs(rect.x1 - existing_rect.x1) <= tolerance
                 and abs(rect.y1 - existing_rect.y1) <= tolerance
             ):
-
-                if (
-                    existing.get("text", "") == entity_text
-                    and existing.get("entity_type", "") == entity_type
-                ):
-                    return True
-
-        return False
-
-    def _is_duplicate_highlight(
-        self,
-        rect: fitz.Rect,
-        entity: Dict,
-        existing_highlights: List[Dict],
-        page_num: int,
-    ) -> bool:
-        """ハイライトが重複しているかをチェック"""
-        if not self.config_manager.should_remove_identical_annotations():
-            return False
-
-        tolerance = self.config_manager.get_annotation_comparison_tolerance()
-        entity_text = entity.get("text", "")
-
-        for existing in existing_highlights:
-            if existing["page_num"] != page_num:
-                continue
-
-            existing_rect = existing["rect"]
-
-            if (
-                abs(rect.x0 - existing_rect.x0) <= tolerance
-                and abs(rect.y0 - existing_rect.y0) <= tolerance
-                and abs(rect.x1 - existing_rect.x1) <= tolerance
-                and abs(rect.y1 - existing_rect.y1) <= tolerance
-            ):
-
-                if existing.get("text", "") == entity_text:
-                    return True
+                if existing.get("text", "") != entity_text:
+                    continue
+                if check_entity_type and existing.get("entity_type", "") != entity_type:
+                    continue
+                return True
 
         return False

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.core.config_manager import ConfigManager
+from src.pdf.annotation_utils import parse_annotation_content
 
 logger = logging.getLogger(__name__)
 
@@ -194,25 +195,7 @@ class PDFAnnotator:
 
     def _parse_annotation_content(self, content: str) -> Dict:
         """注釈のcontent文字列をパースして構造化データを取得"""
-        result = {}
-        try:
-            # detect_word:"value",entity_type:"TYPE" 形式のパース
-            import re
-            
-            # detect_word:"..." の抽出
-            detect_word_match = re.search(r'detect_word:"([^"]*)"', content)
-            if detect_word_match:
-                result["detect_word"] = detect_word_match.group(1)
-            
-            # entity_type:"..." の抽出
-            entity_type_match = re.search(r'entity_type:"([^"]*)"', content)
-            if entity_type_match:
-                result["entity_type"] = entity_type_match.group(1)
-                
-        except Exception as e:
-            logger.debug(f"注釈コンテンツパースエラー: {e}")
-        
-        return result
+        return parse_annotation_content(content)
 
     def _extract_covered_text(self, rect: fitz.Rect, page) -> str:
         """注釈がカバーしているテキストを抽出"""

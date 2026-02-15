@@ -319,31 +319,14 @@ class PDFProcessor:
             logger.error(f"レポート生成でエラー: {e}")
 
     def _embed_coordinate_map(self, original_pdf_path: str, output_pdf_path: str) -> bool:
-        """座標マップを出力PDFに埋め込む"""
+        """座標マップを出力PDFに埋め込む（cli.common.embed_coordinate_map に委譲）"""
         try:
-            from pdf.pdf_coordinate_mapper import PDFCoordinateMapper  # Lazy import
-            
-            mapper = PDFCoordinateMapper()
-            
-            # 元のPDFから座標マップを生成または読み込み
-            if not mapper.load_or_create_coordinate_map(original_pdf_path):
-                logger.warning(f"座標マップの生成に失敗しました: {original_pdf_path}")
-                return False
-            
-            # 出力PDFに座標マップを埋め込み（一時ファイルを経由）
-            temp_path = output_pdf_path + ".temp"
-            if mapper.save_pdf_with_coordinate_map(output_pdf_path, temp_path):
-                # 一時ファイルを元のファイルに置き換え
-                Path(temp_path).replace(output_pdf_path)
-                logger.info(f"座標マップを埋め込みました: {output_pdf_path}")
-                return True
-            else:
-                logger.warning(f"座標マップの埋め込みに失敗しました: {output_pdf_path}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"座標マップ埋め込みエラー: {e}")
-            return False
+            from src.cli.common import embed_coordinate_map
+            return embed_coordinate_map(original_pdf_path, output_pdf_path)
+        except ImportError:
+            # src. プレフィックスなしの実行環境フォールバック
+            from cli.common import embed_coordinate_map  # type: ignore[import-not-found]
+            return embed_coordinate_map(original_pdf_path, output_pdf_path)
 
     def _create_backup(self, file_path: str) -> Optional[str]:
         """ファイルのバックアップ出力は廃止（常にNone）"""

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import click
 
 from src.core.config_manager import ConfigManager
+from src.core.entity_types import ENTITY_TYPES
 from src.cli.common import dump_json, sha256_file, validate_input_file_exists, validate_output_parent_exists
 
 
@@ -107,8 +108,8 @@ def _read_highlight_raw(pdf_path: str, cfg: ConfigManager) -> List[Dict[str, Any
 
 def _convert_highlights_to_spec_format(highlights: List[Dict[str, Any]], structured: Dict[str, Any]) -> List[Dict[str, Any]]:
     """ハイライトを仕様書のdetect形式に変換（テキスト検索はページ/ブロック跨ぎ対応）"""
-    # 許可されたエンティティタイプ
-    ALLOWED_ENTITIES = {"PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"}
+    # 許可されたエンティティタイプ（entity_types.py の定義を使用）
+    ALLOWED_ENTITIES = set(ENTITY_TYPES)
     
     detect_list: List[Dict[str, Any]] = []
     
