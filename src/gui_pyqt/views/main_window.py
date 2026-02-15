@@ -71,11 +71,13 @@ class MainWindow(QMainWindow):
             duplicate_settings = self.detect_config_service.load_duplicate_settings()
             self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
+            self.spacy_model = self.detect_config_service.load_spacy_model()
         except Exception as e:
             logger.warning(f"検出設定の初期化に失敗: {e}")
             self.enabled_detect_entities = list(DetectConfigService.ENTITY_TYPES)
             self.duplicate_entity_overlap_mode = "any"
             self.duplicate_overlap_mode = "overlap"
+            self.spacy_model = DetectConfigService.DEFAULT_SPACY_MODEL
 
         # Detect実行スコープの管理
         self._detect_scope = "all"
@@ -325,6 +327,8 @@ class MainWindow(QMainWindow):
         duplicate_settings = self.detect_config_service.load_duplicate_settings()
         self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
         self.duplicate_overlap_mode = duplicate_settings["overlap"]
+        self.spacy_model = self.detect_config_service.load_spacy_model()
+        installed_models = DetectConfigService.get_installed_spacy_models()
 
         dialog = DetectConfigDialog(
             entity_types=DetectConfigService.ENTITY_TYPES,
@@ -332,6 +336,9 @@ class MainWindow(QMainWindow):
             config_path=self.detect_config_service.config_path,
             duplicate_entity_overlap_mode=self.duplicate_entity_overlap_mode,
             duplicate_overlap_mode=self.duplicate_overlap_mode,
+            spacy_model=self.spacy_model,
+            installed_models=installed_models,
+            all_models=DetectConfigService.SPACY_MODELS,
             parent=self,
         )
         if dialog.import_button:
@@ -358,9 +365,13 @@ class MainWindow(QMainWindow):
         )
         self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
         self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
+        selected_model = dialog.get_spacy_model()
+        if selected_model:
+            self.spacy_model = self.detect_config_service.save_spacy_model(selected_model)
         self.log_message(
             f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
             f"({self.detect_config_service.config_path.name}), "
+            f"モデル={self.spacy_model}, "
             f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
             f"overlap:{self.duplicate_overlap_mode}"
         )
@@ -403,11 +414,13 @@ class MainWindow(QMainWindow):
             imported_duplicate_settings = self.detect_config_service.load_duplicate_settings()
             self.duplicate_entity_overlap_mode = imported_duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = imported_duplicate_settings["overlap"]
+            self.spacy_model = self.detect_config_service.load_spacy_model()
             dialog.set_enabled_entities(imported_entities)
             dialog.set_duplicate_settings(
                 self.duplicate_entity_overlap_mode,
                 self.duplicate_overlap_mode,
             )
+            dialog.set_spacy_model(self.spacy_model)
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
             )
@@ -511,6 +524,7 @@ class MainWindow(QMainWindow):
 
         task_kwargs: Dict[str, Any] = {
             "entities": list(self.enabled_detect_entities),
+            "model_names": (self.spacy_model,),
         }
         add_patterns, omit_patterns = self.detect_config_service.load_custom_patterns()
         if add_patterns:

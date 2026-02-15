@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
@@ -16,6 +17,7 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QVBoxLayout,
 )
+from PyQt6.QtGui import QStandardItem
 
 
 class DetectConfigDialog(QDialog):
@@ -28,6 +30,9 @@ class DetectConfigDialog(QDialog):
         config_path: Path,
         duplicate_entity_overlap_mode: str = "any",
         duplicate_overlap_mode: str = "overlap",
+        spacy_model: str = "ja_core_news_sm",
+        installed_models: Optional[List[str]] = None,
+        all_models: Optional[List[str]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -42,12 +47,16 @@ class DetectConfigDialog(QDialog):
         self.entity_overlap_any_radio: Optional[QRadioButton] = None
         self.overlap_contain_radio: Optional[QRadioButton] = None
         self.overlap_overlap_radio: Optional[QRadioButton] = None
+        self.model_combo: Optional[QComboBox] = None
+        self._installed_models: List[str] = list(installed_models or [])
+        self._all_models: List[str] = list(all_models or [])
         self._init_ui()
         self.set_enabled_entities(enabled_entities)
         self.set_duplicate_settings(
             duplicate_entity_overlap_mode,
             duplicate_overlap_mode,
         )
+        self.set_spacy_model(spacy_model)
 
     def _init_ui(self):
         self.setWindowTitle("設定")
@@ -73,6 +82,27 @@ class DetectConfigDialog(QDialog):
         select_row.addWidget(self.select_all_button)
         select_row.addStretch()
         layout.addLayout(select_row)
+
+        # spaCyモデル選択
+        model_group = QGroupBox("spaCyモデル")
+        model_layout = QHBoxLayout()
+        model_label = QLabel("使用モデル:")
+        self.model_combo = QComboBox()
+        for model_name in self._all_models:
+            if model_name in self._installed_models:
+                self.model_combo.addItem(model_name, model_name)
+            else:
+                label = f"{model_name} (未インストール)"
+                self.model_combo.addItem(label, model_name)
+                idx = self.model_combo.count() - 1
+                item = self.model_combo.model().item(idx)
+                if isinstance(item, QStandardItem):
+                    item.setEnabled(False)
+        model_layout.addWidget(model_label)
+        model_layout.addWidget(self.model_combo)
+        model_layout.addStretch()
+        model_group.setLayout(model_layout)
+        layout.addWidget(model_group)
 
         duplicate_group = QGroupBox("重複削除設定")
         duplicate_layout = QVBoxLayout()
@@ -155,6 +185,19 @@ class DetectConfigDialog(QDialog):
             "entity_overlap_mode": entity_overlap_mode,
             "overlap": overlap_mode,
         }
+
+    def get_spacy_model(self) -> str:
+        if self.model_combo:
+            return self.model_combo.currentData() or ""
+        return ""
+
+    def set_spacy_model(self, model_name: str):
+        if not self.model_combo:
+            return
+        for i in range(self.model_combo.count()):
+            if self.model_combo.itemData(i) == model_name:
+                self.model_combo.setCurrentIndex(i)
+                return
 
     def _on_select_all_clicked(self):
         for checkbox in self.checkboxes.values():

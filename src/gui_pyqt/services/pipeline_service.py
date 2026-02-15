@@ -163,7 +163,10 @@ class PipelineService:
             entities = cfg.get_enabled_entities()
 
         # モデルの決定
-        if model_names is None:
+        if model_names is not None and model_names:
+            cfg.set_spacy_model(model_names[0])
+            model_names = cfg.get_models()
+        else:
             model_names = cfg.get_models()
 
         # read_resultからテキストとメタデータを取得

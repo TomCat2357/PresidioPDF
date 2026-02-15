@@ -21,6 +21,12 @@ class DetectConfigService:
     """GUI用検出設定の管理サービス"""
 
     CONFIG_FILE_NAME = ".config.json"
+    SPACY_MODELS = [
+        "ja_core_news_sm",
+        "ja_core_news_md",
+        "ja_core_news_lg",
+    ]
+    DEFAULT_SPACY_MODEL = "ja_core_news_sm"
     ENTITY_TYPES = [
         "PERSON",
         "LOCATION",
@@ -89,6 +95,44 @@ class DetectConfigService:
         data["enabled_entities"] = normalized
         self._write_json(data)
         return normalized
+
+    def load_spacy_model(self) -> str:
+        """設定ファイルからspaCyモデル名を読み込む"""
+        if not self.config_path.exists():
+            return self.DEFAULT_SPACY_MODEL
+        try:
+            data = self._load_json(self.config_path)
+            if isinstance(data, dict):
+                model = data.get("spacy_model", self.DEFAULT_SPACY_MODEL)
+                if isinstance(model, str) and model.strip():
+                    return model.strip()
+        except Exception as exc:
+            logger.warning(f"spaCyモデル設定の読み込みに失敗: {exc}")
+        return self.DEFAULT_SPACY_MODEL
+
+    def save_spacy_model(self, model_name: str) -> str:
+        """spaCyモデル名を設定ファイルに保存する"""
+        name = str(model_name or "").strip()
+        if not name:
+            name = self.DEFAULT_SPACY_MODEL
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+        data["spacy_model"] = name
+        self._write_json(data)
+        return name
+
+    @classmethod
+    def get_installed_spacy_models(cls) -> List[str]:
+        """インストール済みのspaCyモデル一覧を返す"""
+        import spacy.util
+
+        installed = []
+        for model in cls.SPACY_MODELS:
+            if spacy.util.is_package(model):
+                installed.append(model)
+        return installed
 
     def load_duplicate_settings(self) -> Dict[str, str]:
         """重複削除設定を読み込む"""
@@ -280,6 +324,7 @@ class DetectConfigService:
     @classmethod
     def _default_json_config(cls) -> Dict[str, Any]:
         return {
+            "spacy_model": cls.DEFAULT_SPACY_MODEL,
             "enabled_entities": list(cls.ENTITY_TYPES),
             "add_entity": {entity: [] for entity in cls.ENTITY_TYPES},
             "ommit_entity": [],
@@ -290,6 +335,12 @@ class DetectConfigService:
         if not isinstance(data, dict):
             data = {}
         normalized = dict(data)
+
+        raw_model = normalized.get("spacy_model", self.DEFAULT_SPACY_MODEL)
+        if isinstance(raw_model, str) and raw_model.strip():
+            normalized["spacy_model"] = raw_model.strip()
+        else:
+            normalized["spacy_model"] = self.DEFAULT_SPACY_MODEL
 
         normalized["enabled_entities"] = self._extract_enabled_entities(normalized)
 

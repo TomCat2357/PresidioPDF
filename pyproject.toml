@@ -17,7 +17,10 @@ dependencies = [
     "PyMuPDF>=1.23.0",
     "PyYAML>=6.0",
     "numpy>=1.26.0",
-    # ja-core-news-sm は別途 python -m spacy download ja_core_news_sm でインストール
+    # spaCy日本語モデル
+    "ja-core-news-sm>=3.8.0",
+    "ja-core-news-md>=3.7.0",
+    "ja-core-news-lg>=3.7.0",
 ]
 
 [project.optional-dependencies]
@@ -34,10 +37,13 @@ dev = [
     "pytest-playwright>=0.7.0",
 ]
 
-# GPUモード（高精度モデル）
+# spaCyモデル（個別インストール用）
+model-sm = ["ja-core-news-sm>=3.8.0"]
+model-md = ["ja-core-news-md>=3.7.0"]
+model-lg = ["ja-core-news-lg>=3.7.0"]
+
+# GPUモード（GPU系パッケージのみ）
 gpu = [
-    "ja-core-news-md>=3.7.0",
-    "ja-core-news-lg>=3.7.0",
     "torch>=2.0.0",
     "pandas>=2.3.1",
     "reportlab>=4.0.0",
