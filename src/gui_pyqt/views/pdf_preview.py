@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QRadioButton,
+    QButtonGroup,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor
@@ -28,6 +30,9 @@ class PDFPreviewWidget(QWidget):
     page_changed = pyqtSignal(int)  # ページ番号が変更された
     entity_clicked = pyqtSignal(int)  # クリックされたエンティティのインデックス
     text_selected = pyqtSignal(dict)  # テキストが選択された（手動PII追記用）
+    SELECTION_MODE_TEXT = "text_drag"
+    SELECTION_MODE_RECT = "rect_drag"
+    SELECTION_MODE_CIRCLE = "circle_drag"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,6 +47,7 @@ class PDFPreviewWidget(QWidget):
         self.drag_current_pos: Optional[tuple] = None
         self.drag_start_char_index: Optional[int] = None
         self._page_chars_cache: Dict[int, List[Dict]] = {}
+        self.selection_mode: str = self.SELECTION_MODE_TEXT
 
         self.init_ui()
 
@@ -91,6 +97,31 @@ class PDFPreviewWidget(QWidget):
 
         zoom_layout.addStretch()
         layout.addLayout(zoom_layout)
+
+        # 選択モード
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("選択モード:"))
+        self.selection_mode_group = QButtonGroup(self)
+        self.selection_mode_buttons: Dict[str, QRadioButton] = {}
+        mode_items = [
+            ("文字列ドラッグ", self.SELECTION_MODE_TEXT),
+            ("長方形ドラッグ", self.SELECTION_MODE_RECT),
+            ("円ドラッグ", self.SELECTION_MODE_CIRCLE),
+        ]
+        for label, mode in mode_items:
+            btn = QRadioButton(label)
+            btn.toggled.connect(
+                lambda checked, m=mode: self._on_selection_mode_changed(m, checked)
+            )
+            self.selection_mode_group.addButton(btn)
+            self.selection_mode_buttons[mode] = btn
+            mode_layout.addWidget(btn)
+
+        default_btn = self.selection_mode_buttons.get(self.selection_mode)
+        if default_btn:
+            default_btn.setChecked(True)
+        mode_layout.addStretch()
+        layout.addLayout(mode_layout)
 
         # PDFプレビュー表示エリア（スクロール可能）
         self.scroll_area = QScrollArea()
@@ -202,9 +233,10 @@ class PDFPreviewWidget(QWidget):
                 entity_type = entity.get("entity_type", "OTHER")
                 base_color = color_map.get(entity_type, QColor(200, 200, 200, 100))
 
-                # 描画する矩形リストを取得
+                # 描画する図形リストを取得
+                circles = self._get_draw_circles(entity, scale)
                 rects = self._get_draw_rects(entity, scale)
-                if not rects:
+                if not circles and not rects:
                     continue
 
                 if is_selected:
@@ -219,11 +251,20 @@ class PDFPreviewWidget(QWidget):
                 painter.setPen(pen)
                 painter.setBrush(fill_color)
 
-                for rect in rects:
-                    painter.drawRect(
-                        int(rect[0]), int(rect[1]),
-                        int(rect[2] - rect[0]), int(rect[3] - rect[1])
-                    )
+                if circles:
+                    for center_x, center_y, radius in circles:
+                        painter.drawEllipse(
+                            int(center_x - radius),
+                            int(center_y - radius),
+                            int(radius * 2),
+                            int(radius * 2),
+                        )
+                else:
+                    for rect in rects:
+                        painter.drawRect(
+                            int(rect[0]), int(rect[1]),
+                            int(rect[2] - rect[0]), int(rect[3] - rect[1])
+                        )
 
         painter.end()
         return pixmap
@@ -251,6 +292,61 @@ class PDFPreviewWidget(QWidget):
             return [[x0, y0, x1, y1]]
 
         return []
+
+    def _get_draw_circles(self, entity: dict, scale: float) -> List[Tuple[float, float, float]]:
+        """エンティティの描画円リストを取得（スケール適用済み）"""
+        circles: List[Tuple[float, float, float]] = []
+        mask_circles_pdf = entity.get("mask_circles_pdf")
+        if not isinstance(mask_circles_pdf, list):
+            return circles
+
+        for raw_circle in mask_circles_pdf:
+            page_num = entity.get("page_num", entity.get("page", self.current_page_num))
+            center_x = None
+            center_y = None
+            radius = None
+
+            if isinstance(raw_circle, dict):
+                try:
+                    page_num = int(raw_circle.get("page_num", page_num) or page_num)
+                except Exception:
+                    page_num = entity.get("page_num", entity.get("page", self.current_page_num))
+                center = raw_circle.get("center")
+                if isinstance(center, (list, tuple)) and len(center) >= 2:
+                    try:
+                        center_x = float(center[0])
+                        center_y = float(center[1])
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                if center_x is None or center_y is None:
+                    try:
+                        center_x = float(raw_circle.get("center_x"))
+                        center_y = float(raw_circle.get("center_y"))
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                try:
+                    radius = float(raw_circle.get("radius"))
+                except Exception:
+                    radius = None
+            elif isinstance(raw_circle, (list, tuple)) and len(raw_circle) >= 3:
+                try:
+                    center_x = float(raw_circle[0])
+                    center_y = float(raw_circle[1])
+                    radius = float(raw_circle[2])
+                except Exception:
+                    center_x = None
+                    center_y = None
+                    radius = None
+
+            if page_num != self.current_page_num:
+                continue
+            if center_x is None or center_y is None or radius is None or radius <= 0.0:
+                continue
+            circles.append((center_x * scale, center_y * scale, radius * scale))
+
+        return circles
 
     def set_highlighted_entities(self, entities: List[Dict]):
         """ハイライト表示するエンティティを設定"""
@@ -297,15 +393,75 @@ class PDFPreviewWidget(QWidget):
             current = self.current_page_num + 1
             self.page_label.setText(f"ページ: {current}/{total}")
 
+    def _on_selection_mode_changed(self, mode: str, checked: bool):
+        """選択モードの変更"""
+        if checked and isinstance(mode, str):
+            self.selection_mode = mode
+
     def _view_to_pdf(self, view_x: float, view_y: float) -> Tuple[float, float]:
         """ビュー座標をPDF座標へ変換"""
         scale = max(self.zoom_level * 2, 1e-6)
         return view_x / scale, view_y / scale
 
+    def _pdf_to_view(self, pdf_x: float, pdf_y: float) -> Tuple[float, float]:
+        """PDF座標をビュー座標へ変換"""
+        scale = max(self.zoom_level * 2, 1e-6)
+        return pdf_x * scale, pdf_y * scale
+
     def _get_hit_tolerance_pdf(self, tolerance_px: float = 14.0) -> float:
         """ヒット判定用の許容距離（PDF座標系）"""
         scale = max(self.zoom_level * 2, 1e-6)
         return tolerance_px / scale
+
+    def _get_drag_clip_rect_pdf(self) -> Optional[fitz.Rect]:
+        """現在ドラッグ中の範囲をPDF座標の矩形で返す"""
+        if not self.drag_start_pos or not self.drag_current_pos:
+            return None
+
+        x1, y1 = self.drag_start_pos
+        x2, y2 = self.drag_current_pos
+        pdf_x1, pdf_y1 = self._view_to_pdf(float(x1), float(y1))
+        pdf_x2, pdf_y2 = self._view_to_pdf(float(x2), float(y2))
+        return fitz.Rect(
+            min(pdf_x1, pdf_x2),
+            min(pdf_y1, pdf_y2),
+            max(pdf_x1, pdf_x2),
+            max(pdf_y1, pdf_y2),
+        )
+
+    def _get_drag_circle_pdf(self) -> Optional[Tuple[float, float, float]]:
+        """現在ドラッグ中の円（中心x, 中心y, 半径）をPDF座標で返す"""
+        if not self.drag_start_pos or not self.drag_current_pos:
+            return None
+
+        center_x, center_y = self._view_to_pdf(
+            float(self.drag_start_pos[0]),
+            float(self.drag_start_pos[1]),
+        )
+        current_x, current_y = self._view_to_pdf(
+            float(self.drag_current_pos[0]),
+            float(self.drag_current_pos[1]),
+        )
+        dx = current_x - center_x
+        dy = current_y - center_y
+        radius = (dx * dx + dy * dy) ** 0.5
+        if radius <= 0.0:
+            return None
+        return center_x, center_y, radius
+
+    @staticmethod
+    def _rect_intersects_circle(
+        rect: fitz.Rect,
+        center_x: float,
+        center_y: float,
+        radius: float,
+    ) -> bool:
+        """文字矩形と円の交差判定"""
+        closest_x = min(max(center_x, rect.x0), rect.x1)
+        closest_y = min(max(center_y, rect.y0), rect.y1)
+        dx = center_x - closest_x
+        dy = center_y - closest_y
+        return (dx * dx + dy * dy) <= (radius * radius)
 
     def _get_page_chars(self, page_num: int) -> List[Dict]:
         """ページの文字情報（rawdict）をキャッシュ付きで取得"""
@@ -439,25 +595,205 @@ class PDFPreviewWidget(QWidget):
             )
         return rects_pdf
 
+    @staticmethod
+    def _trim_chars(chars: List[Dict]) -> List[Dict]:
+        """先頭末尾の空白文字を除去"""
+        if not chars:
+            return []
+
+        start_idx = 0
+        end_idx = len(chars) - 1
+        while start_idx <= end_idx and str(chars[start_idx].get("char", "")).isspace():
+            start_idx += 1
+        while end_idx >= start_idx and str(chars[end_idx].get("char", "")).isspace():
+            end_idx -= 1
+
+        if start_idx > end_idx:
+            return []
+        return chars[start_idx:end_idx + 1]
+
+    def _build_selection_data(
+        self,
+        chars: List[Dict],
+        fallback_rects_pdf: Optional[List[list]] = None,
+        mask_rects_pdf: Optional[List[list]] = None,
+        mask_circles_pdf: Optional[List[Dict]] = None,
+        prefer_mask_rects: bool = False,
+    ) -> Dict:
+        """選択文字列と座標情報から selection_data を構築"""
+        trimmed_chars = self._trim_chars(chars)
+        mask_rects: List[list] = []
+        if isinstance(mask_rects_pdf, list):
+            for r in mask_rects_pdf:
+                if isinstance(r, (list, tuple)) and len(r) >= 4:
+                    try:
+                        x0, y0, x1, y1 = map(float, r[:4])
+                    except Exception:
+                        continue
+                    if x1 > x0 and y1 > y0:
+                        mask_rects.append([x0, y0, x1, y1])
+        mask_circles: List[Dict[str, float]] = []
+        if isinstance(mask_circles_pdf, list):
+            for raw_circle in mask_circles_pdf:
+                page_num = self.current_page_num
+                center_x = None
+                center_y = None
+                radius = None
+                if isinstance(raw_circle, dict):
+                    try:
+                        page_num = int(raw_circle.get("page_num", page_num) or page_num)
+                    except Exception:
+                        page_num = self.current_page_num
+                    center = raw_circle.get("center")
+                    if isinstance(center, (list, tuple)) and len(center) >= 2:
+                        try:
+                            center_x = float(center[0])
+                            center_y = float(center[1])
+                        except Exception:
+                            center_x = None
+                            center_y = None
+                    if center_x is None or center_y is None:
+                        try:
+                            center_x = float(raw_circle.get("center_x"))
+                            center_y = float(raw_circle.get("center_y"))
+                        except Exception:
+                            center_x = None
+                            center_y = None
+                    try:
+                        radius = float(raw_circle.get("radius"))
+                    except Exception:
+                        radius = None
+                elif isinstance(raw_circle, (list, tuple)) and len(raw_circle) >= 3:
+                    try:
+                        center_x = float(raw_circle[0])
+                        center_y = float(raw_circle[1])
+                        radius = float(raw_circle[2])
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                        radius = None
+                if center_x is None or center_y is None or radius is None or radius <= 0.0:
+                    continue
+                mask_circles.append(
+                    {
+                        "page_num": page_num,
+                        "center_x": center_x,
+                        "center_y": center_y,
+                        "radius": radius,
+                    }
+                )
+
+        if trimmed_chars:
+            first_char = trimmed_chars[0]
+            last_char = trimmed_chars[-1]
+            selected_text = "".join(str(c.get("char", "")) for c in trimmed_chars)
+            rects_pdf = self._build_selection_line_rects(trimmed_chars)
+            block_num = int(first_char.get("block_num", 0))
+            offset = int(first_char.get("offset", 0))
+            end_offset = int(last_char.get("offset", offset))
+            start_pos = {
+                "page_num": self.current_page_num,
+                "block_num": block_num,
+                "offset": offset,
+            }
+            end_pos = {
+                "page_num": self.current_page_num,
+                "block_num": int(last_char.get("block_num", block_num)),
+                "offset": end_offset,
+            }
+        else:
+            selected_text = ""
+            if mask_rects:
+                first_mask = mask_rects[0]
+                pseudo_offset = abs(
+                    int(round(first_mask[0] * 1000))
+                    ^ int(round(first_mask[1] * 1000))
+                    ^ int(round(first_mask[2] * 1000))
+                    ^ int(round(first_mask[3] * 1000))
+                )
+                block_num = -1
+                offset = pseudo_offset
+                end_offset = pseudo_offset
+            else:
+                block_num = 0
+                offset = 0
+                end_offset = 0
+            start_pos = {
+                "page_num": self.current_page_num,
+                "block_num": block_num,
+                "offset": offset,
+            }
+            end_pos = {
+                "page_num": self.current_page_num,
+                "block_num": block_num,
+                "offset": end_offset,
+            }
+            rects_pdf = []
+
+        if prefer_mask_rects and mask_rects:
+            rects_pdf = list(mask_rects)
+        elif not rects_pdf and fallback_rects_pdf:
+            rects_pdf = fallback_rects_pdf
+
+        selection_data = {
+            "text": selected_text,
+            "start": start_pos,
+            "end": end_pos,
+            # 互換用フィールド
+            "page_num": self.current_page_num,
+            "block_num": block_num,
+            "offset": offset,
+            "end_offset": end_offset,
+            "rects_pdf": rects_pdf,
+            "selection_mode": self.selection_mode,
+        }
+
+        if mask_rects:
+            selection_data["mask_rects_pdf"] = mask_rects
+        if mask_circles:
+            selection_data["mask_circles_pdf"] = mask_circles
+
+        return selection_data
+
+    def _get_chars_intersecting_rect(self, page_chars: List[Dict]) -> Tuple[List[Dict], Optional[fitz.Rect]]:
+        """ドラッグ矩形に重なった文字を返す"""
+        clip_rect = self._get_drag_clip_rect_pdf()
+        if not isinstance(clip_rect, fitz.Rect):
+            return [], None
+
+        hit_chars: List[Dict] = []
+        for item in page_chars:
+            rect = item.get("rect")
+            if isinstance(rect, fitz.Rect) and rect.intersects(clip_rect):
+                hit_chars.append(item)
+        return hit_chars, clip_rect
+
+    def _get_chars_intersecting_circle(
+        self,
+        page_chars: List[Dict],
+    ) -> Tuple[List[Dict], Optional[Tuple[float, float, float]]]:
+        """ドラッグ円に重なった文字を返す"""
+        circle = self._get_drag_circle_pdf()
+        if circle is None:
+            return [], None
+
+        center_x, center_y, radius = circle
+        hit_chars: List[Dict] = []
+        for item in page_chars:
+            rect = item.get("rect")
+            if isinstance(rect, fitz.Rect) and self._rect_intersects_circle(rect, center_x, center_y, radius):
+                hit_chars.append(item)
+        return hit_chars, circle
+
     def _get_indices_from_drag_rect(self) -> Optional[Tuple[int, int]]:
         """ドラッグ矩形に交差した文字の先頭/末尾インデックスを返す（フォールバック）"""
-        if not self.drag_start_pos or not self.drag_current_pos:
-            return None
-
         page_chars = self._get_page_chars(self.current_page_num)
         if not page_chars:
             return None
 
-        x1, y1 = self.drag_start_pos
-        x2, y2 = self.drag_current_pos
-        pdf_x1, pdf_y1 = self._view_to_pdf(x1, y1)
-        pdf_x2, pdf_y2 = self._view_to_pdf(x2, y2)
-        clip_rect = fitz.Rect(
-            min(pdf_x1, pdf_x2),
-            min(pdf_y1, pdf_y2),
-            max(pdf_x1, pdf_x2),
-            max(pdf_y1, pdf_y2),
-        )
+        clip_rect = self._get_drag_clip_rect_pdf()
+        if not isinstance(clip_rect, fitz.Rect):
+            return None
 
         hit_indices: List[int] = []
         for i, item in enumerate(page_chars):
@@ -491,17 +827,20 @@ class PDFPreviewWidget(QWidget):
         if click_x < 0 or click_y < 0 or click_x > pixmap_w or click_y > pixmap_h:
             return
 
-        # テキスト上以外ではドラッグを開始しない（クリック判定のみ）
-        if not self._is_text_hit(click_x, click_y):
-            self._handle_entity_click(click_x, click_y)
-            return
+        if self.selection_mode == self.SELECTION_MODE_TEXT:
+            # 文字列ドラッグはテキスト上のみ開始
+            if not self._is_text_hit(click_x, click_y):
+                self._handle_entity_click(click_x, click_y)
+                return
 
         # ドラッグ開始
         self.is_dragging = True
         self.drag_start_pos = (click_x, click_y)
         self.drag_current_pos = (click_x, click_y)
-        self.drag_start_char_index = self._find_drag_target_char_index(
-            self.drag_start_pos, snap_nearest=False
+        self.drag_start_char_index = (
+            self._find_drag_target_char_index(self.drag_start_pos, snap_nearest=False)
+            if self.selection_mode == self.SELECTION_MODE_TEXT
+            else None
         )
 
     def _on_preview_mouse_move(self, event):
@@ -575,6 +914,14 @@ class PDFPreviewWidget(QWidget):
             if entity_page != self.current_page_num:
                 continue
 
+            circles = self._get_draw_circles(entity, scale)
+            for center_x, center_y, radius in circles:
+                dx = click_x - center_x
+                dy = click_y - center_y
+                if (dx * dx + dy * dy) <= (radius * radius):
+                    self.entity_clicked.emit(i)
+                    return
+
             # 描画矩形リストを取得してヒットテスト
             rects = self._get_draw_rects(entity, scale)
             for rect in rects:
@@ -597,52 +944,93 @@ class PDFPreviewWidget(QWidget):
 
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        drew_text_overlay = False
         scale = self.zoom_level * 2
+        overlay_pen = QPen(QColor(0, 120, 215), 2, Qt.PenStyle.SolidLine)
+        overlay_brush = QColor(0, 120, 215, 50)
 
-        if self.drag_start_char_index is not None:
-            page_chars = self._get_page_chars(self.current_page_num)
-            end_char_index = self._find_drag_target_char_index(
-                self.drag_current_pos, snap_nearest=True
-            )
+        if self.selection_mode == self.SELECTION_MODE_TEXT:
+            drew_text_overlay = False
 
-            if (
-                end_char_index is None
-                and page_chars
-                and 0 <= self.drag_start_char_index < len(page_chars)
-            ):
-                end_char_index = self.drag_start_char_index
+            if self.drag_start_char_index is not None:
+                page_chars = self._get_page_chars(self.current_page_num)
+                end_char_index = self._find_drag_target_char_index(
+                    self.drag_current_pos, snap_nearest=True
+                )
 
-            if end_char_index is not None and page_chars:
-                start_idx = max(0, min(self.drag_start_char_index, len(page_chars) - 1))
-                end_idx = max(0, min(end_char_index, len(page_chars) - 1))
-                lo, hi = (start_idx, end_idx) if start_idx <= end_idx else (end_idx, start_idx)
+                if (
+                    end_char_index is None
+                    and page_chars
+                    and 0 <= self.drag_start_char_index < len(page_chars)
+                ):
+                    end_char_index = self.drag_start_char_index
 
-                selected_chars = page_chars[lo:hi + 1]
-                line_rects_pdf = self._build_selection_line_rects(selected_chars)
-                if line_rects_pdf:
-                    painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.SolidLine))
-                    painter.setBrush(QColor(0, 120, 215, 50))
-                    for r in line_rects_pdf:
-                        painter.drawRect(
-                            int(r[0] * scale),
-                            int(r[1] * scale),
-                            int((r[2] - r[0]) * scale),
-                            int((r[3] - r[1]) * scale),
-                        )
-                    drew_text_overlay = True
+                if end_char_index is not None and page_chars:
+                    start_idx = max(0, min(self.drag_start_char_index, len(page_chars) - 1))
+                    end_idx = max(0, min(end_char_index, len(page_chars) - 1))
+                    lo, hi = (start_idx, end_idx) if start_idx <= end_idx else (end_idx, start_idx)
 
-        if not drew_text_overlay:
-            # フォールバック: 選択矩形
-            x1, y1 = self.drag_start_pos
-            x2, y2 = self.drag_current_pos
-            x_min, x_max = (x1, x2) if x1 < x2 else (x2, x1)
-            y_min, y_max = (y1, y2) if y1 < y2 else (y2, y1)
+                    selected_chars = page_chars[lo:hi + 1]
+                    line_rects_pdf = self._build_selection_line_rects(selected_chars)
+                    if line_rects_pdf:
+                        painter.setPen(overlay_pen)
+                        painter.setBrush(overlay_brush)
+                        for r in line_rects_pdf:
+                            painter.drawRect(
+                                int(r[0] * scale),
+                                int(r[1] * scale),
+                                int((r[2] - r[0]) * scale),
+                                int((r[3] - r[1]) * scale),
+                            )
+                        drew_text_overlay = True
 
-            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.PenStyle.SolidLine))
-            painter.setBrush(QColor(0, 120, 215, 50))
-            painter.drawRect(int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
+            if not drew_text_overlay:
+                clip_rect = self._get_drag_clip_rect_pdf()
+                if isinstance(clip_rect, fitz.Rect):
+                    x0, y0 = self._pdf_to_view(clip_rect.x0, clip_rect.y0)
+                    x1, y1 = self._pdf_to_view(clip_rect.x1, clip_rect.y1)
+                    painter.setPen(overlay_pen)
+                    painter.setBrush(overlay_brush)
+                    painter.drawRect(
+                        int(min(x0, x1)),
+                        int(min(y0, y1)),
+                        int(abs(x1 - x0)),
+                        int(abs(y1 - y0)),
+                    )
+        elif self.selection_mode == self.SELECTION_MODE_RECT:
+            clip_rect = self._get_drag_clip_rect_pdf()
+            if isinstance(clip_rect, fitz.Rect):
+                x0, y0 = self._pdf_to_view(clip_rect.x0, clip_rect.y0)
+                x1, y1 = self._pdf_to_view(clip_rect.x1, clip_rect.y1)
+                painter.setPen(overlay_pen)
+                painter.setBrush(overlay_brush)
+                painter.drawRect(
+                    int(min(x0, x1)),
+                    int(min(y0, y1)),
+                    int(abs(x1 - x0)),
+                    int(abs(y1 - y0)),
+                )
+        elif self.selection_mode == self.SELECTION_MODE_CIRCLE:
+            circle = self._get_drag_circle_pdf()
+            if circle is not None:
+                center_x, center_y, radius = circle
+                vx, vy = self._pdf_to_view(center_x - radius, center_y - radius)
+                diameter = radius * 2 * scale
+                painter.setPen(overlay_pen)
+                painter.setBrush(overlay_brush)
+                painter.drawEllipse(int(vx), int(vy), int(diameter), int(diameter))
+            else:
+                clip_rect = self._get_drag_clip_rect_pdf()
+                if isinstance(clip_rect, fitz.Rect):
+                    x0, y0 = self._pdf_to_view(clip_rect.x0, clip_rect.y0)
+                    x1, y1 = self._pdf_to_view(clip_rect.x1, clip_rect.y1)
+                    painter.setPen(overlay_pen)
+                    painter.setBrush(overlay_brush)
+                    painter.drawRect(
+                        int(min(x0, x1)),
+                        int(min(y0, y1)),
+                        int(abs(x1 - x0)),
+                        int(abs(y1 - y0)),
+                    )
 
         painter.end()
         self.preview_label.setPixmap(pixmap)
@@ -654,78 +1042,92 @@ class PDFPreviewWidget(QWidget):
 
         try:
             page_chars = self._get_page_chars(self.current_page_num)
-            if not page_chars:
-                return
 
-            start_char_index = self.drag_start_char_index
-            end_char_index = self._find_drag_target_char_index(
-                self.drag_current_pos, snap_nearest=True
-            )
-
-            if start_char_index is None:
-                drag_indices = self._get_indices_from_drag_rect()
-                if not drag_indices:
+            if self.selection_mode == self.SELECTION_MODE_TEXT:
+                if not page_chars:
                     return
-                start_char_index, end_char_index = drag_indices
-            elif end_char_index is None:
-                drag_indices = self._get_indices_from_drag_rect()
-                if drag_indices:
-                    _, end_char_index = drag_indices
-                else:
-                    end_char_index = start_char_index
 
-            start_char_index = max(0, min(int(start_char_index), len(page_chars) - 1))
-            end_char_index = max(0, min(int(end_char_index), len(page_chars) - 1))
-            lo, hi = (
-                (start_char_index, end_char_index)
-                if start_char_index <= end_char_index
-                else (end_char_index, start_char_index)
-            )
-            selected_chars = page_chars[lo:hi + 1]
-            if not selected_chars:
+                start_char_index = self.drag_start_char_index
+                end_char_index = self._find_drag_target_char_index(
+                    self.drag_current_pos, snap_nearest=True
+                )
+
+                if start_char_index is None:
+                    drag_indices = self._get_indices_from_drag_rect()
+                    if not drag_indices:
+                        return
+                    start_char_index, end_char_index = drag_indices
+                elif end_char_index is None:
+                    drag_indices = self._get_indices_from_drag_rect()
+                    if drag_indices:
+                        _, end_char_index = drag_indices
+                    else:
+                        end_char_index = start_char_index
+
+                start_char_index = max(0, min(int(start_char_index), len(page_chars) - 1))
+                end_char_index = max(0, min(int(end_char_index), len(page_chars) - 1))
+                lo, hi = (
+                    (start_char_index, end_char_index)
+                    if start_char_index <= end_char_index
+                    else (end_char_index, start_char_index)
+                )
+                selected_chars = page_chars[lo:hi + 1]
+                if not selected_chars:
+                    return
+
+                selection_data = self._build_selection_data(selected_chars)
+                if not str(selection_data.get("text", "")).strip():
+                    return
+                self.text_selected.emit(selection_data)
                 return
 
-            # 先頭・末尾の空白を除去し、位置情報を同期
-            start_idx = 0
-            end_idx = len(selected_chars) - 1
-            while start_idx <= end_idx and str(selected_chars[start_idx]["char"]).isspace():
-                start_idx += 1
-            while end_idx >= start_idx and str(selected_chars[end_idx]["char"]).isspace():
-                end_idx -= 1
-            if start_idx > end_idx:
+            if self.selection_mode == self.SELECTION_MODE_RECT:
+                selected_chars, clip_rect = self._get_chars_intersecting_rect(page_chars)
+                mask_rects_pdf = (
+                    [[clip_rect.x0, clip_rect.y0, clip_rect.x1, clip_rect.y1]]
+                    if isinstance(clip_rect, fitz.Rect)
+                    else []
+                )
+                self.text_selected.emit(
+                    self._build_selection_data(
+                        selected_chars,
+                        fallback_rects_pdf=mask_rects_pdf,
+                        mask_rects_pdf=mask_rects_pdf,
+                        prefer_mask_rects=True,
+                    )
+                )
                 return
 
-            trimmed_chars = selected_chars[start_idx:end_idx + 1]
-            selected_text = "".join(str(c["char"]) for c in trimmed_chars)
-            if not selected_text.strip():
+            if self.selection_mode == self.SELECTION_MODE_CIRCLE:
+                selected_chars, circle = self._get_chars_intersecting_circle(page_chars)
+                mask_rects_pdf: List[list] = []
+                mask_circles_pdf: List[Dict[str, float]] = []
+                if circle is not None:
+                    center_x, center_y, radius = circle
+                    mask_rects_pdf = [[
+                        center_x - radius,
+                        center_y - radius,
+                        center_x + radius,
+                        center_y + radius,
+                    ]]
+                    mask_circles_pdf = [
+                        {
+                            "page_num": self.current_page_num,
+                            "center_x": center_x,
+                            "center_y": center_y,
+                            "radius": radius,
+                        }
+                    ]
+                self.text_selected.emit(
+                    self._build_selection_data(
+                        selected_chars,
+                        fallback_rects_pdf=mask_rects_pdf,
+                        mask_rects_pdf=mask_rects_pdf,
+                        mask_circles_pdf=mask_circles_pdf,
+                        prefer_mask_rects=False,
+                    )
+                )
                 return
-
-            first_char = trimmed_chars[0]
-            last_char = trimmed_chars[-1]
-
-            # 行単位の矩形（ハイライト描画用）
-            rects_pdf = self._build_selection_line_rects(trimmed_chars)
-
-            selection_data = {
-                "text": selected_text,
-                "start": {
-                    "page_num": self.current_page_num,
-                    "block_num": int(first_char["block_num"]),
-                    "offset": int(first_char["offset"]),
-                },
-                "end": {
-                    "page_num": self.current_page_num,
-                    "block_num": int(last_char["block_num"]),
-                    "offset": int(last_char["offset"]),
-                },
-                # 互換用フィールド
-                "page_num": self.current_page_num,
-                "block_num": int(first_char["block_num"]),
-                "offset": int(first_char["offset"]),
-                "end_offset": int(last_char["offset"]),
-                "rects_pdf": rects_pdf,
-            }
-            self.text_selected.emit(selection_data)
 
         except Exception as e:
             import logging

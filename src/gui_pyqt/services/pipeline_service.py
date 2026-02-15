@@ -427,6 +427,9 @@ class PipelineService:
 
         # マスク対象（ページ・矩形）の構築
         redactions: List[Dict[str, Any]] = []
+        circle_masks: List[Dict[str, Any]] = []
+        # 画像マスク（mask_rects_pdf）で指定された領域。重複テキストマスクの排除に使う。
+        mask_redactions_by_page: Dict[int, List[List[float]]] = {}
 
         def _normalize_entity_key(name: str) -> str:
             n = str(name or "").strip()
@@ -470,16 +473,185 @@ class PipelineService:
                 out.append([min(xs0), min(ys0), max(xs1), max(ys1)])
             return out
 
+        def _normalize_rect(rect: Any) -> Optional[List[float]]:
+            """矩形入力を [x0, y0, x1, y1] へ正規化"""
+            if not isinstance(rect, (list, tuple)) or len(rect) < 4:
+                return None
+            try:
+                x0, y0, x1, y1 = map(float, rect[:4])
+            except Exception:
+                return None
+            if x1 <= x0 or y1 <= y0:
+                return None
+            return [x0, y0, x1, y1]
+
+        def _normalize_circle(circle: Any, default_page_num: int) -> Optional[Dict[str, Any]]:
+            """円入力を {page_num, center_x, center_y, radius, rect} へ正規化"""
+            page_num = int(default_page_num)
+            center_x = None
+            center_y = None
+            radius = None
+
+            if isinstance(circle, dict):
+                try:
+                    page_num = int(circle.get("page_num", page_num) or page_num)
+                except Exception:
+                    page_num = int(default_page_num)
+                center = circle.get("center")
+                if isinstance(center, (list, tuple)) and len(center) >= 2:
+                    try:
+                        center_x = float(center[0])
+                        center_y = float(center[1])
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                if center_x is None or center_y is None:
+                    try:
+                        center_x = float(circle.get("center_x"))
+                        center_y = float(circle.get("center_y"))
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                try:
+                    radius = float(circle.get("radius"))
+                except Exception:
+                    radius = None
+            elif isinstance(circle, (list, tuple)) and len(circle) >= 3:
+                try:
+                    center_x = float(circle[0])
+                    center_y = float(circle[1])
+                    radius = float(circle[2])
+                except Exception:
+                    center_x = None
+                    center_y = None
+                    radius = None
+
+            if center_x is None or center_y is None or radius is None or radius <= 0.0:
+                return None
+
+            return {
+                "page_num": page_num,
+                "center_x": center_x,
+                "center_y": center_y,
+                "radius": radius,
+                "rect": [
+                    center_x - radius,
+                    center_y - radius,
+                    center_x + radius,
+                    center_y + radius,
+                ],
+            }
+
+        def _rects_intersect(a: List[float], b: List[float]) -> bool:
+            """2矩形の交差判定"""
+            ax0, ay0, ax1, ay1 = a
+            bx0, by0, bx1, by1 = b
+            ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+            ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+            return (ix1 - ix0) > 0 and (iy1 - iy0) > 0
+
+        def _is_mask_covered(page_num: int, rect: List[float]) -> bool:
+            """画像マスク領域と重なるテキストマスクは除外"""
+            for mask_rect in mask_redactions_by_page.get(int(page_num), []):
+                if _rects_intersect(mask_rect, rect):
+                    return True
+            return False
+
         with fitz.open(str(pdf_path)) as doc:
             locator = PDFTextLocator(doc)
 
+            # 1st pass: 画像マスク指定（mask_rects_pdf）を先に収集
             for detect_item in detect_list:
                 if not isinstance(detect_item, dict):
                     continue
 
                 start_pos = detect_item.get("start", {})
+                entity_type = detect_item.get("entity", "PII")
+                normalized_entity_type = _normalize_entity_key(entity_type) or "PII"
+
+                default_page_num = int(detect_item.get("page_num", 0) or 0)
+                if isinstance(start_pos, dict):
+                    try:
+                        default_page_num = int(
+                            start_pos.get("page_num", default_page_num) or default_page_num
+                        )
+                    except Exception:
+                        pass
+
+                has_circle_masks = False
+                mask_circles_pdf = detect_item.get("mask_circles_pdf")
+                if isinstance(mask_circles_pdf, list) and mask_circles_pdf:
+                    for raw_circle in mask_circles_pdf:
+                        normalized_circle = _normalize_circle(raw_circle, default_page_num)
+                        if not normalized_circle:
+                            continue
+                        has_circle_masks = True
+                        circle_masks.append(
+                            {
+                                "page_num": normalized_circle["page_num"],
+                                "center_x": normalized_circle["center_x"],
+                                "center_y": normalized_circle["center_y"],
+                                "radius": normalized_circle["radius"],
+                                "entity_type": normalized_entity_type,
+                            }
+                        )
+                        mask_redactions_by_page.setdefault(
+                            normalized_circle["page_num"], []
+                        ).append(normalized_circle["rect"])
+
+                selection_mode = str(detect_item.get("selection_mode", "") or "").lower()
+                mask_rects_pdf = detect_item.get("mask_rects_pdf")
+                if not isinstance(mask_rects_pdf, list) or not mask_rects_pdf:
+                    continue
+                if selection_mode == "circle_drag" and has_circle_masks:
+                    # 円選択で保存された矩形外接は重複追加しない
+                    continue
+
+                for raw_rect in mask_rects_pdf:
+                    rect_page_num = default_page_num
+                    rect_source = raw_rect
+                    if isinstance(raw_rect, dict):
+                        try:
+                            rect_page_num = int(raw_rect.get("page_num", rect_page_num) or rect_page_num)
+                        except Exception:
+                            rect_page_num = default_page_num
+                        if "rect" in raw_rect:
+                            rect_source = raw_rect.get("rect")
+                        else:
+                            rect_source = [
+                                raw_rect.get("x0"),
+                                raw_rect.get("y0"),
+                                raw_rect.get("x1"),
+                                raw_rect.get("y1"),
+                            ]
+
+                    normalized_rect = _normalize_rect(rect_source)
+                    if not normalized_rect:
+                        continue
+
+                    redactions.append(
+                        {
+                            "page_num": rect_page_num,
+                            "rect": normalized_rect,
+                            "entity_type": normalized_entity_type,
+                        }
+                    )
+                    mask_redactions_by_page.setdefault(rect_page_num, []).append(normalized_rect)
+
+            # 2nd pass: 通常テキストマスク（画像マスク領域と重なるものは除外）
+            for detect_item in detect_list:
+                if not isinstance(detect_item, dict):
+                    continue
+
+                has_mask_rects = isinstance(detect_item.get("mask_rects_pdf"), list) and detect_item.get("mask_rects_pdf")
+                has_mask_circles = isinstance(detect_item.get("mask_circles_pdf"), list) and detect_item.get("mask_circles_pdf")
+                if has_mask_rects or has_mask_circles:
+                    continue
+
+                start_pos = detect_item.get("start", {})
                 end_pos = detect_item.get("end", {})
                 entity_type = detect_item.get("entity", "PII")
+                normalized_entity_type = _normalize_entity_key(entity_type) or "PII"
 
                 if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
                     continue
@@ -541,10 +713,12 @@ class PipelineService:
                             if not rects:
                                 continue
                             for r in _group_rects_by_line(rects):
-                                line_rects_items.append({
-                                    "rect": {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3]},
-                                    "page_num": p,
-                                })
+                                line_rects_items.append(
+                                    {
+                                        "rect": {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3]},
+                                        "page_num": p,
+                                    }
+                                )
                     except Exception:
                         line_rects_items = []
 
@@ -560,13 +734,78 @@ class PipelineService:
                             continue
                         if x1 <= x0 or y1 <= y0:
                             continue
+
+                        target_page_num = int(item.get("page_num", page_num))
+                        target_rect = [x0, y0, x1, y1]
+                        if _is_mask_covered(target_page_num, target_rect):
+                            continue
+
                         redactions.append(
                             {
-                                "page_num": int(item.get("page_num", page_num)),
-                                "rect": [x0, y0, x1, y1],
-                                "entity_type": _normalize_entity_key(entity_type),
+                                "page_num": target_page_num,
+                                "rect": target_rect,
+                                "entity_type": normalized_entity_type,
                             }
                         )
+
+        # 同一矩形の重複追加を除去
+        unique_redactions: List[Dict[str, Any]] = []
+        seen_redactions = set()
+        for item in redactions:
+            try:
+                page_num = int(item.get("page_num", 0))
+                x0, y0, x1, y1 = map(float, item.get("rect", [])[:4])
+                entity_type = str(item.get("entity_type", "PII") or "PII")
+            except Exception:
+                continue
+            key = (
+                page_num,
+                round(x0, 3),
+                round(y0, 3),
+                round(x1, 3),
+                round(y1, 3),
+                entity_type,
+            )
+            if key in seen_redactions:
+                continue
+            seen_redactions.add(key)
+            unique_redactions.append(
+                {"page_num": page_num, "rect": [x0, y0, x1, y1], "entity_type": entity_type}
+            )
+        redactions = unique_redactions
+        unique_circles: List[Dict[str, Any]] = []
+        seen_circles = set()
+        for item in circle_masks:
+            try:
+                page_num = int(item.get("page_num", 0))
+                center_x = float(item.get("center_x"))
+                center_y = float(item.get("center_y"))
+                radius = float(item.get("radius"))
+                entity_type = str(item.get("entity_type", "PII") or "PII")
+            except Exception:
+                continue
+            if radius <= 0.0:
+                continue
+            key = (
+                page_num,
+                round(center_x, 3),
+                round(center_y, 3),
+                round(radius, 3),
+                entity_type,
+            )
+            if key in seen_circles:
+                continue
+            seen_circles.add(key)
+            unique_circles.append(
+                {
+                    "page_num": page_num,
+                    "center_x": center_x,
+                    "center_y": center_y,
+                    "radius": radius,
+                    "entity_type": entity_type,
+                }
+            )
+        circle_masks = unique_circles
 
         # PDFに黒塗りを適用
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -577,11 +816,17 @@ class PipelineService:
             redactions_by_page: Dict[int, List[Dict[str, Any]]] = {}
             for item in redactions:
                 redactions_by_page.setdefault(int(item["page_num"]), []).append(item)
+            circles_by_page: Dict[int, List[Dict[str, Any]]] = {}
+            for item in circle_masks:
+                circles_by_page.setdefault(int(item["page_num"]), []).append(item)
 
-            for page_num, page_redactions in redactions_by_page.items():
+            target_pages = sorted(set(redactions_by_page.keys()) | set(circles_by_page.keys()))
+            for page_num in target_pages:
                 if page_num < 0 or page_num >= len(out_doc):
                     continue
                 page = out_doc[page_num]
+                page_redactions = redactions_by_page.get(page_num, [])
+                page_circles = circles_by_page.get(page_num, [])
 
                 for item in page_redactions:
                     rect = fitz.Rect(item["rect"]) & page.rect
@@ -592,7 +837,33 @@ class PipelineService:
                     redaction_count += 1
 
                 # 追加したredactionをこのページへ反映
-                page.apply_redactions()
+                if page_redactions:
+                    page.apply_redactions()
+
+                for circle in page_circles:
+                    try:
+                        center_x = float(circle["center_x"])
+                        center_y = float(circle["center_y"])
+                        radius = float(circle["radius"])
+                    except Exception:
+                        continue
+                    if radius <= 0.0:
+                        continue
+
+                    circle_rect = fitz.Rect(
+                        center_x - radius,
+                        center_y - radius,
+                        center_x + radius,
+                        center_y + radius,
+                    )
+                    if not (circle_rect & page.rect):
+                        continue
+
+                    shape = page.new_shape()
+                    shape.draw_circle((center_x, center_y), radius)
+                    shape.finish(color=(0, 0, 0), fill=(0, 0, 0), width=0)
+                    shape.commit(overlay=True)
+                    redaction_count += 1
 
             out_doc.save(str(output_path), garbage=4, deflate=True, clean=True)
 

@@ -46,7 +46,7 @@ class ManualAddDialog(QDialog):
 
         # 選択テキスト（読み取り専用）
         preset_text = str(self.preset_data.get("text", "") or "")
-        self.text_label = QLabel(preset_text)
+        self.text_label = QLabel(preset_text if preset_text != "" else "\"\"")
         self.text_label.setWordWrap(True)
         self.text_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -80,9 +80,11 @@ class ManualAddDialog(QDialog):
 
     def get_entity_data(self) -> Dict:
         """入力されたエンティティデータを取得"""
-        text = str(self.preset_data.get("text", "") or "").strip()
+        text = str(self.preset_data.get("text", "") or "")
         entity_type = self.entity_type_combo.currentText()
-        if not text:
+        # 通常の手動追加（テキスト未選択）は従来どおり無効。
+        # 選択モード由来の空文字 "" は有効。
+        if not text and "text" not in self.preset_data:
             return {}
 
         # プリセットにstart/endがあればそれを優先。無ければ旧形式から補完。
@@ -112,6 +114,16 @@ class ManualAddDialog(QDialog):
         rects_pdf = self.preset_data.get("rects_pdf")
         if rects_pdf:
             entity["rects_pdf"] = rects_pdf
+        mask_rects_pdf = self.preset_data.get("mask_rects_pdf")
+        if mask_rects_pdf:
+            entity["mask_rects_pdf"] = mask_rects_pdf
+        mask_circles_pdf = self.preset_data.get("mask_circles_pdf")
+        if mask_circles_pdf:
+            entity["mask_circles_pdf"] = mask_circles_pdf
+
+        selection_mode = self.preset_data.get("selection_mode")
+        if isinstance(selection_mode, str):
+            entity["selection_mode"] = selection_mode
 
         return entity
 

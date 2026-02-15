@@ -677,6 +677,8 @@ class MainWindow(QMainWindow):
             start_pos = entity.get("start", {})
             end_pos = entity.get("end", {})
             page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            selection_mode = entity.get("selection_mode", "")
+            mask_circles_pdf = entity.get("mask_circles_pdf")
 
             # rects_pdf（行ごとの矩形リスト）を座標マップから解決
             rects_pdf = entity.get("rects_pdf")
@@ -691,6 +693,8 @@ class MainWindow(QMainWindow):
                 "entity_type": entity.get("entity", ""),
                 "text": entity.get("word", ""),
                 "rects_pdf": rects_pdf,
+                "mask_circles_pdf": mask_circles_pdf,
+                "selection_mode": selection_mode,
                 "is_selected": False,
                 "block_num": start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0,
                 "offset": start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0,
