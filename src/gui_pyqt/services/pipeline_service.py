@@ -120,6 +120,7 @@ class PipelineService:
         use_predetect: bool = True,
         add_patterns: Optional[List[Tuple[str, str]]] = None,
         exclude_patterns: Optional[List[str]] = None,
+        page_filter: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """PII検出処理（detect）
 
@@ -130,6 +131,7 @@ class PipelineService:
             use_predetect: 事前検出を使用するか
             add_patterns: 追加パターン [(entity_type, regex), ...]
             exclude_patterns: 除外パターン [regex, ...]
+            page_filter: 検出対象ページ番号（0始まり、Noneで全ページ）
 
         Returns:
             detect結果のJSON（dict）
@@ -179,6 +181,14 @@ class PipelineService:
             raise FileNotFoundError(f"PDFファイルが見つかりません: {pdf_path}")
 
         text_2d = read_result.get("text", [])
+        target_pages: Optional[set] = None
+        if page_filter is not None:
+            target_pages = {
+                int(page_num)
+                for page_num in page_filter
+                if isinstance(page_num, int) or str(page_num).lstrip("-").isdigit()
+            }
+            target_pages = {page_num for page_num in target_pages if page_num >= 0}
 
         # 2D配列をフラット化してプレーンテキストを生成
         plain_text = None
@@ -212,6 +222,11 @@ class PipelineService:
 
                 # 位置情報を変換
                 start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
+                if (
+                    target_pages is not None
+                    and int(start_pos.get("page_num", -1)) not in target_pages
+                ):
+                    continue
                 entry_plain = {
                     "start": start_pos,
                     "end": end_pos,
@@ -230,6 +245,11 @@ class PipelineService:
                             s, e = m.start(), m.end()
                             txt = target_text[s:e]
                             start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
+                            if (
+                                target_pages is not None
+                                and int(start_pos.get("page_num", -1)) not in target_pages
+                            ):
+                                continue
                             detections_plain.append({
                                 "start": start_pos,
                                 "end": end_pos,
@@ -332,7 +352,7 @@ class PipelineService:
             entity_priority = ["PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER",
                              "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"]
         if tie_break is None:
-            tie_break = ["origin", "length", "position", "entity"]
+            tie_break = ["origin", "contain", "length", "position", "entity"]
         if origin_priority is None:
             origin_priority = ["manual", "custom", "auto"]
 
@@ -351,6 +371,7 @@ class PipelineService:
             origin_priority=origin_priority,
             length_pref=length_pref,
             position_pref=position_pref,
+            text_2d=detect_result.get("text", []),
         )
 
         # 結果の構築

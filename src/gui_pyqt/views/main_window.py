@@ -29,6 +29,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QLabel,
     QToolBar,
+    QToolButton,
+    QMenu,
     QFileDialog,
     QMessageBox,
 )
@@ -40,8 +42,10 @@ logger = logging.getLogger(__name__)
 from ..models.app_state import AppState
 from ..controllers.task_runner import TaskRunner
 from ..services.pipeline_service import PipelineService
+from ..services.detect_config_service import DetectConfigService
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
+from .config_dialog import DetectConfigDialog
 
 
 class MainWindow(QMainWindow):
@@ -58,6 +62,19 @@ class MainWindow(QMainWindow):
 
         # 全プレビューエンティティを保持（選択状態管理用）
         self._all_preview_entities: List[Dict] = []
+
+        # GUI検出設定（.config.toml）
+        self.detect_config_service = DetectConfigService(Path.cwd())
+        try:
+            self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
+        except Exception as e:
+            logger.warning(f"検出設定の初期化に失敗: {e}")
+            self.enabled_detect_entities = list(DetectConfigService.ENTITY_TYPES)
+
+        # Detect実行スコープの管理
+        self._detect_scope = "all"
+        self._detect_target_pages: Optional[List[int]] = None
+        self._detect_base_result: Optional[Dict[str, Any]] = None
 
         self.init_ui()
         self.connect_signals()
@@ -91,17 +108,37 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.on_open_pdf)
         toolbar.addAction(open_action)
 
+        # 設定（検出対象エンティティ）
+        config_action = QAction("設定", self)
+        config_action.setStatusTip("検出対象エンティティ設定（.config.toml）")
+        config_action.triggered.connect(self.on_open_config_dialog)
+        toolbar.addAction(config_action)
+        self.config_action = config_action
+
         # Read（内部的に保持、ツールバーには非表示）
         read_action = QAction("📖 Read", self)
         read_action.triggered.connect(self.on_read)
         self.read_action = read_action
 
-        # 検出
-        detect_action = QAction("検出", self)
-        detect_action.setStatusTip("個人情報（PII）を検出")
-        detect_action.triggered.connect(self.on_detect)
-        toolbar.addAction(detect_action)
-        self.detect_action = detect_action
+        # 検出（親ボタン + 子ボタン）
+        self.detect_all_action = QAction("全ページ", self)
+        self.detect_all_action.triggered.connect(self.on_detect_all_pages)
+
+        self.detect_current_action = QAction("表示ページ", self)
+        self.detect_current_action.triggered.connect(self.on_detect_current_page)
+
+        detect_menu = QMenu(self)
+        detect_menu.addAction(self.detect_all_action)
+        detect_menu.addAction(self.detect_current_action)
+
+        detect_button = QToolButton(self)
+        detect_button.setText("検出")
+        detect_button.setToolTip("個人情報（PII）を検出")
+        detect_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        detect_button.setMenu(detect_menu)
+        detect_button.clicked.connect(self.on_detect_all_pages)
+        toolbar.addWidget(detect_button)
+        self.detect_button = detect_button
 
         # Duplicate（ツールバー表示）
         duplicate_action = QAction("重複削除", self)
@@ -270,8 +307,126 @@ class MainWindow(QMainWindow):
             True  # include_coordinate_map
         )
 
+    def on_open_config_dialog(self):
+        """検出設定ダイアログを表示"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        current_enabled = self.detect_config_service.ensure_config_file()
+        if current_enabled:
+            self.enabled_detect_entities = current_enabled
+
+        dialog = DetectConfigDialog(
+            entity_types=DetectConfigService.ENTITY_TYPES,
+            enabled_entities=self.enabled_detect_entities,
+            config_path=self.detect_config_service.config_path,
+            parent=self,
+        )
+        if dialog.import_button:
+            dialog.import_button.clicked.connect(
+                lambda: self._on_import_config_clicked(dialog)
+            )
+        if dialog.export_button:
+            dialog.export_button.clicked.connect(
+                lambda: self._on_export_config_clicked(dialog)
+            )
+
+        if not dialog.exec():
+            return
+
+        self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
+            dialog.get_enabled_entities()
+        )
+        self.log_message(
+            f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
+            f"({self.detect_config_service.config_path.name})"
+        )
+
+    def _on_import_config_clicked(self, dialog: DetectConfigDialog):
+        """設定ファイルのインポート"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "インポートするTOMLを選択",
+            str(self.detect_config_service.base_dir),
+            "TOML Files (*.toml);;All Files (*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            imported_entities = self.detect_config_service.import_from(Path(file_path))
+            self.enabled_detect_entities = imported_entities
+            dialog.set_enabled_entities(imported_entities)
+            self.log_message(
+                f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
+            )
+            QMessageBox.information(
+                self,
+                "完了",
+                (
+                    "設定をインポートしました。\n"
+                    f"上書き先: {self.detect_config_service.config_path}"
+                ),
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"設定インポートに失敗しました: {e}",
+            )
+
+    def _on_export_config_clicked(self, dialog: DetectConfigDialog):
+        """設定ファイルのエクスポート"""
+        default_path = self.detect_config_service.base_dir / ".config.toml"
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "エクスポート先を選択",
+            str(default_path),
+            "TOML Files (*.toml);;All Files (*)",
+        )
+        if not output_path:
+            return
+
+        try:
+            export_target = Path(output_path)
+            if export_target.suffix.lower() != ".toml":
+                export_target = export_target.with_suffix(".toml")
+
+            # ダイアログ上の最新チェック状態を同一フォルダ設定へ反映してから出力
+            current_entities = dialog.get_enabled_entities()
+            self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
+                current_entities
+            )
+            exported_path = self.detect_config_service.export_to(export_target)
+            self.log_message(f"設定エクスポート: {exported_path}")
+            QMessageBox.information(
+                self,
+                "完了",
+                f"設定をエクスポートしました:\n{exported_path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"設定エクスポートに失敗しました: {e}",
+            )
+
     def on_detect(self):
-        """Detect処理（Phase 2: 非同期実行）"""
+        """互換: 全ページ検出を実行"""
+        self.on_detect_all_pages()
+
+    def on_detect_all_pages(self):
+        """全ページを対象にDetect処理を実行"""
+        self._start_detect(scope="all", page_filter=None)
+
+    def on_detect_current_page(self):
+        """表示中ページのみを対象にDetect処理を実行"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        self._start_detect(scope="current_page", page_filter=[current_page])
+
+    def _start_detect(self, scope: str, page_filter: Optional[List[int]]):
+        """Detect処理（スコープ指定）"""
         if not self.app_state.has_read_result():
             QMessageBox.warning(self, "警告", "Read処理が完了していません")
             return
@@ -280,16 +435,35 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        self.log_message("Detect処理を開始...")
+        target_desc = "全ページ" if scope == "all" else f"表示ページ({page_filter[0] + 1}ページ目)"
+        self.log_message(
+            f"Detect処理を開始... 対象={target_desc}, "
+            f"有効エンティティ={len(self.enabled_detect_entities)}件"
+        )
 
         # 現在の結果一覧から手動マークを抽出し、再検出時も保持する
         read_input = self._build_read_result_for_detect()
+
+        self._detect_scope = scope
+        self._detect_target_pages = list(page_filter) if page_filter else None
+        self._detect_base_result = (
+            copy.deepcopy(self.app_state.detect_result)
+            if scope == "current_page" and self.app_state.detect_result
+            else None
+        )
+
+        task_kwargs: Dict[str, Any] = {
+            "entities": list(self.enabled_detect_entities),
+        }
+        if page_filter:
+            task_kwargs["page_filter"] = list(page_filter)
 
         # TaskRunnerで非同期実行
         self.current_task = "detect"
         self.task_runner.start_task(
             PipelineService.run_detect,
-            read_input
+            read_input,
+            **task_kwargs,
         )
 
     def on_duplicate(self):
@@ -874,6 +1048,56 @@ class MainWindow(QMainWindow):
             int(end_pos.get("offset", -1) or -1),
         )
 
+    @staticmethod
+    def _entity_page_num(entity: Dict[str, Any]) -> int:
+        """検出項目の開始ページ番号（0始まり）を取得"""
+        start_pos = entity.get("start", {})
+        if not isinstance(start_pos, dict):
+            return -1
+        try:
+            return int(start_pos.get("page_num", -1))
+        except (TypeError, ValueError):
+            return -1
+
+    def _merge_detect_result_for_scope(self, detect_result: Dict[str, Any]) -> Dict[str, Any]:
+        """表示ページ検出時は対象ページのみ差し替え、他ページは維持する"""
+        if self._detect_scope != "current_page":
+            return detect_result
+        if not self._detect_target_pages:
+            return detect_result
+        if not isinstance(self._detect_base_result, dict):
+            return detect_result
+
+        target_pages = set(self._detect_target_pages)
+        base_detect = self._detect_base_result.get("detect", [])
+        new_detect = detect_result.get("detect", [])
+
+        if not isinstance(base_detect, list):
+            base_detect = []
+        if not isinstance(new_detect, list):
+            new_detect = []
+
+        merged_detect = [
+            entity
+            for entity in base_detect
+            if self._entity_page_num(entity) not in target_pages
+        ]
+        merged_detect.extend(
+            entity
+            for entity in new_detect
+            if self._entity_page_num(entity) in target_pages
+        )
+
+        merged_result = copy.deepcopy(detect_result)
+        merged_result["detect"] = merged_detect
+        return merged_result
+
+    def _reset_detect_scope_context(self):
+        """Detectスコープ管理の一時状態をクリア"""
+        self._detect_scope = "all"
+        self._detect_target_pages = None
+        self._detect_base_result = None
+
     def _build_read_result_for_detect(self) -> Dict[str, Any]:
         """Detect入力用にread_resultへ手動マークを統合したコピーを返す"""
         base_read = self.app_state.read_result or {}
@@ -1032,8 +1256,14 @@ class MainWindow(QMainWindow):
         # Read: PDFが選択されていて、タスクが実行中でなければ有効
         self.read_action.setEnabled(has_pdf and not is_running)
 
+        # 設定: タスク実行中は無効
+        self.config_action.setEnabled(not is_running)
+
         # Detect: Read結果があって、タスクが実行中でなければ有効
-        self.detect_action.setEnabled(has_read and not is_running)
+        detect_enabled = has_read and not is_running
+        self.detect_button.setEnabled(detect_enabled)
+        self.detect_all_action.setEnabled(detect_enabled)
+        self.detect_current_action.setEnabled(detect_enabled and has_pdf)
 
         # Duplicate/Mask: Detect結果があって、タスクが実行中でなければ有効
         self.duplicate_action.setEnabled(has_detect and not is_running)
@@ -1069,9 +1299,19 @@ class MainWindow(QMainWindow):
             self.app_state.read_result = result
             self.log_message("Read処理が完了しました")
         elif self.current_task == "detect":
-            self.app_state.detect_result = result
+            detect_result = result if isinstance(result, dict) else {}
+            detect_result = self._merge_detect_result_for_scope(detect_result)
+            self.app_state.detect_result = detect_result
             self.app_state.duplicate_result = None
-            self.log_message("Detect処理が完了しました")
+            detect_count = len(detect_result.get("detect", []))
+            if self._detect_scope == "current_page" and self._detect_target_pages:
+                page_num = self._detect_target_pages[0] + 1
+                self.log_message(
+                    f"Detect処理が完了しました（表示ページ {page_num} のみ更新, {detect_count}件）"
+                )
+            else:
+                self.log_message(f"Detect処理が完了しました（{detect_count}件）")
+            self._reset_detect_scope_context()
         elif self.current_task == "duplicate":
             self.app_state.duplicate_result = result
             detect_count = len(result.get("detect", []))
@@ -1093,5 +1333,7 @@ class MainWindow(QMainWindow):
         self.log_message(f"エラー: {error_msg}")
         QMessageBox.critical(self, "エラー", error_msg)
         self.app_state.status_message = "エラーが発生しました"
+        if self.current_task == "detect":
+            self._reset_detect_scope_context()
         self.current_task = None
         self.update_action_states()

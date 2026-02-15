@@ -198,7 +198,7 @@ node_modules/
 *.cache
 
 # ログファイル
-*log*
+.log
 
 # テスト関連
 *test*

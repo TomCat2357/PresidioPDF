@@ -6,5 +6,6 @@ Phase 2: 既存CLIロジックの再利用
 """
 
 from .pipeline_service import PipelineService
+from .detect_config_service import DetectConfigService
 
-__all__ = ["PipelineService"]
+__all__ = ["PipelineService", "DetectConfigService"]

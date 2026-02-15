@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
-import sys
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 import click
 
 from src.cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
-from src.core.dedupe import dedupe_detections
-from src.core.config_manager import ConfigManager
 
 
 # 許可されたエンティティリスト（仕様で固定）
@@ -17,6 +14,94 @@ ALLOWED_ENTITY_NAMES = [
     "PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER", 
     "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"
 ]
+
+FALLBACK_PAGE_BASE = 10 ** 15
+FALLBACK_BLOCK_BASE = 10 ** 9
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_manual_entity(item: Dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("manual") is True:
+        return True
+    return str(item.get("origin", "")).strip().lower() == "manual"
+
+
+def _normalize_origin(item: Dict[str, Any]) -> str:
+    if _is_manual_entity(item):
+        return "manual"
+
+    origin = str(item.get("origin", "")).strip().lower()
+    if origin == "addition":
+        return "custom"
+    if origin in ("manual", "custom", "auto"):
+        return origin
+    return "auto"
+
+
+def _build_block_start_map(text_2d: Optional[List[List[str]]]) -> Dict[Tuple[int, int], int]:
+    """(page_num, block_num) -> グローバル開始オフセット"""
+    starts: Dict[Tuple[int, int], int] = {}
+    cursor = 0
+    if not isinstance(text_2d, list):
+        return starts
+
+    for page_num, page_blocks in enumerate(text_2d):
+        if not isinstance(page_blocks, list):
+            continue
+        for block_num, block_text in enumerate(page_blocks):
+            starts[(page_num, block_num)] = cursor
+            cursor += len(str(block_text or ""))
+    return starts
+
+
+def _position_to_global(
+    pos: Dict[str, Any],
+    block_start_map: Dict[Tuple[int, int], int],
+) -> int:
+    """page/block/offset 形式を比較可能なグローバル値へ変換"""
+    if not isinstance(pos, dict):
+        return 0
+
+    page_num = _safe_int(pos.get("page_num", 0))
+    block_num = _safe_int(pos.get("block_num", 0))
+    offset = max(0, _safe_int(pos.get("offset", 0)))
+
+    block_start = block_start_map.get((page_num, block_num))
+    if block_start is not None:
+        return block_start + offset
+
+    # text_2d上に存在しない座標（手動図形など）は疑似値で順序のみ保証
+    return (
+        page_num * FALLBACK_PAGE_BASE
+        + block_num * FALLBACK_BLOCK_BASE
+        + offset
+    )
+
+
+def _entity_span(
+    item: Dict[str, Any],
+    block_start_map: Dict[Tuple[int, int], int],
+) -> Tuple[int, int]:
+    start_pos = item.get("start", {})
+    end_pos = item.get("end", {})
+    s = _position_to_global(start_pos, block_start_map)
+    e = _position_to_global(end_pos, block_start_map)
+    if e < s:
+        s, e = e, s
+    return s, e
+
+
+def _span_contains(a: Tuple[int, int], b: Tuple[int, int]) -> bool:
+    return a[0] <= b[0] and b[1] <= a[1]
+
 
 def _dedupe_detections_spec_format(
     detect_list: List,
@@ -27,105 +112,167 @@ def _dedupe_detections_spec_format(
     origin_priority: List[str],
     length_pref: Optional[str],
     position_pref: Optional[str],
+    text_2d: Optional[List[List[str]]] = None,
 ) -> List:
     """仕様書形式の重複処理実装"""
     if not detect_list:
         return []
-    
-    # 簡略化された重複処理ロジック
-    result = []
-    processed_indices = set()
-    
-    for i, item in enumerate(detect_list):
-        if i in processed_indices:
+
+    block_start_map = _build_block_start_map(text_2d)
+    n = len(detect_list)
+
+    # 重複グラフを構築
+    adjacency: List[List[int]] = [[] for _ in range(n)]
+    for i in range(n):
+        left = detect_list[i]
+        for j in range(i + 1, n):
+            right = detect_list[j]
+
+            if (
+                entity_overlap_mode == "same"
+                and str(left.get("entity", "")) != str(right.get("entity", ""))
+            ):
+                continue
+
+            if _positions_overlap(left, right, overlap, block_start_map):
+                adjacency[i].append(j)
+                adjacency[j].append(i)
+
+    # 連結成分ごとに代表1件を選択
+    groups: List[List[int]] = []
+    visited = [False] * n
+    for i in range(n):
+        if visited[i]:
             continue
-            
-        # 重複するアイテムを探す
-        duplicates = [i]
-        for j, other in enumerate(detect_list[i+1:], i+1):
-            if j in processed_indices:
-                continue
-                
-            # エンティティタイプチェック
-            if entity_overlap_mode == "same" and item.get("entity") != other.get("entity"):
-                continue
-                
-            # 位置の重複チェック（簡略化）
-            if _positions_overlap(item, other, overlap):
-                duplicates.append(j)
-        
-        # 重複グループから最適を選択
-        best_item = _select_best_item([detect_list[idx] for idx in duplicates], tie_break, origin_priority, length_pref, entity_priority)
+        stack = [i]
+        visited[i] = True
+        group = []
+        while stack:
+            current = stack.pop()
+            group.append(current)
+            for nxt in adjacency[current]:
+                if not visited[nxt]:
+                    visited[nxt] = True
+                    stack.append(nxt)
+        groups.append(sorted(group))
+
+    groups.sort(key=lambda idxs: idxs[0] if idxs else 10 ** 12)
+
+    result = []
+    for group in groups:
+        items = [detect_list[idx] for idx in group]
+        best_item = _select_best_item(
+            items,
+            tie_break=tie_break,
+            origin_priority=origin_priority,
+            length_pref=length_pref,
+            position_pref=position_pref,
+            entity_priority=entity_priority,
+            block_start_map=block_start_map,
+        )
         result.append(best_item)
-        
-        processed_indices.update(duplicates)
-    
+
     return result
 
+def _positions_overlap(
+    item1: Dict[str, Any],
+    item2: Dict[str, Any],
+    overlap_mode: str,
+    block_start_map: Dict[Tuple[int, int], int],
+) -> bool:
+    """位置の重複判定（start/endは包含端として扱う）"""
+    span1 = _entity_span(item1, block_start_map)
+    span2 = _entity_span(item2, block_start_map)
 
-def _positions_overlap(item1, item2, overlap_mode: str) -> bool:
-    """位置の重複をチェック（簡略化）"""
-    # 仕様書形式ではstart/endがpage_num,block_num,offset形式
-    start1 = item1.get("start", {})
-    end1 = item1.get("end", {})
-    start2 = item2.get("start", {})
-    end2 = item2.get("end", {})
-    
-    # 簡略化: 同じページ・ブロック内でオフセットが重複しているかをチェック
-    if (start1.get("page_num") == start2.get("page_num") and 
-        start1.get("block_num") == start2.get("block_num")):
-        
-        offset1_start = start1.get("offset", 0)
-        offset1_end = end1.get("offset", 0)
-        offset2_start = start2.get("offset", 0)
-        offset2_end = end2.get("offset", 0)
-        
-        if overlap_mode == "exact":
-            return offset1_start == offset2_start and offset1_end == offset2_end
-        elif overlap_mode == "contain":
-            return (offset1_start <= offset2_start <= offset1_end) or (offset2_start <= offset1_start <= offset2_end)
-        else:  # overlap
-            return max(offset1_start, offset2_start) < min(offset1_end, offset2_end)
-    
-    return False
+    if overlap_mode == "exact":
+        return span1 == span2
+    if overlap_mode == "contain":
+        return _span_contains(span1, span2) or _span_contains(span2, span1)
+
+    # overlap: 1文字でも交差していれば重複
+    return max(span1[0], span2[0]) <= min(span1[1], span2[1])
 
 
-def _select_best_item(items, tie_break: List[str], origin_priority: List[str], length_pref: Optional[str], entity_priority: List[str]):
+def _select_best_item(
+    items: List[Dict[str, Any]],
+    tie_break: List[str],
+    origin_priority: List[str],
+    length_pref: Optional[str],
+    position_pref: Optional[str],
+    entity_priority: List[str],
+    block_start_map: Dict[Tuple[int, int], int],
+) -> Dict[str, Any]:
     """重複グループから最適アイテムを選択"""
     if len(items) == 1:
         return items[0]
-    
-    # 簡略化されたタイブレークロジック
-    best = items[0]
-    for item in items[1:]:
-        if _is_better(item, best, tie_break, origin_priority, length_pref, entity_priority):
-            best = item
-    return best
 
+    criteria = [c.strip().lower() for c in tie_break if str(c).strip()]
+    if not criteria:
+        criteria = ["origin", "contain", "length", "position", "entity"]
 
-def _is_better(item1, item2, tie_break: List[str], origin_priority: List[str], length_pref: Optional[str], entity_priority: List[str]) -> bool:
-    """アイテム1がアイテム2より優れているか判定"""
-    for criterion in tie_break:
-        if criterion == "origin":
-            origin1 = item1.get("origin", "")
-            origin2 = item2.get("origin", "")
-            pri1 = origin_priority.index(origin1) if origin1 in origin_priority else len(origin_priority)
-            pri2 = origin_priority.index(origin2) if origin2 in origin_priority else len(origin_priority)
-            if pri1 != pri2:
-                return pri1 < pri2
-        elif criterion == "length":
-            len1 = len(item1.get("word", ""))
-            len2 = len(item2.get("word", ""))
-            if len1 != len2:
-                return len1 > len2 if length_pref == "long" else len1 < len2
-        elif criterion == "entity":
-            ent1 = item1.get("entity", "")
-            ent2 = item2.get("entity", "")
-            pri1 = entity_priority.index(ent1) if ent1 in entity_priority else len(entity_priority)
-            pri2 = entity_priority.index(ent2) if ent2 in entity_priority else len(entity_priority)
-            if pri1 != pri2:
-                return pri1 < pri2
-    return False
+    normalized_origin_priority = [
+        str(o).strip().lower()
+        for o in origin_priority
+        if str(o).strip()
+    ]
+    if not normalized_origin_priority:
+        normalized_origin_priority = ["manual", "custom", "auto"]
+    for origin in ["manual", "custom", "auto"]:
+        if origin not in normalized_origin_priority:
+            normalized_origin_priority.append(origin)
+
+    origin_rank = {
+        name: idx for idx, name in enumerate(normalized_origin_priority)
+    }
+    entity_rank = {
+        str(name).upper(): idx for idx, name in enumerate(entity_priority)
+    }
+
+    spans = [_entity_span(item, block_start_map) for item in items]
+    contain_metrics: List[Tuple[int, int]] = []
+    for i, span in enumerate(spans):
+        contains_count = 0
+        contained_by_count = 0
+        for j, other_span in enumerate(spans):
+            if i == j:
+                continue
+            if _span_contains(span, other_span):
+                contains_count += 1
+            if _span_contains(other_span, span):
+                contained_by_count += 1
+        contain_metrics.append((contains_count, contained_by_count))
+
+    prefer_short = str(length_pref or "long").strip().lower() == "short"
+    prefer_last = str(position_pref or "first").strip().lower() == "last"
+
+    def score(index: int) -> Tuple[Any, ...]:
+        item = items[index]
+        span_start, span_end = spans[index]
+        span_len = max(0, span_end - span_start + 1)
+        contains_count, contained_by_count = contain_metrics[index]
+        entity_name = str(item.get("entity", "")).upper()
+
+        keys: List[Any] = []
+        for criterion in criteria:
+            if criterion == "origin":
+                keys.append(origin_rank.get(_normalize_origin(item), len(origin_rank)))
+            elif criterion == "contain":
+                # 「完全包含」優先: より多く包含し、より包含されないものを優先
+                keys.append(-contains_count)
+                keys.append(contained_by_count)
+            elif criterion == "length":
+                keys.append(span_len if prefer_short else -span_len)
+            elif criterion == "position":
+                keys.append(-span_start if prefer_last else span_start)
+            elif criterion == "entity":
+                keys.append(entity_rank.get(entity_name, len(entity_rank)))
+
+        # 最終的には入力順で安定化
+        keys.append(index)
+        return tuple(keys)
+
+    best_index = min(range(len(items)), key=score)
+    return items[best_index]
 
 
 @click.command(help="検出結果の重複を処理して正規化し統一スキーマでファイル出力")
@@ -138,7 +285,7 @@ def _is_better(item1, item2, tie_break: List[str], origin_priority: List[str], l
 @click.option("--entity-overlap-mode", type=click.Choice(["same", "any"]), default="same", show_default=True, help="エンティティ種類を考慮した重複処理: same(同じエンティティのみ), any(異なるエンティティでも重複処理)")
 @click.option("--position-pref", type=click.Choice(["first", "last"]), default="first", show_default=True, help="位置の優先: first/last（入力順ベース）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
-@click.option("--tie-break", "tie_break", type=str, default="origin,length,position,entity", show_default=True, help="タイブレーク順（カンマ区切り）: origin,length,entity,position の並びで指定")
+@click.option("--tie-break", "tie_break", type=str, default="origin,contain,length,position,entity", show_default=True, help="タイブレーク順（カンマ区切り）: origin,contain,length,position,entity の並びで指定")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONの検証を実施")
 def main(
     entity_order: Optional[str],
@@ -188,6 +335,9 @@ def main(
     detect_list = data.get("detect", [])
     if not isinstance(detect_list, list):
         detect_list = []
+    text_2d = data.get("text", [])
+    if not isinstance(text_2d, list):
+        text_2d = []
 
     # エンティティ種類を考慮した重複処理
     result = _dedupe_detections_spec_format(
@@ -199,6 +349,7 @@ def main(
         origin_priority=origin_pri,
         length_pref=length_pref_f,
         position_pref=position_pref_f,
+        text_2d=text_2d,
     )
     
     # 座標マップの継承
