@@ -48,9 +48,25 @@ class Analyzer:
                 model_name = preferred_model
                 logger.info(f"spaCyモデルを読み込みました: {model_name}")
             except OSError:
-                raise OSError(
-                    f"指定されたspaCyモデル '{preferred_model}' が見つかりません。モデルを正しくインストールしてください。"
+                logger.warning(
+                    f"優先spaCyモデル '{preferred_model}' が見つかりません。フォールバックモデルを試行します。"
                 )
+                # フォールバックモデルを順番に試行
+                for fb_model in fallback_models:
+                    try:
+                        nlp = spacy.load(fb_model)
+                        model_name = fb_model
+                        logger.info(f"フォールバックspaCyモデルを読み込みました: {model_name}")
+                        break
+                    except OSError:
+                        logger.debug(f"フォールバックモデル '{fb_model}' も見つかりません。")
+                        continue
+
+                if nlp is None:
+                    all_tried = [preferred_model] + list(fallback_models)
+                    raise OSError(
+                        f"利用可能なspaCyモデルが見つかりません。試行したモデル: {', '.join(all_tried)}"
+                    )
 
         except Exception as e:
             logger.error(f"spaCyモデルの読み込みでエラーが発生しました: {e}")
