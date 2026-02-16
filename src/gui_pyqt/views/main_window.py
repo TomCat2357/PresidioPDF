@@ -934,29 +934,30 @@ class MainWindow(QMainWindow):
             page_count = pdf_info.get("page_count", 0)
             self.statusBar().showMessage(f"ページ数: {page_count}")
 
-            self.update_action_states()
+        self.update_action_states()
 
     def on_detect_result_changed(self, result: Optional[dict]):
         """Detect結果が変更された"""
-        if result:
-            # ResultPanelに検出結果を読み込み
-            self.result_panel.load_entities(result)
-            # 全エンティティをハイライト表示
-            self._highlight_all_entities(result)
-            self.update_action_states()
+        self._refresh_result_view_from_state()
 
     def on_duplicate_result_changed(self, result: Optional[dict]):
         """Duplicate結果が変更された"""
-        if result:
-            # ResultPanelに重複処理後の結果を読み込み
-            self.result_panel.load_entities(result)
-            # 全エンティティをハイライト表示
-            self._highlight_all_entities(result)
-            self.update_action_states()
+        self._refresh_result_view_from_state()
 
     def on_status_message_changed(self, message: str):
         """ステータスメッセージが変更された"""
         self.statusBar().showMessage(message)
+
+    def _refresh_result_view_from_state(self):
+        """現在の状態から結果一覧とプレビューハイライトを再構築する"""
+        current_result = self.app_state.duplicate_result or self.app_state.detect_result
+        self.result_panel.load_entities(current_result)
+        if current_result:
+            self._highlight_all_entities(current_result)
+        else:
+            self._all_preview_entities = []
+            self.pdf_preview.set_highlighted_entities([])
+        self.update_action_states()
 
     # =========================================================================
     # Phase 4: 編集UIイベントハンドラ
