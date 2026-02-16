@@ -24,8 +24,8 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QDialogButtonBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import Qt, pyqtSignal, QItemSelectionModel
+from PyQt6.QtGui import QAction, QShortcut, QKeySequence
 
 from src.core.entity_types import ENTITY_TYPES, get_entity_type_name_ja
 
@@ -177,6 +177,7 @@ class ResultPanel(QWidget):
     entity_deleted = pyqtSignal(int)  # 削除されたエンティティのインデックス
     entity_updated = pyqtSignal(int, dict)  # 更新されたエンティティ（インデックス、新しいデータ）
     entity_added = pyqtSignal(dict)  # 追加されたエンティティ
+    select_current_page_requested = pyqtSignal()  # Ctrl+A: 表示ページの全選択要求
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -208,12 +209,13 @@ class ResultPanel(QWidget):
 
         # 検出結果テーブル
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(6)
+        self.results_table.setColumnCount(5)
         self.results_table.setHorizontalHeaderLabels([
-            "ページ", "種別", "テキスト", "信頼度", "位置", "手動"
+            "ページ", "種別", "テキスト", "位置", "手動"
         ])
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.results_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.results_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.results_table.customContextMenuRequested.connect(self.show_context_menu)
         self.results_table.itemSelectionChanged.connect(self.on_selection_changed)
@@ -226,6 +228,19 @@ class ResultPanel(QWidget):
         layout.addWidget(self.results_table)
 
         self.setLayout(layout)
+
+        # ショートカット: Delete / Ctrl+A（表示ページのみ）
+        self.delete_shortcut = QShortcut(QKeySequence("Delete"), self.results_table)
+        self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.delete_shortcut.activated.connect(self.delete_selected)
+
+        self.select_current_page_shortcut = QShortcut(QKeySequence("Ctrl+A"), self.results_table)
+        self.select_current_page_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.select_current_page_shortcut.activated.connect(
+            self._on_select_current_page_shortcut
+        )
 
     def load_entities(self, result: Optional[dict]):
         """検出結果を読み込んでテーブルに表示"""
@@ -262,10 +277,6 @@ class ResultPanel(QWidget):
             text = entity.get("word", "")
             self.results_table.setItem(i, 2, QTableWidgetItem(text))
 
-            # 信頼度（origin）
-            origin = entity.get("origin", "")
-            self.results_table.setItem(i, 3, QTableWidgetItem(origin))
-
             # 位置情報（1始まりで表示）
             end_pos = entity.get("end", {})
             if isinstance(start_pos, dict) and isinstance(end_pos, dict):
@@ -274,12 +285,12 @@ class ResultPanel(QWidget):
                 position_str = f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
             else:
                 position_str = ""
-            self.results_table.setItem(i, 4, QTableWidgetItem(position_str))
+            self.results_table.setItem(i, 3, QTableWidgetItem(position_str))
 
             # 手動追加フラグ
             is_manual = self._is_manual_entity(entity)
             manual_str = "✓" if is_manual else ""
-            self.results_table.setItem(i, 5, QTableWidgetItem(manual_str))
+            self.results_table.setItem(i, 4, QTableWidgetItem(manual_str))
 
         # テーブルのリサイズ
         self.results_table.resizeColumnsToContents()
@@ -363,12 +374,14 @@ class ResultPanel(QWidget):
         if column == 2:
             return str(entity.get("word", "")).lower()
         if column == 3:
-            return str(entity.get("origin", "")).lower()
-        if column == 4:
             return (page_num, block_num, offset, end_page_num, end_block_num, end_offset)
-        if column == 5:
+        if column == 4:
             return 1 if cls._is_manual_entity(entity) else 0
         return str(entity)
+
+    def _on_select_current_page_shortcut(self):
+        """Ctrl+Aが押されたときに表示ページ全選択を要求"""
+        self.select_current_page_requested.emit()
 
     def show_context_menu(self, pos):
         """コンテキストメニューを表示"""
@@ -469,6 +482,30 @@ class ResultPanel(QWidget):
             self.results_table.selectRow(row)
             self.results_table.scrollToItem(
                 self.results_table.item(row, 0),
+                QTableWidget.ScrollHint.PositionAtCenter,
+            )
+
+    def select_rows(self, rows: List[int]):
+        """指定行を複数選択する"""
+        self.results_table.clearSelection()
+        selection_model = self.results_table.selectionModel()
+        if selection_model is None:
+            return
+
+        for row in rows:
+            if row < 0 or row >= self.results_table.rowCount():
+                continue
+            index = self.results_table.model().index(row, 0)
+            selection_model.select(
+                index,
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+
+        if rows:
+            first_row = min(rows)
+            self.results_table.scrollToItem(
+                self.results_table.item(first_row, 0),
                 QTableWidget.ScrollHint.PositionAtCenter,
             )
 

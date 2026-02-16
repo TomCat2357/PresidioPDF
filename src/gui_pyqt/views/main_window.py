@@ -88,6 +88,9 @@ class MainWindow(QMainWindow):
         self._detect_scope = "all"
         self._detect_target_pages: Optional[List[int]] = None
         self._detect_base_result: Optional[Dict[str, Any]] = None
+        self._duplicate_scope = "all"
+        self._duplicate_target_pages: Optional[List[int]] = None
+        self._duplicate_base_result: Optional[Dict[str, Any]] = None
 
         self.init_ui()
         self.connect_signals()
@@ -133,32 +136,62 @@ class MainWindow(QMainWindow):
         read_action.triggered.connect(self.on_read)
         self.read_action = read_action
 
-        # 検出（親ボタン + 子ボタン）
-        self.detect_all_action = QAction("全ページ", self)
-        self.detect_all_action.triggered.connect(self.on_detect_all_pages)
-
+        # 対象検出（ぶら下がりメニュー）
         self.detect_current_action = QAction("表示ページ", self)
         self.detect_current_action.triggered.connect(self.on_detect_current_page)
 
+        self.detect_all_action = QAction("全ページ", self)
+        self.detect_all_action.triggered.connect(self.on_detect_all_pages)
+
         detect_menu = QMenu(self)
-        detect_menu.addAction(self.detect_all_action)
         detect_menu.addAction(self.detect_current_action)
+        detect_menu.addAction(self.detect_all_action)
 
         detect_button = QToolButton(self)
-        detect_button.setText("検出")
+        detect_button.setText("対象検出")
         detect_button.setToolTip("個人情報（PII）を検出")
-        detect_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        detect_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         detect_button.setMenu(detect_menu)
-        detect_button.clicked.connect(self.on_detect_all_pages)
         toolbar.addWidget(detect_button)
         self.detect_button = detect_button
 
-        # Duplicate（ツールバー表示）
-        duplicate_action = QAction("重複削除", self)
-        duplicate_action.setStatusTip("重複する検出結果を処理")
-        duplicate_action.triggered.connect(self.on_duplicate)
-        toolbar.addAction(duplicate_action)
-        self.duplicate_action = duplicate_action
+        # 対象削除（自動検出のみ、ぶら下がりメニュー）
+        self.target_delete_current_action = QAction("表示ページ", self)
+        self.target_delete_current_action.triggered.connect(self.on_target_delete_current_page)
+
+        self.target_delete_all_action = QAction("全ページ", self)
+        self.target_delete_all_action.triggered.connect(self.on_target_delete_all_pages)
+
+        target_delete_menu = QMenu(self)
+        target_delete_menu.addAction(self.target_delete_current_action)
+        target_delete_menu.addAction(self.target_delete_all_action)
+
+        target_delete_button = QToolButton(self)
+        target_delete_button.setText("対象削除")
+        target_delete_button.setToolTip("自動検出項目を削除")
+        target_delete_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        target_delete_button.setMenu(target_delete_menu)
+        toolbar.addWidget(target_delete_button)
+        self.target_delete_button = target_delete_button
+
+        # 重複削除（ぶら下がりメニュー）
+        self.duplicate_current_action = QAction("表示ページ", self)
+        self.duplicate_current_action.triggered.connect(self.on_duplicate_current_page)
+
+        self.duplicate_all_action = QAction("全ページ", self)
+        self.duplicate_all_action.triggered.connect(self.on_duplicate_all_pages)
+
+        duplicate_menu = QMenu(self)
+        duplicate_menu.addAction(self.duplicate_current_action)
+        duplicate_menu.addAction(self.duplicate_all_action)
+
+        duplicate_button = QToolButton(self)
+        duplicate_button.setText("重複削除")
+        duplicate_button.setToolTip("重複する検出結果を処理")
+        duplicate_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        duplicate_button.setMenu(duplicate_menu)
+        toolbar.addWidget(duplicate_button)
+        self.duplicate_button = duplicate_button
 
         # 保存（PDF + JSONマッピング）
         save_action = QAction("保存", self)
@@ -167,19 +200,28 @@ class MainWindow(QMainWindow):
         toolbar.addAction(save_action)
         self.save_action = save_action
 
-        # マスク
-        mask_action = QAction("マスク", self)
-        mask_action.setStatusTip("マーク部分をマスキングして保存")
-        mask_action.triggered.connect(self.on_mask)
-        toolbar.addAction(mask_action)
-        self.mask_action = mask_action
+        # エクスポート（ぶら下がりメニュー）
+        self.export_annotations_action = QAction("アノテーション付き", self)
+        self.export_annotations_action.triggered.connect(self.on_export_annotations)
 
-        # エクスポート（PDFのみ）
-        export_action = QAction("エクスポート", self)
-        export_action.setStatusTip("JSONマッピングなしでPDFを保存")
-        export_action.triggered.connect(self.on_export)
-        toolbar.addAction(export_action)
-        self.export_action = export_action
+        self.export_mask_action = QAction("マスク", self)
+        self.export_mask_action.triggered.connect(self.on_mask)
+
+        self.export_mask_as_image_action = QAction("マスク（画像として保存）", self)
+        self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
+
+        export_menu = QMenu(self)
+        export_menu.addAction(self.export_annotations_action)
+        export_menu.addAction(self.export_mask_action)
+        export_menu.addAction(self.export_mask_as_image_action)
+
+        export_button = QToolButton(self)
+        export_button.setText("エクスポート")
+        export_button.setToolTip("検出結果を各モードで保存")
+        export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        export_button.setMenu(export_menu)
+        toolbar.addWidget(export_button)
+        self.export_button = export_button
 
         # 初期状態では一部のアクションを無効化
         self.update_action_states()
@@ -255,6 +297,9 @@ class MainWindow(QMainWindow):
         self.result_panel.entity_deleted.connect(self.on_entity_deleted)
         self.result_panel.entity_updated.connect(self.on_entity_updated)
         self.result_panel.entity_added.connect(self.on_entity_added)
+        self.result_panel.select_current_page_requested.connect(
+            self.on_select_current_page_requested
+        )
 
         # PDFプレビューからの逆方向連携
         self.pdf_preview.entity_clicked.connect(self.on_preview_entity_clicked)
@@ -552,7 +597,19 @@ class MainWindow(QMainWindow):
         )
 
     def on_duplicate(self):
-        """Duplicate処理（Phase 3: 非同期実行）"""
+        """互換: 全ページ重複削除を実行"""
+        self.on_duplicate_all_pages()
+
+    def on_duplicate_all_pages(self):
+        """全ページを対象に重複削除を実行"""
+        self._start_duplicate(scope="all", page_filter=None)
+
+    def on_duplicate_current_page(self):
+        """表示ページのみを対象に重複削除を実行"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        self._start_duplicate(scope="current_page", page_filter=[current_page])
+
+    def _start_duplicate(self, scope: str, page_filter: Optional[List[int]]):
         if not self.app_state.has_detect_result():
             QMessageBox.warning(self, "警告", "Detect処理が完了していません")
             return
@@ -561,25 +618,100 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
+        detect_result = copy.deepcopy(self.app_state.detect_result or {})
+        detect_list = detect_result.get("detect", [])
+        if not isinstance(detect_list, list):
+            detect_list = []
+
+        self._duplicate_scope = scope
+        self._duplicate_target_pages = list(page_filter) if page_filter else None
+        self._duplicate_base_result = (
+            copy.deepcopy(self.app_state.detect_result)
+            if scope == "current_page" and self.app_state.detect_result
+            else None
+        )
+
+        if page_filter:
+            target_pages = set(int(page_num) for page_num in page_filter)
+            scoped_detect = [
+                entity
+                for entity in detect_list
+                if self._entity_page_num(entity) in target_pages
+            ]
+            detect_result["detect"] = scoped_detect
+            target_desc = f"表示ページ({page_filter[0] + 1}ページ目)"
+        else:
+            target_desc = "全ページ"
+
         self.log_message(
             "Duplicate処理を開始... "
+            f"対象={target_desc}, "
             f"(entity_overlap_mode={self.duplicate_entity_overlap_mode}, "
             f"overlap={self.duplicate_overlap_mode})"
         )
 
-        # TaskRunnerで非同期実行
         self.current_task = "duplicate"
         self.task_runner.start_task(
             PipelineService.run_duplicate,
-            self.app_state.detect_result,
+            detect_result,
             overlap=self.duplicate_overlap_mode,
             entity_overlap_mode=self.duplicate_entity_overlap_mode,
         )
 
+    def on_target_delete_current_page(self):
+        """表示ページの自動検出項目のみ削除"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        self._delete_auto_entities(scope="current_page", page_filter=[current_page])
+
+    def on_target_delete_all_pages(self):
+        """全ページの自動検出項目のみ削除"""
+        self._delete_auto_entities(scope="all", page_filter=None)
+
+    def _delete_auto_entities(self, scope: str, page_filter: Optional[List[int]]):
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        entities = self.result_panel.get_entities()
+        if not isinstance(entities, list) or not entities:
+            QMessageBox.warning(self, "警告", "削除対象がありません")
+            return
+
+        target_pages = set(int(page_num) for page_num in (page_filter or []))
+        kept_entities: List[Dict[str, Any]] = []
+        removed_count = 0
+        for entity in entities:
+            page_num = self._entity_page_num(entity)
+            in_scope = scope == "all" or page_num in target_pages
+            is_auto = not self._is_manual_entity(entity)
+            if in_scope and is_auto:
+                removed_count += 1
+                continue
+            kept_entities.append(copy.deepcopy(entity))
+
+        if removed_count == 0:
+            QMessageBox.information(self, "情報", "削除対象の自動検出項目はありませんでした")
+            return
+
+        self.result_panel.entities = kept_entities
+        self.result_panel.update_table()
+        self.result_panel.on_selection_changed()
+        self._sync_all_result_states_from_entities(kept_entities)
+
+        current_result = self._get_current_result()
+        if current_result:
+            self._highlight_all_entities(current_result)
+        else:
+            self._all_preview_entities = []
+            self.pdf_preview.set_highlighted_entities([])
+
+        target_desc = "全ページ" if scope == "all" else f"表示ページ({page_filter[0] + 1}ページ目)"
+        self.log_message(f"対象削除を実行: {target_desc}, 自動項目 {removed_count}件を削除")
+        self.update_action_states()
+
     def on_mask(self):
         """Mask処理（Phase 3: 非同期実行）"""
-        # Duplicate結果があればそれを使い、なければDetect結果を使う
-        detect_or_dup_result = self.app_state.duplicate_result or self.app_state.detect_result
+        detect_or_dup_result = self._get_export_source_result()
 
         if not detect_or_dup_result:
             QMessageBox.warning(self, "警告", "Detect処理が完了していません")
@@ -593,15 +725,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        # 出力先の選択
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "マスキング結果の保存先",
-            str(self.app_state.pdf_path.with_stem(self.app_state.pdf_path.stem + "_masked")),
-            "PDF Files (*.pdf);;All Files (*)"
-        )
-
-        if not output_path:
+        output_pdf_path = self._select_output_pdf_path("マスキング結果の保存先", "_masked")
+        if not output_pdf_path:
             return
 
         self.log_message("Mask処理を開始...")
@@ -612,41 +737,70 @@ class MainWindow(QMainWindow):
             PipelineService.run_mask,
             detect_or_dup_result,
             self.app_state.pdf_path,
-            Path(output_path)
+            output_pdf_path,
         )
 
     def on_export(self):
-        """Export処理（JSONマッピングなしのPDF保存）"""
+        """互換: アノテーション付きエクスポートを実行"""
+        self.on_export_annotations()
+
+    def on_export_annotations(self):
+        """検出結果を注釈付きPDFとしてエクスポート"""
+        detect_or_dup_result = self._get_export_source_result()
+        if not detect_or_dup_result:
+            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            return
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
             return
-
-        # 保存先を選択
-        default_name = self.app_state.pdf_path.stem + "_export.pdf"
-
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "エクスポート先を選択",
-            default_name,
-            "PDF Files (*.pdf);;All Files (*)"
-        )
-
-        if not output_path:
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        try:
-            out_pdf = Path(output_path)
-            if out_pdf.suffix.lower() != ".pdf":
-                out_pdf = out_pdf.with_suffix(".pdf")
+        output_pdf_path = self._select_output_pdf_path(
+            "注釈付きPDFの保存先",
+            "_annotations",
+        )
+        if not output_pdf_path:
+            return
 
-            shutil.copy2(self.app_state.pdf_path, out_pdf)
-            self.log_message(f"エクスポート完了（PDFのみ）: {out_pdf}")
-            QMessageBox.information(self, "完了", f"エクスポートしました:\n{out_pdf}")
+        self.log_message("アノテーション付きエクスポートを開始...")
+        self.current_task = "export_annotations"
+        self.task_runner.start_task(
+            PipelineService.run_export_annotations,
+            detect_or_dup_result,
+            self.app_state.pdf_path,
+            output_pdf_path,
+        )
 
-        except Exception as e:
-            error_msg = f"Export処理中にエラーが発生しました: {str(e)}"
-            self.log_message(error_msg)
-            QMessageBox.critical(self, "エラー", error_msg)
+    def on_export_mask_as_image(self):
+        """検出結果をマスクし、画像のみPDFとして保存"""
+        detect_or_dup_result = self._get_export_source_result()
+        if not detect_or_dup_result:
+            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            return
+        if not self.app_state.has_pdf():
+            QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
+            return
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        output_pdf_path = self._select_output_pdf_path(
+            "マスク（画像として保存）の保存先",
+            "_masked_image",
+        )
+        if not output_pdf_path:
+            return
+
+        self.log_message("マスク（画像として保存）を開始...")
+        self.current_task = "mask_as_image"
+        self.task_runner.start_task(
+            PipelineService.run_mask_as_image,
+            detect_or_dup_result,
+            self.app_state.pdf_path,
+            output_pdf_path,
+        )
 
     def on_save(self):
         """保存処理（PDF + サイドカーJSONマッピング）"""
@@ -905,6 +1059,15 @@ class MainWindow(QMainWindow):
         # エンティティタイプ選択ダイアログを表示（位置情報は選択領域から自動設定）
         self.result_panel.add_manual_entity(selection_data)
 
+    def on_select_current_page_requested(self):
+        """Ctrl+A: 表示ページの項目のみResultPanelで全選択"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        rows = []
+        for i, entity in enumerate(self.result_panel.get_entities()):
+            if self._entity_page_num(entity) == current_page:
+                rows.append(i)
+        self.result_panel.select_rows(rows)
+
     def on_preview_entity_clicked(self, preview_index: int):
         """PDFプレビュー上のエンティティクリック→ResultPanelの該当行を選択"""
         if preview_index < 0 or preview_index >= len(self._all_preview_entities):
@@ -1115,6 +1278,61 @@ class MainWindow(QMainWindow):
             result["detect"] = updated_detect
             self.app_state.read_result = result
 
+    def _get_current_result(self) -> Optional[dict]:
+        """表示・ハイライト基準となる現在の結果を返す"""
+        if isinstance(self.app_state.duplicate_result, dict):
+            return self.app_state.duplicate_result
+        if isinstance(self.app_state.detect_result, dict):
+            return self.app_state.detect_result
+        if isinstance(self.app_state.read_result, dict):
+            return self.app_state.read_result
+        return None
+
+    def _get_export_source_result(self) -> Optional[dict]:
+        """エクスポート用に使用する結果（duplicate優先）を返す"""
+        if isinstance(self.app_state.duplicate_result, dict):
+            return self.app_state.duplicate_result
+        if isinstance(self.app_state.detect_result, dict):
+            return self.app_state.detect_result
+        return None
+
+    def _sync_all_result_states_from_entities(self, entities: List[Dict[str, Any]]) -> None:
+        """ResultPanelの検出項目をAppStateの全結果へ同期"""
+        normalized_entities = [copy.deepcopy(entity) for entity in entities if isinstance(entity, dict)]
+
+        if isinstance(self.app_state.read_result, dict):
+            read_result = copy.deepcopy(self.app_state.read_result)
+            read_result["detect"] = copy.deepcopy(normalized_entities)
+            self.app_state.read_result = read_result
+
+        if isinstance(self.app_state.detect_result, dict):
+            detect_result = copy.deepcopy(self.app_state.detect_result)
+            detect_result["detect"] = copy.deepcopy(normalized_entities)
+            self.app_state.detect_result = detect_result
+
+        if isinstance(self.app_state.duplicate_result, dict):
+            duplicate_result = copy.deepcopy(self.app_state.duplicate_result)
+            duplicate_result["detect"] = copy.deepcopy(normalized_entities)
+            self.app_state.duplicate_result = duplicate_result
+
+    def _select_output_pdf_path(self, title: str, stem_suffix: str) -> Optional[Path]:
+        """保存先PDFパスを選択"""
+        default_path = self.app_state.pdf_path.with_stem(
+            self.app_state.pdf_path.stem + stem_suffix
+        )
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            title,
+            str(default_path),
+            "PDF Files (*.pdf);;All Files (*)",
+        )
+        if not output_path:
+            return None
+        output_pdf = Path(output_path)
+        if output_pdf.suffix.lower() != ".pdf":
+            output_pdf = output_pdf.with_suffix(".pdf")
+        return output_pdf
+
     @staticmethod
     def _is_manual_entity(entity: Any) -> bool:
         """手動マークの判定"""
@@ -1194,6 +1412,45 @@ class MainWindow(QMainWindow):
         self._detect_scope = "all"
         self._detect_target_pages = None
         self._detect_base_result = None
+
+    def _merge_duplicate_result_for_scope(self, duplicate_result: Dict[str, Any]) -> Dict[str, Any]:
+        """表示ページ重複削除時は対象ページのみ差し替え、他ページは維持する"""
+        if self._duplicate_scope != "current_page":
+            return duplicate_result
+        if not self._duplicate_target_pages:
+            return duplicate_result
+        if not isinstance(self._duplicate_base_result, dict):
+            return duplicate_result
+
+        target_pages = set(self._duplicate_target_pages)
+        base_detect = self._duplicate_base_result.get("detect", [])
+        new_detect = duplicate_result.get("detect", [])
+
+        if not isinstance(base_detect, list):
+            base_detect = []
+        if not isinstance(new_detect, list):
+            new_detect = []
+
+        merged_detect = [
+            entity
+            for entity in base_detect
+            if self._entity_page_num(entity) not in target_pages
+        ]
+        merged_detect.extend(
+            entity
+            for entity in new_detect
+            if self._entity_page_num(entity) in target_pages
+        )
+
+        merged_result = copy.deepcopy(duplicate_result)
+        merged_result["detect"] = merged_detect
+        return merged_result
+
+    def _reset_duplicate_scope_context(self):
+        """Duplicateスコープ管理の一時状態をクリア"""
+        self._duplicate_scope = "all"
+        self._duplicate_target_pages = None
+        self._duplicate_base_result = None
 
     def _build_read_result_for_detect(self) -> Dict[str, Any]:
         """Detect入力用にread_resultへ手動マークを統合したコピーを返す"""
@@ -1387,6 +1644,8 @@ class MainWindow(QMainWindow):
         has_pdf = self.app_state.has_pdf()
         has_read = self.app_state.has_read_result()
         has_detect = self.app_state.has_detect_result()
+        has_export_source = self._get_export_source_result() is not None
+        has_current_result = self._get_current_result() is not None
         is_running = self.task_runner.is_running()
 
         # Read: PDFが選択されていて、タスクが実行中でなければ有効
@@ -1401,12 +1660,24 @@ class MainWindow(QMainWindow):
         self.detect_all_action.setEnabled(detect_enabled)
         self.detect_current_action.setEnabled(detect_enabled and has_pdf)
 
-        # Duplicate/Mask: Detect結果があって、タスクが実行中でなければ有効
-        self.duplicate_action.setEnabled(has_detect and not is_running)
-        self.mask_action.setEnabled(has_detect and not is_running)
+        # 対象削除: 現在表示中の結果があり、タスクが実行中でなければ有効
+        target_delete_enabled = has_current_result and not is_running
+        self.target_delete_button.setEnabled(target_delete_enabled)
+        self.target_delete_current_action.setEnabled(target_delete_enabled and has_pdf)
+        self.target_delete_all_action.setEnabled(target_delete_enabled)
 
-        # Export: 何らかの結果があって、タスクが実行中でなければ有効
-        self.export_action.setEnabled(has_pdf and not is_running)
+        # 重複削除: Detect結果があり、タスクが実行中でなければ有効
+        duplicate_enabled = has_detect and not is_running
+        self.duplicate_button.setEnabled(duplicate_enabled)
+        self.duplicate_current_action.setEnabled(duplicate_enabled and has_pdf)
+        self.duplicate_all_action.setEnabled(duplicate_enabled)
+
+        # Export: Detect/Duplicate結果があり、タスクが実行中でなければ有効
+        export_enabled = has_pdf and has_export_source and not is_running
+        self.export_button.setEnabled(export_enabled)
+        self.export_annotations_action.setEnabled(export_enabled)
+        self.export_mask_action.setEnabled(export_enabled)
+        self.export_mask_as_image_action.setEnabled(export_enabled)
 
         # Save: PDF + Read結果があり、タスクが実行中でなければ有効
         self.save_action.setEnabled(has_pdf and has_read and not is_running)
@@ -1449,15 +1720,39 @@ class MainWindow(QMainWindow):
                 self.log_message(f"Detect処理が完了しました（{detect_count}件）")
             self._reset_detect_scope_context()
         elif self.current_task == "duplicate":
-            self.app_state.duplicate_result = result
-            detect_count = len(result.get("detect", []))
-            self.log_message(f"Duplicate処理が完了しました（{detect_count}件）")
+            duplicate_result = result if isinstance(result, dict) else {}
+            duplicate_result = self._merge_duplicate_result_for_scope(duplicate_result)
+            self.app_state.duplicate_result = duplicate_result
+            detect_count = len(duplicate_result.get("detect", []))
+            if self._duplicate_scope == "current_page" and self._duplicate_target_pages:
+                page_num = self._duplicate_target_pages[0] + 1
+                self.log_message(
+                    f"Duplicate処理が完了しました（表示ページ {page_num} のみ更新, {detect_count}件）"
+                )
+            else:
+                self.log_message(f"Duplicate処理が完了しました（{detect_count}件）")
+            self._reset_duplicate_scope_context()
         elif self.current_task == "mask":
-            output_path = result.get("output_path", "")
-            entity_count = result.get("entity_count", 0)
+            result_dict = result if isinstance(result, dict) else {}
+            output_path = result_dict.get("output_path", "")
+            entity_count = result_dict.get("entity_count", 0)
             self.log_message(f"Mask処理が完了しました（{entity_count}件）")
             self.log_message(f"保存先: {output_path}")
             QMessageBox.information(self, "完了", f"マスキング済みPDFを保存しました:\n{output_path}")
+        elif self.current_task == "export_annotations":
+            result_dict = result if isinstance(result, dict) else {}
+            output_path = result_dict.get("output_path", "")
+            annotation_count = result_dict.get("annotation_count", 0)
+            self.log_message(f"アノテーション付きエクスポート完了（{annotation_count}件）")
+            self.log_message(f"保存先: {output_path}")
+            QMessageBox.information(self, "完了", f"注釈付きPDFを保存しました:\n{output_path}")
+        elif self.current_task == "mask_as_image":
+            result_dict = result if isinstance(result, dict) else {}
+            output_path = result_dict.get("output_path", "")
+            entity_count = result_dict.get("entity_count", 0)
+            self.log_message(f"マスク（画像として保存）が完了しました（{entity_count}件）")
+            self.log_message(f"保存先: {output_path}")
+            QMessageBox.information(self, "完了", f"画像PDFを保存しました:\n{output_path}")
         else:
             self.log_message(f"タスク '{self.current_task}' が完了しました")
 
@@ -1471,5 +1766,7 @@ class MainWindow(QMainWindow):
         self.app_state.status_message = "エラーが発生しました"
         if self.current_task == "detect":
             self._reset_detect_scope_context()
+        if self.current_task == "duplicate":
+            self._reset_duplicate_scope_context()
         self.current_task = None
         self.update_action_states()

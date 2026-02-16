@@ -288,6 +288,7 @@ class PDFTextLocator:
                             {
                                 "bbox": bbox,
                                 "page": char_info["page"],
+                                "block": char_info["block"],
                                 "line": char_info["line"],
                                 "char": char_info["char"],
                             }
@@ -301,15 +302,16 @@ class PDFTextLocator:
             line_groups = {}
             for coord in char_coords:
                 page = coord["page"]
+                block = coord["block"]
                 line = coord["line"]
-                key = (page, line)
+                key = (page, block, line)
                 if key not in line_groups:
                     line_groups[key] = []
                 line_groups[key].append(coord["bbox"])
 
             # 各行の境界矩形を計算
             rects = []
-            for (page, line), bboxes in line_groups.items():
+            for (page, _block, _line), bboxes in line_groups.items():
                 if bboxes:
                     # 行内の全文字を囲む矩形を計算
                     x0 = min(bbox[0] for bbox in bboxes)

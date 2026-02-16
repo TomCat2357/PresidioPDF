@@ -202,6 +202,10 @@ node_modules/
 
 # テスト関連
 *test*
+!tests/
+!tests/gui_pyqt/
+!tests/gui_pyqt/test_detect_config_service.py
+!tests/gui_pyqt/test_pipeline_export.py
 
 # データセット・実験結果
 nm_dataset_64/*

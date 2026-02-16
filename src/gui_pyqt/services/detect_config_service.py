@@ -253,8 +253,8 @@ class DetectConfigService:
         raw_add = data.get("add_entity", {})
         if isinstance(raw_add, dict):
             for raw_entity, raw_patterns in raw_add.items():
-                entity = self._normalize_entity_name(raw_entity)
-                if entity not in self.ENTITY_TYPES:
+                entity = self._normalize_add_entity_key(raw_entity)
+                if not entity:
                     continue
                 for pattern in self._normalize_pattern_list(raw_patterns):
                     key = (entity, pattern)
@@ -275,6 +275,17 @@ class DetectConfigService:
         name = str(value or "").strip().upper()
         return cls.ENTITY_ALIASES.get(name, name)
 
+    @classmethod
+    def _normalize_add_entity_key(cls, value: Any) -> str:
+        """add_entityキーを正規化（既知キーは従来通り、未知キーはそのまま保持）"""
+        raw_name = str(value or "").strip()
+        if not raw_name:
+            return ""
+        normalized_name = cls._normalize_entity_name(raw_name)
+        if normalized_name in cls.ENTITY_TYPES:
+            return normalized_name
+        return raw_name
+
     @staticmethod
     def _normalize_pattern_list(raw_patterns: Any) -> List[str]:
         if isinstance(raw_patterns, str):
@@ -293,6 +304,17 @@ class DetectConfigService:
             seen.add(pattern)
             result.append(pattern)
         return result
+
+    @staticmethod
+    def _merge_pattern_list(existing: List[str], additional: List[str]) -> List[str]:
+        merged: List[str] = []
+        seen = set()
+        for pattern in list(existing) + list(additional):
+            if not pattern or pattern in seen:
+                continue
+            seen.add(pattern)
+            merged.append(pattern)
+        return merged
 
     def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
         if not isinstance(data, dict):
@@ -350,10 +372,15 @@ class DetectConfigService:
         add_entity = {entity: [] for entity in self.ENTITY_TYPES}
         if isinstance(raw_add, dict):
             for raw_entity, raw_patterns in raw_add.items():
-                entity = self._normalize_entity_name(raw_entity)
-                if entity not in self.ENTITY_TYPES:
+                entity = self._normalize_add_entity_key(raw_entity)
+                if not entity:
                     continue
-                add_entity[entity] = self._normalize_pattern_list(raw_patterns)
+                normalized_patterns = self._normalize_pattern_list(raw_patterns)
+                current_patterns = add_entity.get(entity, [])
+                add_entity[entity] = self._merge_pattern_list(
+                    current_patterns,
+                    normalized_patterns,
+                )
         normalized["add_entity"] = add_entity
 
         raw_ommit = normalized.get("ommit_entity")

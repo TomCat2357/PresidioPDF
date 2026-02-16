@@ -209,5 +209,10 @@ class DetectConfigDialog(QDialog):
                 return
 
     def _on_select_all_clicked(self):
-        for checkbox in self.checkboxes.values():
-            checkbox.setChecked(True)
+        checkboxes = list(self.checkboxes.values())
+        if not checkboxes:
+            return
+
+        should_select_all = not all(checkbox.isChecked() for checkbox in checkboxes)
+        for checkbox in checkboxes:
+            checkbox.setChecked(should_select_all)
