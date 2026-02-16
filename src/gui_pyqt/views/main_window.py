@@ -33,10 +33,11 @@ from PyQt6.QtWidgets import (
     QMenu,
     QFileDialog,
     QMessageBox,
+    QInputDialog,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QUrl
-from PyQt6.QtGui import QAction, QDesktopServices
+from PyQt6.QtGui import QAction, QDesktopServices, QCloseEvent
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         self._duplicate_scope = "all"
         self._duplicate_target_pages: Optional[List[int]] = None
         self._duplicate_base_result: Optional[Dict[str, Any]] = None
+        self._is_dirty = False
 
         self.init_ui()
         self.connect_signals()
@@ -209,11 +211,14 @@ class MainWindow(QMainWindow):
 
         self.export_mask_as_image_action = QAction("マスク（画像として保存）", self)
         self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
+        self.export_marked_as_image_action = QAction("マーク（画像として保存）", self)
+        self.export_marked_as_image_action.triggered.connect(self.on_export_marked_as_image)
 
         export_menu = QMenu(self)
         export_menu.addAction(self.export_annotations_action)
         export_menu.addAction(self.export_mask_action)
         export_menu.addAction(self.export_mask_as_image_action)
+        export_menu.addAction(self.export_marked_as_image_action)
 
         export_button = QToolButton(self)
         export_button.setText("エクスポート")
@@ -304,6 +309,7 @@ class MainWindow(QMainWindow):
         # PDFプレビューからの逆方向連携
         self.pdf_preview.entity_clicked.connect(self.on_preview_entity_clicked)
         self.pdf_preview.text_selected.connect(self.on_text_selected)
+        self.pdf_preview.pdf_file_dropped.connect(self.on_pdf_dropped)
 
     # =========================================================================
     # アクションハンドラー（Phase 1: スタブ実装）
@@ -311,6 +317,10 @@ class MainWindow(QMainWindow):
 
     def on_open_pdf(self):
         """PDFファイルを開く（埋め込みマッピングがあれば復元、なければRead自動実行）"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "PDFファイルを選択",
@@ -318,22 +328,106 @@ class MainWindow(QMainWindow):
             "PDF Files (*.pdf);;All Files (*)"
         )
 
-        if file_path:
-            self.app_state.pdf_path = Path(file_path)
-            # PDF切り替え時は前回結果をクリア
-            self.app_state.read_result = None
-            self.app_state.detect_result = None
-            self.app_state.duplicate_result = None
-            self.log_message(f"PDFファイルを選択: {file_path}")
+        if not file_path:
+            return
+        if not self._maybe_proceed_with_unsaved():
+            return
+        self._open_pdf_path(Path(file_path))
+
+    def on_pdf_dropped(self, file_path: str):
+        """左ペインへドロップされたPDFを開く"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        if not file_path:
+            return
+        dropped_path = Path(file_path)
+        if dropped_path.suffix.lower() != ".pdf":
+            return
+
+        current_pdf = self.app_state.pdf_path
+        if isinstance(current_pdf, Path):
+            try:
+                if dropped_path.resolve() == current_pdf.resolve():
+                    return
+            except Exception:
+                if str(dropped_path) == str(current_pdf):
+                    return
+
+        if not self._maybe_proceed_with_unsaved():
+            return
+        self._open_pdf_path(dropped_path)
+
+    def _open_pdf_path(self, pdf_path: Path):
+        """指定パスのPDFを読み込む"""
+        self.app_state.pdf_path = pdf_path
+        # PDF切り替え時は前回結果をクリア
+        self.app_state.read_result = None
+        self.app_state.detect_result = None
+        self.app_state.duplicate_result = None
+        self.log_message(f"PDFファイルを選択: {pdf_path}")
+        self._set_dirty(False)
+        self.update_action_states()
+
+        # マッピングがあれば復元（サイドカー優先、埋め込みは後方互換）
+        if self._load_mapping_for_pdf(pdf_path):
             self.update_action_states()
+            return
 
-            # マッピングがあれば復元（サイドカー優先、埋め込みは後方互換）
-            if self._load_mapping_for_pdf(Path(file_path)):
-                self.update_action_states()
-                return
+        # マッピングがない場合はRead処理を自動実行
+        self._auto_read()
 
-            # マッピングがない場合はRead処理を自動実行
-            self._auto_read()
+    def _set_dirty(self, is_dirty: bool):
+        """未保存状態フラグを更新"""
+        self._is_dirty = bool(is_dirty)
+
+    def _confirm_unsaved_changes(self) -> str:
+        """未保存データの扱いを確認する"""
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("未保存の変更")
+        dialog.setText("未保存の変更があります。")
+        dialog.setInformativeText("保存してから続行しますか？")
+
+        save_button = dialog.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
+        discard_button = dialog.addButton("破棄", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = dialog.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(save_button)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked == save_button:
+            return "save"
+        if clicked == discard_button:
+            return "discard"
+        if clicked == cancel_button:
+            return "cancel"
+        return "cancel"
+
+    def _maybe_proceed_with_unsaved(self) -> bool:
+        """未保存状態に応じて続行可否を返す"""
+        if not self._is_dirty:
+            return True
+
+        action = self._confirm_unsaved_changes()
+        if action == "discard":
+            return True
+        if action == "save":
+            return self._save_current_workflow()
+        return False
+
+    def closeEvent(self, event: QCloseEvent):
+        """ウィンドウ終了時に未保存確認を行う"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            event.ignore()
+            return
+
+        if not self._maybe_proceed_with_unsaved():
+            event.ignore()
+            return
+        event.accept()
 
     def _auto_read(self):
         """PDF選択後にRead処理を自動実行"""
@@ -473,14 +567,7 @@ class MainWindow(QMainWindow):
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
             )
-            QMessageBox.information(
-                self,
-                "完了",
-                (
-                    "設定をインポートしました。\n"
-                    f"上書き先: {self.detect_config_service.config_path}"
-                ),
-            )
+            self.statusBar().showMessage("設定をインポートしました")
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -519,11 +606,7 @@ class MainWindow(QMainWindow):
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
             exported_path = self.detect_config_service.export_to(export_target)
             self.log_message(f"設定エクスポート: {exported_path}")
-            QMessageBox.information(
-                self,
-                "完了",
-                f"設定をエクスポートしました:\n{exported_path}",
-            )
+            self.statusBar().showMessage("設定をエクスポートしました")
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -690,7 +773,7 @@ class MainWindow(QMainWindow):
             kept_entities.append(copy.deepcopy(entity))
 
         if removed_count == 0:
-            QMessageBox.information(self, "情報", "削除対象の自動検出項目はありませんでした")
+            self.log_message("削除対象の自動検出項目はありませんでした")
             return
 
         self.result_panel.entities = kept_entities
@@ -707,6 +790,7 @@ class MainWindow(QMainWindow):
 
         target_desc = "全ページ" if scope == "all" else f"表示ページ({page_filter[0] + 1}ページ目)"
         self.log_message(f"対象削除を実行: {target_desc}, 自動項目 {removed_count}件を削除")
+        self._set_dirty(True)
         self.update_action_states()
 
     def on_mask(self):
@@ -792,6 +876,9 @@ class MainWindow(QMainWindow):
         )
         if not output_pdf_path:
             return
+        dpi = self._select_export_dpi()
+        if dpi is None:
+            return
 
         self.log_message("マスク（画像として保存）を開始...")
         self.current_task = "mask_as_image"
@@ -800,13 +887,55 @@ class MainWindow(QMainWindow):
             detect_or_dup_result,
             self.app_state.pdf_path,
             output_pdf_path,
+            None,
+            dpi,
+        )
+
+    def on_export_marked_as_image(self):
+        """検出結果のマークを半透明で重ね、画像のみPDFとして保存"""
+        detect_or_dup_result = self._get_export_source_result()
+        if not detect_or_dup_result:
+            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            return
+        if not self.app_state.has_pdf():
+            QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
+            return
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        output_pdf_path = self._select_output_pdf_path(
+            "マーク（画像として保存）の保存先",
+            "_marked_image",
+        )
+        if not output_pdf_path:
+            return
+        dpi = self._select_export_dpi()
+        if dpi is None:
+            return
+
+        self.log_message("マーク（画像として保存）を開始...")
+        self.current_task = "marked_as_image"
+        self.task_runner.start_task(
+            PipelineService.run_export_marked_as_image,
+            detect_or_dup_result,
+            self.app_state.pdf_path,
+            output_pdf_path,
+            dpi,
         )
 
     def on_save(self):
         """保存処理（PDF + サイドカーJSONマッピング）"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+        self._save_current_workflow()
+
+    def _save_current_workflow(self) -> bool:
+        """保存処理（PDF + サイドカーJSONマッピング）を実行し成否を返す"""
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
-            return
+            return False
 
         default_name = self.app_state.pdf_path.stem + "_saved.pdf"
 
@@ -818,7 +947,7 @@ class MainWindow(QMainWindow):
         )
 
         if not output_path:
-            return
+            return False
 
         try:
             # マッピング未生成時はreadを同期実行して補完
@@ -849,16 +978,15 @@ class MainWindow(QMainWindow):
 
             self.log_message(f"保存完了: {out_pdf}")
             self.log_message(f"サイドカーマッピング保存完了: {sidecar_path}")
-            QMessageBox.information(
-                self,
-                "完了",
-                f"保存しました:\n{out_pdf}\n{sidecar_path}"
-            )
+            self.statusBar().showMessage("保存しました")
+            self._set_dirty(False)
+            return True
 
         except Exception as e:
             error_msg = f"保存中にエラーが発生しました: {str(e)}"
             self.log_message(error_msg)
             QMessageBox.critical(self, "エラー", error_msg)
+            return False
 
     def on_save_session(self):
         """後方互換のエイリアス"""
@@ -901,7 +1029,8 @@ class MainWindow(QMainWindow):
             self.app_state.duplicate_result = session_data.get("duplicate_result")
 
             self.log_message(f"セッション読込完了: {file_path}")
-            QMessageBox.information(self, "完了", f"セッションを読み込みました:\n{file_path}")
+            self.statusBar().showMessage("セッションを読み込みました")
+            self._set_dirty(True)
 
             # UI状態を更新
             self.update_action_states()
@@ -1006,6 +1135,7 @@ class MainWindow(QMainWindow):
     def on_entity_deleted(self, index: int):
         """エンティティが削除された"""
         self.log_message(f"エンティティ #{index + 1} を削除しました")
+        self._set_dirty(True)
 
         # AppStateの結果を更新
         self._update_app_state_from_result_panel()
@@ -1024,6 +1154,7 @@ class MainWindow(QMainWindow):
         entity_type = entity.get("entity", "")
         text = entity.get("word", "")
         self.log_message(f"エンティティ #{index + 1} を更新: {text} → {entity_type}")
+        self._set_dirty(True)
 
         # AppStateの結果を更新
         self._update_app_state_from_result_panel()
@@ -1042,6 +1173,7 @@ class MainWindow(QMainWindow):
         text = entity.get("word", "")
         entity_type = entity.get("entity", "")
         self.log_message(f"PII追加: {text} ({entity_type})")
+        self._set_dirty(True)
 
         # AppStateの結果を更新
         self._update_app_state_from_result_panel()
@@ -1315,6 +1447,29 @@ class MainWindow(QMainWindow):
             duplicate_result = copy.deepcopy(self.app_state.duplicate_result)
             duplicate_result["detect"] = copy.deepcopy(normalized_entities)
             self.app_state.duplicate_result = duplicate_result
+
+    def _select_export_dpi(self) -> Optional[int]:
+        """画像出力時のDPIを選択"""
+        options = ["72", "150", "300", "600"]
+        selected, ok = QInputDialog.getItem(
+            self,
+            "DPI選択",
+            "画像出力DPI:",
+            options,
+            2,
+            False,
+        )
+        if not ok:
+            return None
+        try:
+            dpi = int(selected)
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "警告", "無効なDPIです")
+            return None
+        if dpi <= 0:
+            QMessageBox.warning(self, "警告", "DPIは1以上を指定してください")
+            return None
+        return dpi
 
     def _select_output_pdf_path(self, title: str, stem_suffix: str) -> Optional[Path]:
         """保存先PDFパスを選択"""
@@ -1679,6 +1834,7 @@ class MainWindow(QMainWindow):
         self.export_annotations_action.setEnabled(export_enabled)
         self.export_mask_action.setEnabled(export_enabled)
         self.export_mask_as_image_action.setEnabled(export_enabled)
+        self.export_marked_as_image_action.setEnabled(export_enabled)
 
         # Save: PDF + Read結果があり、タスクが実行中でなければ有効
         self.save_action.setEnabled(has_pdf and has_read and not is_running)
@@ -1706,6 +1862,7 @@ class MainWindow(QMainWindow):
         if self.current_task == "read":
             self.app_state.read_result = result
             self.log_message("Read処理が完了しました")
+            self._set_dirty(True)
         elif self.current_task == "detect":
             detect_result = result if isinstance(result, dict) else {}
             detect_result = self._merge_detect_result_for_scope(detect_result)
@@ -1720,6 +1877,7 @@ class MainWindow(QMainWindow):
             else:
                 self.log_message(f"Detect処理が完了しました（{detect_count}件）")
             self._reset_detect_scope_context()
+            self._set_dirty(True)
         elif self.current_task == "duplicate":
             duplicate_result = result if isinstance(result, dict) else {}
             duplicate_result = self._merge_duplicate_result_for_scope(duplicate_result)
@@ -1733,27 +1891,39 @@ class MainWindow(QMainWindow):
             else:
                 self.log_message(f"Duplicate処理が完了しました（{detect_count}件）")
             self._reset_duplicate_scope_context()
+            self._set_dirty(True)
         elif self.current_task == "mask":
             result_dict = result if isinstance(result, dict) else {}
             output_path = result_dict.get("output_path", "")
             entity_count = result_dict.get("entity_count", 0)
             self.log_message(f"Mask処理が完了しました（{entity_count}件）")
             self.log_message(f"保存先: {output_path}")
-            QMessageBox.information(self, "完了", f"マスキング済みPDFを保存しました:\n{output_path}")
+            self.statusBar().showMessage("マスキング済みPDFを保存しました")
+            self._set_dirty(True)
         elif self.current_task == "export_annotations":
             result_dict = result if isinstance(result, dict) else {}
             output_path = result_dict.get("output_path", "")
             annotation_count = result_dict.get("annotation_count", 0)
             self.log_message(f"アノテーション付きエクスポート完了（{annotation_count}件）")
             self.log_message(f"保存先: {output_path}")
-            QMessageBox.information(self, "完了", f"注釈付きPDFを保存しました:\n{output_path}")
+            self.statusBar().showMessage("注釈付きPDFを保存しました")
+            self._set_dirty(True)
         elif self.current_task == "mask_as_image":
             result_dict = result if isinstance(result, dict) else {}
             output_path = result_dict.get("output_path", "")
             entity_count = result_dict.get("entity_count", 0)
             self.log_message(f"マスク（画像として保存）が完了しました（{entity_count}件）")
             self.log_message(f"保存先: {output_path}")
-            QMessageBox.information(self, "完了", f"画像PDFを保存しました:\n{output_path}")
+            self.statusBar().showMessage("マスク画像PDFを保存しました")
+            self._set_dirty(True)
+        elif self.current_task == "marked_as_image":
+            result_dict = result if isinstance(result, dict) else {}
+            output_path = result_dict.get("output_path", "")
+            entity_count = result_dict.get("entity_count", 0)
+            self.log_message(f"マーク（画像として保存）が完了しました（{entity_count}件）")
+            self.log_message(f"保存先: {output_path}")
+            self.statusBar().showMessage("マーク画像PDFを保存しました")
+            self._set_dirty(True)
         else:
             self.log_message(f"タスク '{self.current_task}' が完了しました")
 

@@ -1337,9 +1337,10 @@ class PipelineService:
         pdf_path: Path,
         output_path: Path,
         mask_styles: Optional[Dict[str, Dict[str, float]]] = None,
+        dpi: int = 300,
     ) -> Dict[str, Any]:
         """通常マスク後に各ページを画像化し、画像のみPDFとして保存する"""
-        logger.info(f"run_mask_as_image開始: {pdf_path} → {output_path}")
+        logger.info(f"run_mask_as_image開始: {pdf_path} → {output_path}, dpi={dpi}")
 
         import os
         import tempfile
@@ -1352,6 +1353,12 @@ class PipelineService:
         if not Path(pdf_path).exists():
             logger.error(f"入力PDFファイルが見つかりません: {pdf_path}")
             raise FileNotFoundError(f"PDFファイルが見つかりません: {pdf_path}")
+        try:
+            dpi = int(dpi)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("dpiは整数で指定してください") from exc
+        if dpi <= 0:
+            raise ValueError("dpiは1以上で指定してください")
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1374,7 +1381,7 @@ class PipelineService:
             with fitz.open(str(temp_mask_path)) as masked_doc:
                 with fitz.open() as image_pdf:
                     for page in masked_doc:
-                        pix = page.get_pixmap(alpha=False)
+                        pix = page.get_pixmap(dpi=dpi, alpha=False)
                         image_page = image_pdf.new_page(
                             width=page.rect.width,
                             height=page.rect.height,
@@ -1395,3 +1402,481 @@ class PipelineService:
                     temp_mask_path.unlink()
             except Exception:
                 logger.warning(f"一時ファイル削除に失敗: {temp_mask_path}")
+
+    @staticmethod
+    def run_export_marked_as_image(
+        detect_result: Dict[str, Any],
+        pdf_path: Path,
+        output_path: Path,
+        dpi: int = 300,
+        mark_styles: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> Dict[str, Any]:
+        """検出項目のマークを半透明で重ね、画像のみPDFとして保存する"""
+        logger.info(f"run_export_marked_as_image開始: {pdf_path} → {output_path}, dpi={dpi}")
+
+        import fitz
+        from src.pdf.pdf_locator import PDFTextLocator
+
+        if not isinstance(detect_result, dict):
+            logger.error(f"detect_resultが辞書型ではありません: {type(detect_result)}")
+            raise TypeError("detect_resultは辞書型である必要があります")
+
+        if not Path(pdf_path).exists():
+            logger.error(f"入力PDFファイルが見つかりません: {pdf_path}")
+            raise FileNotFoundError(f"PDFファイルが見つかりません: {pdf_path}")
+        try:
+            dpi = int(dpi)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("dpiは整数で指定してください") from exc
+        if dpi <= 0:
+            raise ValueError("dpiは1以上で指定してください")
+
+        detect_list = detect_result.get("detect", [])
+        if not isinstance(detect_list, list):
+            detect_list = []
+        offset2coords_map = detect_result.get("offset2coordsMap", {})
+        text_2d = detect_result.get("text", [])
+
+        block_start_global: Dict[Tuple[int, int], int] = {}
+        global_cursor = 0
+        if isinstance(text_2d, list):
+            for page_num, page_blocks in enumerate(text_2d):
+                if not isinstance(page_blocks, list):
+                    continue
+                for block_num, block_text in enumerate(page_blocks):
+                    text = str(block_text or "")
+                    block_start_global[(page_num, block_num)] = global_cursor
+                    global_cursor += len(text)
+
+        def _normalize_entity_key(name: str) -> str:
+            normalized = str(name or "").strip()
+            if not normalized:
+                return "OTHER"
+            if normalized.lower() == "address":
+                return "LOCATION"
+            return normalized.upper()
+
+        def _normalize_rect(rect: Any) -> Optional[List[float]]:
+            if not isinstance(rect, (list, tuple)) or len(rect) < 4:
+                return None
+            try:
+                x0, y0, x1, y1 = map(float, rect[:4])
+            except Exception:
+                return None
+            if x1 <= x0 or y1 <= y0:
+                return None
+            return [x0, y0, x1, y1]
+
+        def _group_rects_by_line(rects: List[List[float]], y_threshold: float = 2.0) -> List[List[float]]:
+            if not rects:
+                return []
+            items = []
+            for rect in rects:
+                try:
+                    x0, y0, x1, y1 = map(float, rect[:4])
+                except Exception:
+                    continue
+                cy = (y0 + y1) / 2.0
+                items.append((cy, [x0, y0, x1, y1]))
+
+            items.sort(key=lambda item: item[0])
+            groups: List[List[List[float]]] = []
+            for cy, rect in items:
+                if not groups:
+                    groups.append([rect])
+                    continue
+                group = groups[-1]
+                group_cy = sum(((r[1] + r[3]) / 2.0) for r in group) / len(group)
+                if abs(cy - group_cy) <= y_threshold:
+                    group.append(rect)
+                else:
+                    groups.append([rect])
+
+            merged = []
+            for group in groups:
+                merged.append(
+                    [
+                        min(r[0] for r in group),
+                        min(r[1] for r in group),
+                        max(r[2] for r in group),
+                        max(r[3] for r in group),
+                    ]
+                )
+            return merged
+
+        def _default_page_num(entity: Dict[str, Any]) -> int:
+            start_pos = entity.get("start", {})
+            if isinstance(start_pos, dict):
+                try:
+                    return int(start_pos.get("page_num", 0) or 0)
+                except Exception:
+                    return 0
+            try:
+                return int(entity.get("page_num", 0) or 0)
+            except Exception:
+                return 0
+
+        def _dedupe_rect_items(items: List[Tuple[int, List[float]]]) -> List[Tuple[int, List[float]]]:
+            unique_items: List[Tuple[int, List[float]]] = []
+            seen = set()
+            for page_num, rect in items:
+                key = (
+                    int(page_num),
+                    round(rect[0], 3),
+                    round(rect[1], 3),
+                    round(rect[2], 3),
+                    round(rect[3], 3),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_items.append((int(page_num), rect))
+            return unique_items
+
+        def _normalize_circle(circle: Any, default_page_num: int) -> Optional[Tuple[int, float, float, float]]:
+            page_num = int(default_page_num)
+            center_x = None
+            center_y = None
+            radius = None
+
+            if isinstance(circle, dict):
+                try:
+                    page_num = int(circle.get("page_num", page_num) or page_num)
+                except Exception:
+                    page_num = int(default_page_num)
+                center = circle.get("center")
+                if isinstance(center, (list, tuple)) and len(center) >= 2:
+                    try:
+                        center_x = float(center[0])
+                        center_y = float(center[1])
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                if center_x is None or center_y is None:
+                    try:
+                        center_x = float(circle.get("center_x"))
+                        center_y = float(circle.get("center_y"))
+                    except Exception:
+                        center_x = None
+                        center_y = None
+                try:
+                    radius = float(circle.get("radius"))
+                except Exception:
+                    radius = None
+            elif isinstance(circle, (list, tuple)) and len(circle) >= 3:
+                try:
+                    center_x = float(circle[0])
+                    center_y = float(circle[1])
+                    radius = float(circle[2])
+                except Exception:
+                    center_x = None
+                    center_y = None
+                    radius = None
+
+            if center_x is None or center_y is None or radius is None or radius <= 0.0:
+                return None
+            return int(page_num), float(center_x), float(center_y), float(radius)
+
+        def _resolve_shape_geometries(
+            entity: Dict[str, Any],
+        ) -> Tuple[List[Tuple[int, List[float]]], List[Tuple[int, float, float, float]]]:
+            rect_items: List[Tuple[int, List[float]]] = []
+            circle_items: List[Tuple[int, float, float, float]] = []
+            default_page_num = _default_page_num(entity)
+            selection_mode = str(entity.get("selection_mode", "") or "").lower()
+
+            has_circle_masks = False
+            raw_mask_circles = entity.get("mask_circles_pdf")
+            if isinstance(raw_mask_circles, list):
+                for raw_circle in raw_mask_circles:
+                    normalized_circle = _normalize_circle(raw_circle, default_page_num)
+                    if not normalized_circle:
+                        continue
+                    has_circle_masks = True
+                    circle_items.append(normalized_circle)
+
+            raw_mask_rects = entity.get("mask_rects_pdf")
+            if isinstance(raw_mask_rects, list):
+                if not (selection_mode == "circle_drag" and has_circle_masks):
+                    for raw_rect in raw_mask_rects:
+                        rect_page_num = default_page_num
+                        rect_source = raw_rect
+                        if isinstance(raw_rect, dict):
+                            try:
+                                rect_page_num = int(
+                                    raw_rect.get("page_num", rect_page_num) or rect_page_num
+                                )
+                            except Exception:
+                                rect_page_num = default_page_num
+                            if "rect" in raw_rect:
+                                rect_source = raw_rect.get("rect")
+                            else:
+                                rect_source = [
+                                    raw_rect.get("x0"),
+                                    raw_rect.get("y0"),
+                                    raw_rect.get("x1"),
+                                    raw_rect.get("y1"),
+                                ]
+
+                        normalized_rect = _normalize_rect(rect_source)
+                        if not normalized_rect:
+                            continue
+                        rect_items.append((rect_page_num, normalized_rect))
+
+            unique_rects = _dedupe_rect_items(rect_items)
+
+            unique_circles: List[Tuple[int, float, float, float]] = []
+            seen_circles = set()
+            for page_num, center_x, center_y, radius in circle_items:
+                key = (
+                    int(page_num),
+                    round(center_x, 3),
+                    round(center_y, 3),
+                    round(radius, 3),
+                )
+                if key in seen_circles:
+                    continue
+                seen_circles.add(key)
+                unique_circles.append((int(page_num), center_x, center_y, radius))
+
+            return unique_rects, unique_circles
+
+        def _resolve_text_rects(
+            entity: Dict[str, Any],
+            locator: "PDFTextLocator",
+        ) -> List[Tuple[int, List[float]]]:
+            rect_items: List[Tuple[int, List[float]]] = []
+            default_page_num = _default_page_num(entity)
+
+            raw_rects = entity.get("rects_pdf")
+            if isinstance(raw_rects, list):
+                for raw_rect in raw_rects:
+                    rect_page_num = default_page_num
+                    rect_source = raw_rect
+                    if isinstance(raw_rect, dict):
+                        try:
+                            rect_page_num = int(raw_rect.get("page_num", rect_page_num) or rect_page_num)
+                        except Exception:
+                            rect_page_num = default_page_num
+                        if "rect" in raw_rect:
+                            rect_source = raw_rect.get("rect")
+                        else:
+                            rect_source = [
+                                raw_rect.get("x0"),
+                                raw_rect.get("y0"),
+                                raw_rect.get("x1"),
+                                raw_rect.get("y1"),
+                            ]
+                    normalized_rect = _normalize_rect(rect_source)
+                    if not normalized_rect:
+                        continue
+                    rect_items.append((rect_page_num, normalized_rect))
+            if rect_items:
+                return _dedupe_rect_items(rect_items)
+
+            start_pos = entity.get("start", {})
+            end_pos = entity.get("end", {})
+            if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
+                return []
+
+            page_num = int(start_pos.get("page_num", 0) or 0)
+            block_num = int(start_pos.get("block_num", 0) or 0)
+            start_offset = int(start_pos.get("offset", 0) or 0)
+            end_page_num = int(end_pos.get("page_num", page_num) or page_num)
+            end_block_num = int(end_pos.get("block_num", block_num) or block_num)
+            end_offset = int(end_pos.get("offset", start_offset) or start_offset)
+
+            line_rects_items: List[Dict[str, Any]] = []
+            try:
+                key_s = (page_num, block_num)
+                key_e = (end_page_num, end_block_num)
+                if key_s in block_start_global and key_e in block_start_global:
+                    start_global = block_start_global[key_s] + start_offset
+                    end_global_excl = block_start_global[key_e] + end_offset + 1
+                    line_rects_items = locator.get_pii_line_rects(start_global, end_global_excl)
+            except Exception:
+                line_rects_items = []
+
+            if line_rects_items:
+                for item in line_rects_items:
+                    rect_info = item.get("rect", {})
+                    normalized_rect = _normalize_rect(
+                        [
+                            rect_info.get("x0"),
+                            rect_info.get("y0"),
+                            rect_info.get("x1"),
+                            rect_info.get("y1"),
+                        ]
+                    )
+                    if not normalized_rect:
+                        continue
+                    target_page_num = int(item.get("page_num", page_num))
+                    rect_items.append((target_page_num, normalized_rect))
+                return _dedupe_rect_items(rect_items)
+
+            if not isinstance(offset2coords_map, dict):
+                return []
+
+            page_rects: Dict[int, List[List[float]]] = {}
+            try:
+                for p in range(page_num, end_page_num + 1):
+                    page_dict = offset2coords_map.get(str(p), {})
+                    if not isinstance(page_dict, dict) or not page_dict:
+                        continue
+                    block_ids = sorted([int(k) for k in page_dict.keys() if str(k).isdigit()])
+                    if not block_ids:
+                        continue
+                    b_start = block_num if p == page_num else block_ids[0]
+                    b_end = end_block_num if p == end_page_num else block_ids[-1]
+                    for b in block_ids:
+                        if b < b_start or b > b_end:
+                            continue
+                        block_list = page_dict.get(str(b), [])
+                        if not isinstance(block_list, list) or not block_list:
+                            continue
+                        o_start = start_offset if (p == page_num and b == block_num) else 0
+                        o_end = end_offset if (p == end_page_num and b == end_block_num) else (len(block_list) - 1)
+                        if o_start > o_end:
+                            continue
+                        for off in range(o_start, o_end + 1):
+                            bbox = block_list[off] if 0 <= off < len(block_list) else None
+                            normalized_rect = _normalize_rect(bbox)
+                            if not normalized_rect:
+                                continue
+                            page_rects.setdefault(p, []).append(normalized_rect)
+            except Exception:
+                return []
+
+            for p, rects in page_rects.items():
+                for rect in _group_rects_by_line(rects):
+                    rect_items.append((p, rect))
+            return _dedupe_rect_items(rect_items)
+
+        def _resolve_mark_style(entity_type: str) -> Tuple[float, float, float, float]:
+            normalized_entity = _normalize_entity_key(entity_type)
+            default_styles: Dict[str, Dict[str, float]] = {
+                "PERSON": {"r": 1.0, "g": 0.78, "b": 0.78, "a": 0.35},
+                "LOCATION": {"r": 0.78, "g": 1.0, "b": 0.78, "a": 0.35},
+                "PHONE_NUMBER": {"r": 0.78, "g": 0.78, "b": 1.0, "a": 0.35},
+                "DATE_TIME": {"r": 1.0, "g": 1.0, "b": 0.78, "a": 0.35},
+                "INDIVIDUAL_NUMBER": {"r": 1.0, "g": 0.78, "b": 1.0, "a": 0.35},
+                "YEAR": {"r": 0.78, "g": 1.0, "b": 1.0, "a": 0.35},
+                "PROPER_NOUN": {"r": 1.0, "g": 0.86, "b": 0.70, "a": 0.35},
+                "OTHER": {"r": 0.78, "g": 0.78, "b": 0.78, "a": 0.35},
+            }
+            style = default_styles.get(normalized_entity, default_styles["OTHER"]).copy()
+            custom_style = (mark_styles or {}).get(normalized_entity)
+            if isinstance(custom_style, dict):
+                for key in ["r", "g", "b", "a"]:
+                    value = custom_style.get(key)
+                    if value is None:
+                        continue
+                    try:
+                        style[key] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+            style["r"] = min(1.0, max(0.0, style["r"]))
+            style["g"] = min(1.0, max(0.0, style["g"]))
+            style["b"] = min(1.0, max(0.0, style["b"]))
+            style["a"] = min(1.0, max(0.0, style["a"]))
+            return style["r"], style["g"], style["b"], style["a"]
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        marked_count = 0
+        with fitz.open(str(pdf_path)) as doc:
+            locator = PDFTextLocator(doc)
+
+            for detect_item in detect_list:
+                if not isinstance(detect_item, dict):
+                    continue
+                entity_type = str(detect_item.get("entity", "PII") or "PII")
+
+                shape_rects, shape_circles = _resolve_shape_geometries(detect_item)
+                if shape_rects or shape_circles:
+                    for page_num, rect in shape_rects:
+                        if page_num < 0 or page_num >= len(doc):
+                            continue
+                        page = doc[page_num]
+                        fitz_rect = fitz.Rect(rect) & page.rect
+                        if (not fitz_rect) or fitz_rect.width <= 0 or fitz_rect.height <= 0:
+                            continue
+                        r, g, b, a = _resolve_mark_style(entity_type)
+                        shape = page.new_shape()
+                        shape.draw_rect(fitz_rect)
+                        shape.finish(
+                            color=(r, g, b),
+                            fill=(r, g, b),
+                            width=0,
+                            fill_opacity=a,
+                            stroke_opacity=a,
+                        )
+                        shape.commit(overlay=True)
+                        marked_count += 1
+
+                    for page_num, center_x, center_y, radius in shape_circles:
+                        if page_num < 0 or page_num >= len(doc):
+                            continue
+                        if radius <= 0.0:
+                            continue
+                        page = doc[page_num]
+                        circle_rect = fitz.Rect(
+                            center_x - radius,
+                            center_y - radius,
+                            center_x + radius,
+                            center_y + radius,
+                        )
+                        if not (circle_rect & page.rect):
+                            continue
+                        r, g, b, a = _resolve_mark_style(entity_type)
+                        shape = page.new_shape()
+                        shape.draw_circle((center_x, center_y), radius)
+                        shape.finish(
+                            color=(r, g, b),
+                            fill=(r, g, b),
+                            width=0,
+                            fill_opacity=a,
+                            stroke_opacity=a,
+                        )
+                        shape.commit(overlay=True)
+                        marked_count += 1
+                    continue
+
+                text_rects = _resolve_text_rects(detect_item, locator)
+                for page_num, rect in text_rects:
+                    if page_num < 0 or page_num >= len(doc):
+                        continue
+                    page = doc[page_num]
+                    fitz_rect = fitz.Rect(rect) & page.rect
+                    if (not fitz_rect) or fitz_rect.width <= 0 or fitz_rect.height <= 0:
+                        continue
+                    r, g, b, a = _resolve_mark_style(entity_type)
+                    shape = page.new_shape()
+                    shape.draw_rect(fitz_rect)
+                    shape.finish(
+                        color=(r, g, b),
+                        fill=(r, g, b),
+                        width=0,
+                        fill_opacity=a,
+                        stroke_opacity=a,
+                    )
+                    shape.commit(overlay=True)
+                    marked_count += 1
+
+            with fitz.open() as image_pdf:
+                for page in doc:
+                    pix = page.get_pixmap(dpi=dpi, alpha=False)
+                    image_page = image_pdf.new_page(
+                        width=page.rect.width,
+                        height=page.rect.height,
+                    )
+                    image_page.insert_image(image_page.rect, pixmap=pix)
+                image_pdf.save(str(output_path), garbage=4, deflate=True, clean=True)
+
+        logger.info(f"run_export_marked_as_image完了: {marked_count} 件を画像PDF化")
+        return {
+            "output_path": str(output_path),
+            "entity_count": marked_count,
+            "success": True,
+        }

@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QDragEnterEvent, QDropEvent
 
 
 class PDFPreviewWidget(QWidget):
@@ -30,6 +30,7 @@ class PDFPreviewWidget(QWidget):
     page_changed = pyqtSignal(int)  # ページ番号が変更された
     entity_clicked = pyqtSignal(int)  # クリックされたエンティティのインデックス
     text_selected = pyqtSignal(dict)  # テキストが選択された（手動PII追記用）
+    pdf_file_dropped = pyqtSignal(str)  # ドロップされたPDFファイルパス
     SELECTION_MODE_TEXT = "text_drag"
     SELECTION_MODE_RECT = "rect_drag"
     SELECTION_MODE_CIRCLE = "circle_drag"
@@ -135,6 +136,9 @@ class PDFPreviewWidget(QWidget):
         self.preview_label.mousePressEvent = self._on_preview_mouse_press
         self.preview_label.mouseMoveEvent = self._on_preview_mouse_move
         self.preview_label.mouseReleaseEvent = self._on_preview_mouse_release
+        self.preview_label.setAcceptDrops(True)
+        self.preview_label.dragEnterEvent = self._on_preview_drag_enter
+        self.preview_label.dropEvent = self._on_preview_drop
         self.preview_label.setMouseTracking(False)  # ドラッグ中のみ追跡
 
         self.scroll_area.setWidget(self.preview_label)
@@ -901,6 +905,37 @@ class PDFPreviewWidget(QWidget):
         self.drag_current_pos = None
         self.drag_start_char_index = None
         self.update_preview()
+
+    @staticmethod
+    def _extract_dropped_pdf_path(event: QDropEvent) -> Optional[str]:
+        """ドロップイベントから最初のローカルPDFパスを取り出す"""
+        mime_data = event.mimeData()
+        if mime_data is None or not mime_data.hasUrls():
+            return None
+
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            file_path = url.toLocalFile()
+            if str(file_path).lower().endswith(".pdf"):
+                return str(file_path)
+        return None
+
+    def _on_preview_drag_enter(self, event: QDragEnterEvent):
+        """プレビュー領域へのPDFドラッグを受理する"""
+        if self._extract_dropped_pdf_path(event) is not None:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def _on_preview_drop(self, event: QDropEvent):
+        """プレビュー領域へのPDFドロップを通知する"""
+        file_path = self._extract_dropped_pdf_path(event)
+        if file_path is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.pdf_file_dropped.emit(file_path)
 
     def _handle_entity_click(self, click_x: float, click_y: float):
         """エンティティクリック処理"""
