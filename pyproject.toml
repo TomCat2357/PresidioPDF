@@ -16,7 +16,6 @@ dependencies = [
     "presidio-analyzer>=2.2.0",
     "PyMuPDF>=1.23.0",
     "PyYAML>=6.0",
-    "numpy>=1.26.0",
     # spaCy日本語モデル
     "ja-core-news-sm>=3.8.0",
     "ja-core-news-md>=3.7.0",
@@ -28,12 +27,9 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
-    "pytest-qt>=4.2.0",
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.0.0",
-    "playwright>=1.54.0",
-    "pytest-playwright>=0.7.0",
 ]
 
 # spaCyモデル（個別インストール用）
@@ -64,7 +60,6 @@ minimal = [
     "presidio-analyzer>=2.2.0",
     "PyMuPDF>=1.23.0",
     "PyYAML>=6.0",
-    "numpy<2.0",
     "ja-core-news-sm",
 ]
 
@@ -72,9 +67,7 @@ minimal = [
 gui = [
     "PyQt6>=6.6.0",
     "PyQt6-Qt6>=6.6.0",
-    "Pillow>=10.0.0",
-    "pdf2image>=1.16.0"
-    ]
+]
 
 [project.scripts]
 # New split command entrypoints
