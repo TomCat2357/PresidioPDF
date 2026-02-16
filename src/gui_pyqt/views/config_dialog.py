@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QStandardItem
 
+from src.core.entity_types import get_entity_type_name_ja
+
 
 class DetectConfigDialog(QDialog):
     """検出エンティティ設定ダイアログ"""
@@ -73,7 +75,7 @@ class DetectConfigDialog(QDialog):
         layout.addWidget(info)
 
         for entity in self.entity_types:
-            checkbox = QCheckBox(entity)
+            checkbox = QCheckBox(get_entity_type_name_ja(entity))
             self.checkboxes[entity] = checkbox
             layout.addWidget(checkbox)
 

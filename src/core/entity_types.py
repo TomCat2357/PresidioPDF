@@ -45,6 +45,7 @@ ENTITY_TYPE_NAMES_JA: Dict[str, str] = {
     "INDIVIDUAL_NUMBER": "マイナンバー",
     "YEAR": "年号",
     "PROPER_NOUN": "固有名詞",
+    "OTHER": "その他",
 }
 
 # --- 注釈（Annotation）用色 RGB [0.0-1.0] ---

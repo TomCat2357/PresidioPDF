@@ -34,6 +34,20 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def sha256_pdf_content(pdf_path: str) -> str:
+    """PDFコンテンツハッシュ（注釈・埋め込みファイルに依存しない）"""
+    import fitz
+    h = hashlib.sha256()
+    with fitz.open(pdf_path) as doc:
+        h.update(str(doc.page_count).encode("utf-8"))
+        for page in doc:
+            h.update(page.get_text("text").encode("utf-8"))
+            r = page.rect
+            h.update(f"{r.x0:.6f},{r.y0:.6f},{r.x1:.6f},{r.y1:.6f}".encode("utf-8"))
+            h.update(str(len(page.get_images())).encode("utf-8"))
+    return h.hexdigest()
+
+
 def validate_input_file_exists(path: str) -> None:
     """読み込み系ファイルの存在確認"""
     if not Path(path).exists():

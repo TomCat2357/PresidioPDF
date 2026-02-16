@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 
+from src.core.entity_types import ENTITY_TYPES, get_entity_type_name_ja
+
 
 class ManualAddDialog(QDialog):
     """手動PII追記ダイアログ"""
@@ -55,17 +57,8 @@ class ManualAddDialog(QDialog):
 
         # エンティティタイプの選択
         self.entity_type_combo = QComboBox()
-        entity_types = [
-            "PERSON",
-            "LOCATION",
-            "DATE_TIME",
-            "PHONE_NUMBER",
-            "INDIVIDUAL_NUMBER",
-            "YEAR",
-            "PROPER_NOUN",
-            "OTHER",
-        ]
-        self.entity_type_combo.addItems(entity_types)
+        for etype in ENTITY_TYPES:
+            self.entity_type_combo.addItem(get_entity_type_name_ja(etype), etype)
         layout.addRow("エンティティタイプ:", self.entity_type_combo)
 
         # ボタン
@@ -81,7 +74,7 @@ class ManualAddDialog(QDialog):
     def get_entity_data(self) -> Dict:
         """入力されたエンティティデータを取得"""
         text = str(self.preset_data.get("text", "") or "")
-        entity_type = self.entity_type_combo.currentText()
+        entity_type = self.entity_type_combo.currentData()
         # 通常の手動追加（テキスト未選択）は従来どおり無効。
         # 選択モード由来の空文字 "" は有効。
         if not text and "text" not in self.preset_data:
@@ -145,22 +138,15 @@ class EntityEditDialog(QDialog):
 
         # エンティティタイプの選択
         self.entity_type_combo = QComboBox()
-        entity_types = [
-            "PERSON",
-            "LOCATION",
-            "DATE_TIME",
-            "PHONE_NUMBER",
-            "INDIVIDUAL_NUMBER",
-            "YEAR",
-            "PROPER_NOUN",
-            "OTHER",
-        ]
-        self.entity_type_combo.addItems(entity_types)
+        for etype in ENTITY_TYPES:
+            self.entity_type_combo.addItem(get_entity_type_name_ja(etype), etype)
 
         # 現在の値を設定
         current_type = self.entity.get("entity", "")
-        if current_type in entity_types:
-            self.entity_type_combo.setCurrentText(current_type)
+        for i in range(self.entity_type_combo.count()):
+            if self.entity_type_combo.itemData(i) == current_type:
+                self.entity_type_combo.setCurrentIndex(i)
+                break
 
         layout.addRow("エンティティタイプ:", self.entity_type_combo)
 
@@ -180,7 +166,7 @@ class EntityEditDialog(QDialog):
 
     def get_entity_type(self) -> str:
         """選択されたエンティティタイプを取得"""
-        return self.entity_type_combo.currentText()
+        return self.entity_type_combo.currentData()
 
 
 class ResultPanel(QWidget):
@@ -224,7 +210,7 @@ class ResultPanel(QWidget):
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(6)
         self.results_table.setHorizontalHeaderLabels([
-            "ページ", "Entity Type", "テキスト", "信頼度", "位置", "手動"
+            "ページ", "種別", "テキスト", "信頼度", "位置", "手動"
         ])
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -268,9 +254,9 @@ class ResultPanel(QWidget):
             page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
             self.results_table.setItem(i, 0, QTableWidgetItem(str(page_num + 1)))
 
-            # エンティティタイプ
+            # エンティティタイプ（日本語表示）
             entity_type = entity.get("entity", "")
-            self.results_table.setItem(i, 1, QTableWidgetItem(entity_type))
+            self.results_table.setItem(i, 1, QTableWidgetItem(get_entity_type_name_ja(entity_type)))
 
             # テキスト
             text = entity.get("word", "")

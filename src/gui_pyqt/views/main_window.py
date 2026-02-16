@@ -52,6 +52,11 @@ from .config_dialog import DetectConfigDialog
 class MainWindow(QMainWindow):
     """メインウィンドウクラス"""
     EMBEDDED_MAPPING_FILENAME = "presidiopdf_mapping.json"
+    SIDECAR_SUFFIX = ".presidiopdf.json"
+
+    @staticmethod
+    def _sidecar_path_for(pdf_path: Path) -> Path:
+        return pdf_path.parent / f"{pdf_path.stem}{MainWindow.SIDECAR_SUFFIX}"
 
     def __init__(self, app_state: AppState):
         super().__init__()
@@ -112,7 +117,7 @@ class MainWindow(QMainWindow):
 
         # 開く
         open_action = QAction("開く", self)
-        open_action.setStatusTip("PDFファイルを開く（埋め込みマッピングがあれば自動読込）")
+        open_action.setStatusTip("PDFファイルを開く（マッピングがあれば自動読込）")
         open_action.triggered.connect(self.on_open_pdf)
         toolbar.addAction(open_action)
 
@@ -157,7 +162,7 @@ class MainWindow(QMainWindow):
 
         # 保存（PDF + JSONマッピング）
         save_action = QAction("保存", self)
-        save_action.setStatusTip("PDFへJSONマッピングを埋め込んで保存")
+        save_action.setStatusTip("PDFとサイドカーJSONマッピングを保存")
         save_action.triggered.connect(self.on_save)
         toolbar.addAction(save_action)
         self.save_action = save_action
@@ -277,9 +282,8 @@ class MainWindow(QMainWindow):
             self.log_message(f"PDFファイルを選択: {file_path}")
             self.update_action_states()
 
-            # PDF埋め込みマッピングがあれば復元
+            # マッピングがあれば復元（サイドカー優先、埋め込みは後方互換）
             if self._load_mapping_for_pdf(Path(file_path)):
-                self.log_message("PDF埋め込みマッピングを読み込みました")
                 self.update_action_states()
                 return
 
@@ -645,7 +649,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "エラー", error_msg)
 
     def on_save(self):
-        """保存処理（PDFへJSONマッピング埋め込み）"""
+        """保存処理（PDF + サイドカーJSONマッピング）"""
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
             return
@@ -678,17 +682,23 @@ class MainWindow(QMainWindow):
             # 1) PDF保存
             shutil.copy2(self.app_state.pdf_path, out_pdf)
 
-            # 2) JSONマッピングをPDFへ埋め込み
+            # 2) サイドカーJSONマッピングを書き出し
+            from src.cli.common import sha256_pdf_content
             mapping_payload = self._build_mapping_payload(out_pdf)
-            if not self._embed_mapping_into_pdf(out_pdf, mapping_payload):
-                raise RuntimeError("PDFへのマッピング埋め込みに失敗しました")
+            mapping_payload["content_hash"] = sha256_pdf_content(str(out_pdf))
+
+            sidecar_path = self._sidecar_path_for(out_pdf)
+            sidecar_path.write_text(
+                json.dumps(mapping_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
             self.log_message(f"保存完了: {out_pdf}")
-            self.log_message("埋め込みマッピング保存完了")
+            self.log_message(f"サイドカーマッピング保存完了: {sidecar_path}")
             QMessageBox.information(
                 self,
                 "完了",
-                f"保存しました（埋め込みマッピング）:\n{out_pdf}"
+                f"保存しました:\n{out_pdf}\n{sidecar_path}"
             )
 
         except Exception as e:
@@ -1296,7 +1306,37 @@ class MainWindow(QMainWindow):
             return False
 
     def _load_mapping_for_pdf(self, pdf_path: Path) -> bool:
-        """PDFの埋め込みJSONマッピングを読み込んで状態を復元"""
+        """マッピングを読み込んで状態を復元（サイドカー優先、PDF埋め込みは後方互換）"""
+        # (1) サイドカーファイルを優先
+        sidecar = self._sidecar_path_for(pdf_path)
+        if sidecar.exists():
+            try:
+                payload = json.loads(sidecar.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    # ハッシュ照合
+                    stored_hash = payload.get("content_hash", "")
+                    if stored_hash:
+                        from src.cli.common import sha256_pdf_content
+                        current_hash = sha256_pdf_content(str(pdf_path))
+                        if current_hash != stored_hash:
+                            reply = QMessageBox.question(
+                                self,
+                                "ハッシュ不一致",
+                                "PDFの内容がサイドカーマッピング保存時と異なります。\n"
+                                "マッピングを読み込みますか？",
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.Yes,
+                            )
+                            if reply != QMessageBox.StandardButton.Yes:
+                                return False
+
+                    if self._restore_mapping_from_payload(payload, pdf_path):
+                        self.log_message(f"サイドカーマッピングを読み込みました: {sidecar}")
+                        return True
+            except Exception as e:
+                self.log_message(f"サイドカーマッピング読込に失敗: {sidecar} ({e})")
+
+        # (2) PDF埋め込み（後方互換）
         try:
             with fitz.open(str(pdf_path)) as doc:
                 embedded_files = doc.embfile_names()
@@ -1305,27 +1345,36 @@ class MainWindow(QMainWindow):
                 payload_raw = doc.embfile_get(self.EMBEDDED_MAPPING_FILENAME)
 
             payload = json.loads(payload_raw.decode("utf-8"))
-
             if not isinstance(payload, dict):
                 return False
 
-            if any(k in payload for k in ["read_result", "detect_result", "duplicate_result"]):
-                read_result = payload.get("read_result")
-                detect_result = payload.get("detect_result")
-                duplicate_result = payload.get("duplicate_result")
-            else:
-                # 互換: 旧フォーマット（単一結果JSON）
-                read_result = payload
-                detect_result = payload if payload.get("detect") else None
-                duplicate_result = None
-
-            self.app_state.read_result = self._retarget_result_pdf_path(read_result, pdf_path)
-            self.app_state.detect_result = self._retarget_result_pdf_path(detect_result, pdf_path)
-            self.app_state.duplicate_result = self._retarget_result_pdf_path(duplicate_result, pdf_path)
-            return True
+            if self._restore_mapping_from_payload(payload, pdf_path):
+                self.log_message("PDF埋め込みマッピングを読み込みました（後方互換）")
+                return True
+            return False
         except Exception as e:
             self.log_message(f"埋め込みマッピング読込に失敗: {pdf_path} ({e})")
             return False
+
+    def _restore_mapping_from_payload(self, payload: dict, pdf_path: Path) -> bool:
+        """マッピングペイロードからAppStateを復元する共通ロジック"""
+        if not isinstance(payload, dict):
+            return False
+
+        if any(k in payload for k in ["read_result", "detect_result", "duplicate_result"]):
+            read_result = payload.get("read_result")
+            detect_result = payload.get("detect_result")
+            duplicate_result = payload.get("duplicate_result")
+        else:
+            # 互換: 旧フォーマット（単一結果JSON）
+            read_result = payload
+            detect_result = payload if payload.get("detect") else None
+            duplicate_result = None
+
+        self.app_state.read_result = self._retarget_result_pdf_path(read_result, pdf_path)
+        self.app_state.detect_result = self._retarget_result_pdf_path(detect_result, pdf_path)
+        self.app_state.duplicate_result = self._retarget_result_pdf_path(duplicate_result, pdf_path)
+        return True
 
     def log_message(self, message: str):
         """ログメッセージを追加"""
