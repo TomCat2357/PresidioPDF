@@ -75,8 +75,13 @@ class ConfigManager:
                 },
             },
             "nlp": {
-                "spacy_model": "ja_core_news_sm",  # デフォルトは小さいモデル
-                "fallback_models": ["ja_core_news_sm", "ja_core_news_md"],
+                "spacy_model": "ja_core_news_trf",  # デフォルトは高精度Transformerモデル
+                "fallback_models": [
+                    "ja_ginza_electra",
+                    "ja_core_news_lg",
+                    "ja_core_news_md",
+                    "ja_core_news_sm",
+                ],
                 "auto_download": True,
             },
             "deduplication": {
@@ -552,7 +557,7 @@ class ConfigManager:
     # NLP/spaCy設定メソッド
     def get_spacy_model(self) -> str:
         """使用するspaCyモデル名を返す"""
-        return self._safe_get_config("nlp.spacy_model", "ja_core_news_sm")
+        return self._safe_get_config("nlp.spacy_model", "ja_core_news_trf")
 
     def set_spacy_model(self, model_name: str):
         """spaCyモデル名を設定する"""
@@ -574,14 +579,15 @@ class ConfigManager:
                 models.append(model)
 
         if not models:
-            models = ["ja_core_news_sm", "ja_core_news_md"]
+            models = ["ja_core_news_trf", "ja_ginza_electra", "ja_core_news_lg"]
 
         return tuple(models)
 
     def get_fallback_models(self) -> List[str]:
         """フォールバックモデルのリストを返す"""
         return self._safe_get_config(
-            "nlp.fallback_models", ["ja_core_news_sm", "ja_core_news_md"]
+            "nlp.fallback_models",
+            ["ja_ginza_electra", "ja_core_news_lg", "ja_core_news_md", "ja_core_news_sm"],
         )
 
     def is_auto_download_enabled(self) -> bool:

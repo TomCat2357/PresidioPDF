@@ -112,7 +112,7 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
 @click.option("-j", "--json", "json_file", type=str, required=True, help="入力read JSONファイル（必須。標準入力は不可）")
-@click.option("--model", multiple=True, default=["ja_core_news_sm"], show_default=True, help="spaCyモデルID（複数可）")
+@click.option("--model", multiple=True, default=["ja_core_news_trf"], show_default=True, help="spaCyモデルID（複数可。高精度: ja_core_news_trf, ja_ginza_electra）")
 @click.option("--out", type=str, required=True, help="出力先（必須。標準出力は不可）")
 @click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
 @click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")

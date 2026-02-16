@@ -21,6 +21,11 @@ dependencies = [
     "ja-core-news-sm>=3.8.0",
     "ja-core-news-md>=3.7.0",
     "ja-core-news-lg>=3.7.0",
+    # 高精度モデル（Transformer系）
+    "ja-core-news-trf>=3.7.0",
+    # GiNZA高精度モデル
+    "ginza>=5.2.0",
+    "ja-ginza-electra>=5.2.0",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +46,8 @@ dev = [
 model-sm = ["ja-core-news-sm>=3.8.0"]
 model-md = ["ja-core-news-md>=3.7.0"]
 model-lg = ["ja-core-news-lg>=3.7.0"]
+model-trf = ["ja-core-news-trf>=3.7.0"]
+model-ginza-electra = ["ginza>=5.2.0", "ja-ginza-electra>=5.2.0"]
 
 # GPUモード（GPU系パッケージのみ）
 gpu = [
@@ -109,5 +116,7 @@ ja-core-news-md = { url = "https://github.com/explosion/spacy-models/releases/do
 ja-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.7.0/ja_core_news_lg-3.7.0-py3-none-any.whl" }
 ja-core-news-trf = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.7.0/ja_core_news_trf-3.7.0-py3-none-any.whl" }
 ja-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" }
+
+ja-ginza-electra = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.2.0/ja_ginza_electra-5.2.0-py3-none-any.whl" }
 
 # [dependency-groups] - 不要なので削除
