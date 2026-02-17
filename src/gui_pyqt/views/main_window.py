@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         self._all_preview_entities: List[Dict] = []
 
         # GUI検出設定（.config.json）
-        self.detect_config_service = DetectConfigService(Path.cwd())
+        self.detect_config_service = DetectConfigService(Path.home())
         try:
             self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
             duplicate_settings = self.detect_config_service.load_duplicate_settings()

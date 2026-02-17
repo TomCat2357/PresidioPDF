@@ -1,7 +1,7 @@
 """
 PresidioPDF PyQt - 検出設定(.config.json)管理
 
-- 同一フォルダの .config.json を読み込み
+- $HOME/.config.json を読み込み
 - 未存在時は自動生成
 - インポート/エクスポートを提供
 """
@@ -51,7 +51,7 @@ class DetectConfigService:
     }
 
     def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = Path(base_dir) if base_dir else Path.cwd()
+        self.base_dir = Path(base_dir) if base_dir else Path.home()
         self.config_path = self.base_dir / self.CONFIG_FILE_NAME
 
     def ensure_config_file(self) -> List[str]:
@@ -184,14 +184,14 @@ class DetectConfigService:
         return dict(data["duplicate_settings"])
 
     def import_from(self, source_path: Path) -> List[str]:
-        """外部JSONを読み込み、同一フォルダの.config.jsonへ反映"""
+        """外部JSONを読み込み、$HOME/.config.jsonへ反映"""
         data = self._load_json(Path(source_path))
         normalized_data = self._normalize_config_data(data)
         self._write_json(normalized_data)
         return list(normalized_data.get("enabled_entities", list(self.ENTITY_TYPES)))
 
     def export_to(self, output_path: Path) -> Path:
-        """同一フォルダの.config.jsonを指定先へ出力"""
+        """$HOME/.config.jsonを指定先へ出力"""
         if not self.config_path.exists():
             self._write_json(self._default_json_config())
 
