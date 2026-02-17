@@ -464,60 +464,68 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        current_enabled = self.detect_config_service.ensure_config_file()
-        if current_enabled:
-            self.enabled_detect_entities = current_enabled
-        duplicate_settings = self.detect_config_service.load_duplicate_settings()
-        self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
-        self.duplicate_overlap_mode = duplicate_settings["overlap"]
-        self.spacy_model = self.detect_config_service.load_spacy_model()
-        installed_models = DetectConfigService.get_installed_spacy_models()
+        try:
+            current_enabled = self.detect_config_service.ensure_config_file()
+            if current_enabled:
+                self.enabled_detect_entities = current_enabled
+            duplicate_settings = self.detect_config_service.load_duplicate_settings()
+            self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
+            self.duplicate_overlap_mode = duplicate_settings["overlap"]
+            self.spacy_model = self.detect_config_service.load_spacy_model()
+            installed_models = DetectConfigService.get_installed_spacy_models()
 
-        dialog = DetectConfigDialog(
-            entity_types=DetectConfigService.ENTITY_TYPES,
-            enabled_entities=self.enabled_detect_entities,
-            config_path=self.detect_config_service.config_path,
-            duplicate_entity_overlap_mode=self.duplicate_entity_overlap_mode,
-            duplicate_overlap_mode=self.duplicate_overlap_mode,
-            spacy_model=self.spacy_model,
-            installed_models=installed_models,
-            all_models=DetectConfigService.SPACY_MODELS,
-            parent=self,
-        )
-        if dialog.import_button:
-            dialog.import_button.clicked.connect(
-                lambda: self._on_import_config_clicked(dialog)
+            dialog = DetectConfigDialog(
+                entity_types=DetectConfigService.ENTITY_TYPES,
+                enabled_entities=self.enabled_detect_entities,
+                config_path=self.detect_config_service.config_path,
+                duplicate_entity_overlap_mode=self.duplicate_entity_overlap_mode,
+                duplicate_overlap_mode=self.duplicate_overlap_mode,
+                spacy_model=self.spacy_model,
+                installed_models=installed_models,
+                all_models=DetectConfigService.SPACY_MODELS,
+                parent=self,
             )
-        if dialog.export_button:
-            dialog.export_button.clicked.connect(
-                lambda: self._on_export_config_clicked(dialog)
+            if dialog.import_button:
+                dialog.import_button.clicked.connect(
+                    lambda: self._on_import_config_clicked(dialog)
+                )
+            if dialog.export_button:
+                dialog.export_button.clicked.connect(
+                    lambda: self._on_export_config_clicked(dialog)
+                )
+            if dialog.open_json_button:
+                dialog.open_json_button.clicked.connect(self._on_open_json_config_clicked)
+
+            if not dialog.exec():
+                return
+
+            self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
+                dialog.get_enabled_entities()
             )
-        if dialog.open_json_button:
-            dialog.open_json_button.clicked.connect(self._on_open_json_config_clicked)
-
-        if not dialog.exec():
-            return
-
-        self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
-            dialog.get_enabled_entities()
-        )
-        duplicate_settings = dialog.get_duplicate_settings()
-        saved_duplicate_settings = self.detect_config_service.save_duplicate_settings(
-            duplicate_settings["entity_overlap_mode"],
-            duplicate_settings["overlap"],
-        )
-        self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
-        self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
-        selected_model = dialog.get_spacy_model()
-        if selected_model:
-            self.spacy_model = self.detect_config_service.save_spacy_model(selected_model)
-        self.log_message(
-            f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
-            f"({self.detect_config_service.config_path.name}), "
-            f"モデル={self.spacy_model}, "
-            f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
-            f"overlap:{self.duplicate_overlap_mode}"
-        )
+            duplicate_settings = dialog.get_duplicate_settings()
+            saved_duplicate_settings = self.detect_config_service.save_duplicate_settings(
+                duplicate_settings["entity_overlap_mode"],
+                duplicate_settings["overlap"],
+            )
+            self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
+            self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
+            selected_model = dialog.get_spacy_model()
+            if selected_model:
+                self.spacy_model = self.detect_config_service.save_spacy_model(selected_model)
+            self.log_message(
+                f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
+                f"({self.detect_config_service.config_path.name}), "
+                f"モデル={self.spacy_model}, "
+                f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
+                f"overlap:{self.duplicate_overlap_mode}"
+            )
+        except Exception as e:
+            logger.exception("検出設定ダイアログの表示/保存に失敗")
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"設定画面の表示または保存に失敗しました: {e}",
+            )
 
     def _on_open_json_config_clicked(self):
         """検出設定(.config.json)を既定アプリで開く"""

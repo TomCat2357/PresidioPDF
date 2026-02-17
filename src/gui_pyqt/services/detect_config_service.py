@@ -28,7 +28,7 @@ class DetectConfigService:
         "ja_core_news_md",
         "ja_core_news_sm",
     ]
-    DEFAULT_SPACY_MODEL = "ja_core_news_trf"
+    DEFAULT_SPACY_MODEL = "ja_core_news_lg"
     ENTITY_TYPES = [
         "PERSON",
         "LOCATION",
@@ -128,12 +128,19 @@ class DetectConfigService:
     @classmethod
     def get_installed_spacy_models(cls) -> List[str]:
         """インストール済みのspaCyモデル一覧を返す"""
-        import spacy.util
+        try:
+            import spacy.util
+        except Exception as exc:
+            logger.warning(f"spaCyの状態確認に失敗: {exc}")
+            return []
 
         installed = []
         for model in cls.SPACY_MODELS:
-            if spacy.util.is_package(model):
-                installed.append(model)
+            try:
+                if spacy.util.is_package(model):
+                    installed.append(model)
+            except Exception as exc:
+                logger.warning(f"spaCyモデル確認失敗: {model} ({exc})")
         return installed
 
     def load_duplicate_settings(self) -> Dict[str, str]:

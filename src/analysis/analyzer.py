@@ -33,61 +33,52 @@ class Analyzer:
 
     def _setup_presidio(self) -> AnalyzerEngine:
         """Presidioエンジンを初期化"""
-        nlp = None
-        try:
-            # 設定からspaCyモデルを取得
-            preferred_model = self.config_manager.get_spacy_model()
-            fallback_models = self.config_manager.get_fallback_models()
-            auto_download = self.config_manager.is_auto_download_enabled()
+        preferred_model = str(self.config_manager.get_spacy_model() or "").strip()
+        fallback_models = self.config_manager.get_fallback_models()
 
-            model_name = None
+        candidate_models: List[str] = []
+        for name in [preferred_model] + list(fallback_models):
+            model_name = str(name or "").strip()
+            if not model_name or model_name in candidate_models:
+                continue
+            candidate_models.append(model_name)
 
-            # 優先モデルを試行
+        if not candidate_models:
+            candidate_models = ["ja_core_news_trf", "ja_core_news_lg", "ja_core_news_md", "ja_core_news_sm"]
+
+        last_error: Exception | None = None
+
+        for model_name in candidate_models:
             try:
-                nlp = spacy.load(preferred_model)
-                model_name = preferred_model
-                logger.info(f"spaCyモデルを読み込みました: {model_name}")
-            except OSError:
-                logger.warning(
-                    f"優先spaCyモデル '{preferred_model}' が見つかりません。フォールバックモデルを試行します。"
+                nlp = spacy.load(model_name)
+                config_models = [{"lang_code": "ja", "model_name": model_name}]
+                provider = NlpEngineProvider(
+                    nlp_configuration={
+                        "nlp_engine_name": "spacy",
+                        "models": config_models,
+                    }
                 )
-                # フォールバックモデルを順番に試行
-                for fb_model in fallback_models:
-                    try:
-                        nlp = spacy.load(fb_model)
-                        model_name = fb_model
-                        logger.info(f"フォールバックspaCyモデルを読み込みました: {model_name}")
-                        break
-                    except OSError:
-                        logger.debug(f"フォールバックモデル '{fb_model}' も見つかりません。")
-                        continue
+                analyzer = AnalyzerEngine(
+                    nlp_engine=provider.create_engine(),
+                    supported_languages=["ja"],
+                )
+                self.nlp = nlp
 
-                if nlp is None:
-                    all_tried = [preferred_model] + list(fallback_models)
-                    raise OSError(
-                        f"利用可能なspaCyモデルが見つかりません。試行したモデル: {', '.join(all_tried)}"
-                    )
+                # 既定の認識器のみを登録（追加ルールは独自パイプラインで適用）
+                self._add_default_recognizers(analyzer)
+                logger.info(f"spaCyモデルを読み込みました: {model_name}")
+                return analyzer
+            except Exception as exc:
+                last_error = exc
+                logger.warning(f"spaCyモデル初期化失敗: {model_name} ({type(exc).__name__}: {exc})")
+                continue
 
-        except Exception as e:
-            logger.error(f"spaCyモデルの読み込みでエラーが発生しました: {e}")
-            raise
-
-        self.nlp = nlp
-        config_models = [{"lang_code": "ja", "model_name": model_name}]
-        provider = NlpEngineProvider(
-            nlp_configuration={
-                "nlp_engine_name": "spacy",
-                "models": config_models,
-            }
-        )
-
-        analyzer = AnalyzerEngine(
-            nlp_engine=provider.create_engine(), supported_languages=["ja"]
-        )
-
-        # 既定の認識器のみを登録（追加ルールは独自パイプラインで適用）
-        self._add_default_recognizers(analyzer)
-        return analyzer
+        tried = ", ".join(candidate_models)
+        message = f"利用可能なspaCyモデルが見つかりません。試行したモデル: {tried}"
+        if last_error is not None:
+            message = f"{message}. 最終エラー: {type(last_error).__name__}: {last_error}"
+        logger.error(message)
+        raise OSError(message)
 
     # 旧方式（Presidioに直接登録）を保持する場合は上記で呼び出す
     # def _add_custom_recognizers(self, analyzer: AnalyzerEngine):
