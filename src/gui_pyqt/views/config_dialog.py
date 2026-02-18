@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QVBoxLayout,
 )
-from PyQt6.QtGui import QStandardItem
 
 from src.core.entity_types import get_entity_type_name_ja
 
@@ -91,16 +90,12 @@ class DetectConfigDialog(QDialog):
         model_layout = QHBoxLayout()
         model_label = QLabel("使用モデル:")
         self.model_combo = QComboBox()
-        for model_name in self._all_models:
-            if model_name in self._installed_models:
+        if self._installed_models:
+            for model_name in self._installed_models:
                 self.model_combo.addItem(model_name, model_name)
-            else:
-                label = f"{model_name} (未インストール)"
-                self.model_combo.addItem(label, model_name)
-                idx = self.model_combo.count() - 1
-                item = self.model_combo.model().item(idx)
-                if isinstance(item, QStandardItem):
-                    item.setEnabled(False)
+        else:
+            self.model_combo.addItem("(インストール済みモデルなし)", "")
+            self.model_combo.setEnabled(False)
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo)
         model_layout.addStretch()
