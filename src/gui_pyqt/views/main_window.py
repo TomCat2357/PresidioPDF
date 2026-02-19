@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QUrl, QEvent, QObject
 from PyQt6.QtGui import QAction, QDesktopServices, QCloseEvent
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,46 @@ class MainWindow(QMainWindow):
 
         # ステータスバーの作成
         self.create_statusbar()
+        self._setup_pdf_drop_targets()
+
+    def _setup_pdf_drop_targets(self):
+        """アプリ全域でPDFドロップを受け付ける"""
+        self.setAcceptDrops(True)
+        self.installEventFilter(self)
+        for widget in self.findChildren(QWidget):
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    @staticmethod
+    def _extract_dropped_pdf_path(event) -> Optional[str]:
+        """ドラッグ/ドロップイベントから最初のローカルPDFパスを取り出す"""
+        mime_data = event.mimeData() if event is not None else None
+        if mime_data is None or not mime_data.hasUrls():
+            return None
+
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            file_path = url.toLocalFile()
+            if str(file_path).lower().endswith(".pdf"):
+                return str(file_path)
+        return None
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """アプリ内のどこにドロップしてもPDF読込へ接続する"""
+        event_type = event.type()
+        if event_type in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            file_path = self._extract_dropped_pdf_path(event)
+            if file_path is not None:
+                event.acceptProposedAction()
+                return True
+        elif event_type == QEvent.Type.Drop:
+            file_path = self._extract_dropped_pdf_path(event)
+            if file_path is not None:
+                event.acceptProposedAction()
+                self.on_pdf_dropped(file_path)
+                return True
+        return super().eventFilter(watched, event)
 
     def create_toolbar(self):
         """ツールバーの作成"""

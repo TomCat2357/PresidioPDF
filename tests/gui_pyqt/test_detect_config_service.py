@@ -14,6 +14,10 @@ def _read_config(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_spacy_models_prioritize_ginza_electra_then_ginza():
+    assert DetectConfigService.SPACY_MODELS[:2] == ["ja_ginza_electra", "ja_ginza"]
+
+
 def test_add_entity_preserves_unknown_japanese_keys(tmp_path):
     service = DetectConfigService(tmp_path)
     config_path = tmp_path / service.CONFIG_FILE_NAME

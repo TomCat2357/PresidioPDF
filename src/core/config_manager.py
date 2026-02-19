@@ -77,8 +77,8 @@ class ConfigManager:
             "nlp": {
                 "spacy_model": "ja_core_news_trf",  # デフォルトは高精度Transformerモデル
                 "fallback_models": [
-                    "ja_ginza",
                     "ja_ginza_electra",
+                    "ja_ginza",
                     "ja_core_news_lg",
                     "ja_core_news_md",
                     "ja_core_news_sm",
@@ -580,7 +580,7 @@ class ConfigManager:
                 models.append(model)
 
         if not models:
-            models = ["ja_core_news_trf", "ja_ginza", "ja_ginza_electra", "ja_core_news_lg"]
+            models = ["ja_core_news_trf", "ja_ginza_electra", "ja_ginza", "ja_core_news_lg"]
 
         return tuple(models)
 
@@ -588,7 +588,7 @@ class ConfigManager:
         """フォールバックモデルのリストを返す"""
         return self._safe_get_config(
             "nlp.fallback_models",
-            ["ja_ginza", "ja_ginza_electra", "ja_core_news_lg", "ja_core_news_md", "ja_core_news_sm"],
+            ["ja_ginza_electra", "ja_ginza", "ja_core_news_lg", "ja_core_news_md", "ja_core_news_sm"],
         )
 
     def is_auto_download_enabled(self) -> bool:
