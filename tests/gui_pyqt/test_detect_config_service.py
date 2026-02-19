@@ -1,9 +1,11 @@
 import json
 
 from src.gui_pyqt.services.detect_config_service import DetectConfigService
+from src.gui_pyqt.services.pipeline_service import PipelineService
 
 
 def _write_config(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -26,9 +28,14 @@ def test_spacy_models_order_and_default():
     assert DetectConfigService.DEFAULT_SPACY_MODEL == "ja_core_news_sm"
 
 
+def test_config_path_is_under_presidio_directory(tmp_path):
+    service = DetectConfigService(tmp_path)
+    assert service.config_path == tmp_path / ".presidio" / "config.json"
+
+
 def test_add_entity_preserves_unknown_japanese_keys(tmp_path):
     service = DetectConfigService(tmp_path)
-    config_path = tmp_path / service.CONFIG_FILE_NAME
+    config_path = service.config_path
     _write_config(
         config_path,
         {
@@ -56,7 +63,7 @@ def test_add_entity_preserves_unknown_japanese_keys(tmp_path):
 
 def test_save_operations_do_not_drop_unknown_add_entity_keys(tmp_path):
     service = DetectConfigService(tmp_path)
-    config_path = tmp_path / service.CONFIG_FILE_NAME
+    config_path = service.config_path
     _write_config(
         config_path,
         {
@@ -84,3 +91,26 @@ def test_save_operations_do_not_drop_unknown_add_entity_keys(tmp_path):
     assert ("固有名詞", "東京スカイツリー") in add_patterns
     assert ("ほげほげ", "あいうえお") in add_patterns
     assert omit_patterns == []
+
+
+def test_add_pattern_known_entity_enabled_only():
+    resolved = PipelineService._resolve_add_pattern_entity(
+        "PERSON",
+        ["PERSON", "LOCATION"],
+    )
+    assert resolved == "PERSON"
+
+
+def test_add_pattern_alias_requires_enabled_entity():
+    disabled = PipelineService._resolve_add_pattern_entity("PEARSON", ["LOCATION"])
+    enabled = PipelineService._resolve_add_pattern_entity("PEARSON", ["PERSON"])
+    assert disabled is None
+    assert enabled == "PERSON"
+
+
+def test_add_pattern_unknown_entity_always_enabled():
+    resolved = PipelineService._resolve_add_pattern_entity(
+        "MUHO",
+        ["PERSON"],
+    )
+    assert resolved == "MUHO"

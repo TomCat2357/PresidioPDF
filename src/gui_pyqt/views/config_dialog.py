@@ -2,9 +2,14 @@
 PresidioPDF PyQt - 検出設定ダイアログ
 """
 
+import json
+import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
+from PyQt6.QtCore import QFileSystemWatcher
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -24,6 +29,7 @@ from src.core.entity_types import get_entity_type_name_ja
 
 class DetectConfigDialog(QDialog):
     """検出エンティティ設定ダイアログ"""
+    DISPLAY_CONFIG_NAME = "config.toml"
 
     def __init__(
         self,
@@ -52,6 +58,7 @@ class DetectConfigDialog(QDialog):
         self.model_combo: Optional[QComboBox] = None
         self._installed_models: List[str] = list(installed_models or [])
         self._all_models: List[str] = list(all_models or [])
+        self._file_watcher: Optional[QFileSystemWatcher] = None
         self._init_ui()
         self.set_enabled_entities(enabled_entities)
         self.set_duplicate_settings(
@@ -59,6 +66,7 @@ class DetectConfigDialog(QDialog):
             duplicate_overlap_mode,
         )
         self.set_spacy_model(spacy_model)
+        self._start_watching()
 
     def _init_ui(self):
         self.setWindowTitle("設定")
@@ -68,7 +76,7 @@ class DetectConfigDialog(QDialog):
 
         info = QLabel(
             "チェックしたエンティティのみ検出します。\n"
-            f"設定ファイル: {self.config_path}"
+            f"設定ファイル: {self.DISPLAY_CONFIG_NAME}"
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -129,7 +137,7 @@ class DetectConfigDialog(QDialog):
         layout.addWidget(duplicate_group)
 
         action_row = QHBoxLayout()
-        self.open_json_button = QPushButton(".config.jsonを開く")
+        self.open_json_button = QPushButton(self.DISPLAY_CONFIG_NAME)
         self.import_button = QPushButton("インポート")
         self.export_button = QPushButton("エクスポート")
         action_row.addWidget(self.open_json_button)
@@ -211,3 +219,78 @@ class DetectConfigDialog(QDialog):
         should_select_all = not all(checkbox.isChecked() for checkbox in checkboxes)
         for checkbox in checkboxes:
             checkbox.setChecked(should_select_all)
+
+    # ── ファイル監視・同期 ──
+
+    def _start_watching(self):
+        """config_pathのファイル変更監視を開始する"""
+        config_str = str(self.config_path)
+        self._file_watcher = QFileSystemWatcher([config_str], self)
+        self._file_watcher.fileChanged.connect(self._on_config_file_changed)
+
+    def _on_config_file_changed(self, path: str):
+        """外部エディタによる設定変更を検知してUIへ反映する"""
+        try:
+            data = self._load_config_json()
+            if data is None:
+                return
+            # エンティティ
+            entities = data.get("enabled_entities", [])
+            if isinstance(entities, list):
+                self.set_enabled_entities(entities)
+            # spaCyモデル
+            model = data.get("spacy_model", "")
+            if isinstance(model, str) and model.strip():
+                self.set_spacy_model(model.strip())
+            # 重複削除設定
+            dup = data.get("duplicate_settings", {})
+            if isinstance(dup, dict):
+                self.set_duplicate_settings(
+                    dup.get("entity_overlap_mode", "any"),
+                    dup.get("overlap", "overlap"),
+                )
+        except Exception as exc:
+            logger.warning(f"設定ファイルの変更反映に失敗: {exc}")
+        finally:
+            # 一部OSではファイル変更後に監視が外れるため再登録
+            if self._file_watcher and path not in self._file_watcher.files():
+                self._file_watcher.addPath(path)
+
+    def save_current_to_file(self) -> bool:
+        """ダイアログ上の現在の状態を設定ファイルへ書き出す"""
+        try:
+            data: Dict[str, Any] = {}
+            if self.config_path.exists():
+                text = self.config_path.read_text(encoding="utf-8")
+                loaded = json.loads(text or "{}")
+                if isinstance(loaded, dict):
+                    data = loaded
+            data["enabled_entities"] = self.get_enabled_entities()
+            dup = self.get_duplicate_settings()
+            data["duplicate_settings"] = dup
+            model = self.get_spacy_model()
+            if model:
+                data["spacy_model"] = model
+            # 書き込み中は監視を一時停止して自己トリガーを防ぐ
+            config_str = str(self.config_path)
+            if self._file_watcher:
+                self._file_watcher.removePath(config_str)
+            text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+            self.config_path.write_text(text, encoding="utf-8")
+            if self._file_watcher:
+                self._file_watcher.addPath(config_str)
+            return True
+        except Exception as exc:
+            logger.warning(f"ダイアログ状態の設定ファイル保存に失敗: {exc}")
+            return False
+
+    def _load_config_json(self) -> Optional[Dict[str, Any]]:
+        """config_pathからJSONを読み込む（失敗時None）"""
+        try:
+            if not self.config_path.exists():
+                return None
+            text = self.config_path.read_text(encoding="utf-8")
+            data = json.loads(text or "{}")
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None

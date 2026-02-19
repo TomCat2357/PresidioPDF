@@ -40,6 +40,49 @@ class PipelineService:
     """
 
     @staticmethod
+    def _resolve_add_pattern_entity(
+        entity_name: Any,
+        enabled_entities: Optional[List[str]],
+    ) -> Optional[str]:
+        """追加パターンのエンティティ名を実行時に解決する。
+
+        - 既知エンティティ: 選択対象(enabled_entities)に含まれる場合のみ有効
+        - 未知エンティティ: 選択対象に関係なく有効
+        """
+        from src.core.entity_types import ENTITY_TYPES, normalize_entity_key
+        from src.gui_pyqt.services.detect_config_service import DetectConfigService
+
+        raw_entity = str(entity_name or "").strip()
+        if not raw_entity:
+            return None
+
+        normalized_entity = normalize_entity_key(raw_entity)
+        legacy_alias = DetectConfigService.ENTITY_ALIASES.get(raw_entity.upper())
+        if legacy_alias:
+            normalized_entity = legacy_alias
+        known_entities = set(ENTITY_TYPES)
+        if normalized_entity not in known_entities:
+            # 未知キーはそのまま生かす（設定で切り替え不可のため常時有効）
+            return raw_entity
+
+        enabled_known_entities = set()
+        if isinstance(enabled_entities, list):
+            for raw_enabled in enabled_entities:
+                enabled_text = str(raw_enabled or "")
+                normalized_enabled = normalize_entity_key(enabled_text)
+                enabled_legacy_alias = DetectConfigService.ENTITY_ALIASES.get(
+                    enabled_text.strip().upper()
+                )
+                if enabled_legacy_alias:
+                    normalized_enabled = enabled_legacy_alias
+                if normalized_enabled in known_entities:
+                    enabled_known_entities.add(normalized_enabled)
+
+        if normalized_entity not in enabled_known_entities:
+            return None
+        return normalized_entity
+
+    @staticmethod
     def run_read(pdf_path: Path, include_coordinate_map: bool = True) -> Dict[str, Any]:
         """PDF読込処理（read）
 
@@ -243,6 +286,12 @@ class PipelineService:
             # 追加パターンの検出
             if add_patterns:
                 for ent_name, rx_str in add_patterns:
+                    resolved_entity = PipelineService._resolve_add_pattern_entity(
+                        ent_name,
+                        entities,
+                    )
+                    if not resolved_entity:
+                        continue
                     try:
                         rx = re.compile(rx_str)
                         for m in rx.finditer(target_text):
@@ -257,7 +306,7 @@ class PipelineService:
                             detections_plain.append({
                                 "start": start_pos,
                                 "end": end_pos,
-                                "entity": ent_name,
+                                "entity": resolved_entity,
                                 "word": txt,
                                 "origin": "custom",
                                 "_span": (s, e),

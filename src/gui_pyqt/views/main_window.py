@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
         # 全プレビューエンティティを保持（選択状態管理用）
         self._all_preview_entities: List[Dict] = []
 
-        # GUI検出設定（.config.json）
+        # GUI検出設定（$HOME/.presidio/config.json）
         self.detect_config_service = DetectConfigService(Path.home())
         try:
             self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
@@ -168,7 +168,9 @@ class MainWindow(QMainWindow):
 
         # 設定（検出/重複設定）
         config_action = QAction("設定", self)
-        config_action.setStatusTip("検出対象と重複削除設定（.config.json）")
+        config_action.setStatusTip(
+            f"検出対象と重複削除設定（{DetectConfigService.DISPLAY_FILE_NAME}）"
+        )
         config_action.triggered.connect(self.on_open_config_dialog)
         toolbar.addAction(config_action)
         self.config_action = config_action
@@ -534,7 +536,9 @@ class MainWindow(QMainWindow):
                     lambda: self._on_export_config_clicked(dialog)
                 )
             if dialog.open_json_button:
-                dialog.open_json_button.clicked.connect(self._on_open_json_config_clicked)
+                dialog.open_json_button.clicked.connect(
+                    lambda: self._on_open_json_config_clicked(dialog)
+                )
 
             if not dialog.exec():
                 return
@@ -567,25 +571,28 @@ class MainWindow(QMainWindow):
                 f"設定画面の表示または保存に失敗しました: {e}",
             )
 
-    def _on_open_json_config_clicked(self):
-        """検出設定(.config.json)を既定アプリで開く"""
+    def _on_open_json_config_clicked(self, dialog: DetectConfigDialog):
+        """検出設定ファイルを既定アプリで開く（ダイアログの状態を先に保存）"""
         try:
-            self.detect_config_service.ensure_config_file()
+            # ダイアログ上の最新状態を書き出してから開く
+            dialog.save_current_to_file()
             json_path = self.detect_config_service.config_path
             opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(json_path)))
             if not opened:
                 QMessageBox.warning(
                     self,
                     "警告",
-                    f".config.json を開けませんでした:\n{json_path}",
+                    f"{DetectConfigService.DISPLAY_FILE_NAME} を開けませんでした:\n{json_path}",
                 )
                 return
-            self.log_message(f".config.json を開きました: {json_path}")
+            self.log_message(
+                f"{DetectConfigService.DISPLAY_FILE_NAME} を開きました: {json_path}"
+            )
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "エラー",
-                f".config.json を開けませんでした: {e}",
+                f"{DetectConfigService.DISPLAY_FILE_NAME} を開けませんでした: {e}",
             )
 
     def _on_import_config_clicked(self, dialog: DetectConfigDialog):
@@ -593,7 +600,7 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "インポートするJSONを選択",
-            str(self.detect_config_service.base_dir),
+            str(self.detect_config_service.config_path.parent),
             "JSON Files (*.json);;All Files (*)",
         )
         if not file_path:
@@ -625,7 +632,7 @@ class MainWindow(QMainWindow):
 
     def _on_export_config_clicked(self, dialog: DetectConfigDialog):
         """設定ファイルのエクスポート"""
-        default_path = self.detect_config_service.base_dir / ".config.json"
+        default_path = self.detect_config_service.config_path
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "エクスポート先を選択",

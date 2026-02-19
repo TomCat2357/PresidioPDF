@@ -1,7 +1,7 @@
 """
-PresidioPDF PyQt - 検出設定(.config.json)管理
+PresidioPDF PyQt - 検出設定(config.json)管理
 
-- $HOME/.config.json を読み込み
+- $HOME/.presidio/config.json を読み込み
 - 未存在時は自動生成
 - インポート/エクスポートを提供
 """
@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 class DetectConfigService:
     """GUI用検出設定の管理サービス"""
 
-    CONFIG_FILE_NAME = ".config.json"
+    CONFIG_DIR_NAME = ".presidio"
+    CONFIG_FILE_NAME = "config.json"
+    DISPLAY_FILE_NAME = "config.toml"
     SPACY_MODELS = [
         "ja_core_news_sm",
         "ja_core_news_md",
@@ -53,7 +55,7 @@ class DetectConfigService:
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else Path.home()
-        self.config_path = self.base_dir / self.CONFIG_FILE_NAME
+        self.config_path = self.base_dir / self.CONFIG_DIR_NAME / self.CONFIG_FILE_NAME
 
     def ensure_config_file(self) -> List[str]:
         """設定ファイルを保証し、有効エンティティ一覧を返す"""
@@ -72,12 +74,12 @@ class DetectConfigService:
             return list(fallback.get("enabled_entities", list(self.ENTITY_TYPES)))
 
     def ensure_json_config_file(self) -> Path:
-        """互換: .config.json の存在を保証してパスを返す"""
+        """互換: config.json の存在を保証してパスを返す"""
         self.ensure_config_file()
         return self.config_path
 
     def load_enabled_entities(self) -> List[str]:
-        """設定ファイル(.config.json)から有効エンティティ一覧を読み込む"""
+        """設定ファイル(config.json)から有効エンティティ一覧を読み込む"""
         if not self.config_path.exists():
             return list(self.ENTITY_TYPES)
 
@@ -89,7 +91,7 @@ class DetectConfigService:
             return list(self.ENTITY_TYPES)
 
     def save_enabled_entities(self, entities: List[str]) -> List[str]:
-        """有効エンティティ一覧を .config.json へ保存（他設定は保持）"""
+        """有効エンティティ一覧を config.json へ保存（他設定は保持）"""
         normalized = self._normalize_entities(entities)
         data = self._load_json(self.config_path) if self.config_path.exists() else {}
         if not isinstance(data, dict):
@@ -192,14 +194,14 @@ class DetectConfigService:
         return dict(data["duplicate_settings"])
 
     def import_from(self, source_path: Path) -> List[str]:
-        """外部JSONを読み込み、$HOME/.config.jsonへ反映"""
+        """外部JSONを読み込み、$HOME/.presidio/config.jsonへ反映"""
         data = self._load_json(Path(source_path))
         normalized_data = self._normalize_config_data(data)
         self._write_json(normalized_data)
         return list(normalized_data.get("enabled_entities", list(self.ENTITY_TYPES)))
 
     def export_to(self, output_path: Path) -> Path:
-        """$HOME/.config.jsonを指定先へ出力"""
+        """$HOME/.presidio/config.jsonを指定先へ出力"""
         if not self.config_path.exists():
             self._write_json(self._default_json_config())
 
@@ -252,7 +254,7 @@ class DetectConfigService:
         try:
             data = self._load_json(self.config_path)
         except Exception as exc:
-            logger.warning(f".config.json の読み込みに失敗: {self.config_path} ({exc})")
+            logger.warning(f"config.json の読み込みに失敗: {self.config_path} ({exc})")
             return [], []
 
         add_patterns: List[Tuple[str, str]] = []
@@ -407,6 +409,6 @@ class DetectConfigService:
         return json.loads(text or "{}")
 
     def _write_json(self, data: Dict[str, Any]) -> None:
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
         self.config_path.write_text(text, encoding="utf-8")
