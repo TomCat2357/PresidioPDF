@@ -363,15 +363,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
+        initial_dir = self.detect_config_service.load_last_directory("open")
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "PDFファイルを選択",
-            "",
+            initial_dir,
             "PDF Files (*.pdf);;All Files (*)"
         )
 
         if not file_path:
             return
+        self.detect_config_service.save_last_directory("open", str(Path(file_path).parent))
         if not self._maybe_proceed_with_unsaved():
             return
         self._open_pdf_path(Path(file_path))
@@ -996,16 +998,19 @@ class MainWindow(QMainWindow):
             return False
 
         default_name = self.app_state.pdf_path.stem + "_saved.pdf"
+        save_dir = self.detect_config_service.load_last_directory("save")
+        initial_save = str(Path(save_dir) / default_name) if save_dir else default_name
 
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "保存先を選択",
-            default_name,
+            initial_save,
             "PDF Files (*.pdf);;All Files (*)"
         )
 
         if not output_path:
             return False
+        self.detect_config_service.save_last_directory("save", str(Path(output_path).parent))
 
         try:
             # マッピング未生成時はreadを同期実行して補完
@@ -1053,15 +1058,17 @@ class MainWindow(QMainWindow):
     def on_load_session(self):
         """セッション読込処理（保存したセッションの復元）"""
         # 読込ファイルを選択
+        initial_dir = self.detect_config_service.load_last_directory("session")
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "セッションファイルを選択",
-            "",
+            initial_dir,
             "JSON Files (*.json);;All Files (*)"
         )
 
         if not file_path:
             return
+        self.detect_config_service.save_last_directory("session", str(Path(file_path).parent))
 
         try:
             # JSONファイルを読み込み

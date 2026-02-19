@@ -193,6 +193,34 @@ class DetectConfigService:
         self._write_json(data)
         return dict(data["duplicate_settings"])
 
+    def load_last_directory(self, key: str) -> str:
+        """最後に使用したディレクトリパスを返す（存在しなければ空文字列）"""
+        try:
+            if self.config_path.exists():
+                data = self._load_json(self.config_path)
+                if isinstance(data, dict):
+                    last_dirs = data.get("last_directories", {})
+                    if isinstance(last_dirs, dict):
+                        return str(last_dirs.get(key, "") or "")
+        except Exception as exc:
+            logger.warning(f"last_directories の読み込みに失敗: {exc}")
+        return ""
+
+    def save_last_directory(self, key: str, directory: str) -> None:
+        """最後に使用したディレクトリパスを config.json に保存する"""
+        try:
+            data = self._load_json(self.config_path) if self.config_path.exists() else {}
+            if not isinstance(data, dict):
+                data = {}
+            last_dirs = data.get("last_directories", {})
+            if not isinstance(last_dirs, dict):
+                last_dirs = {}
+            last_dirs[key] = str(directory or "")
+            data["last_directories"] = last_dirs
+            self._write_json(data)
+        except Exception as exc:
+            logger.warning(f"last_directories の保存に失敗: {exc}")
+
     def import_from(self, source_path: Path) -> List[str]:
         """外部JSONを読み込み、$HOME/.presidio/config.jsonへ反映"""
         data = self._load_json(Path(source_path))

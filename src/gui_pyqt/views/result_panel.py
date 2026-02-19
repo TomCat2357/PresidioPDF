@@ -225,6 +225,12 @@ class ResultPanel(QWidget):
         header.sectionClicked.connect(self.on_header_clicked)
         header.setSortIndicatorShown(False)
 
+        self.results_table.setStyleSheet("""
+            QTableWidget::item:selected {
+                background-color: #1a73e8;
+                color: #ffffff;
+            }
+        """)
         layout.addWidget(self.results_table)
 
         self.setLayout(layout)
