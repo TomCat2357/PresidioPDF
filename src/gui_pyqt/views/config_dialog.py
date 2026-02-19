@@ -59,6 +59,7 @@ class DetectConfigDialog(QDialog):
         self._installed_models: List[str] = list(installed_models or [])
         self._all_models: List[str] = list(all_models or [])
         self._file_watcher: Optional[QFileSystemWatcher] = None
+        self._suspend_auto_save = False
         self._init_ui()
         self.set_enabled_entities(enabled_entities)
         self.set_duplicate_settings(
@@ -147,19 +148,42 @@ class DetectConfigDialog(QDialog):
         layout.addLayout(action_row)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Close
         )
-        buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
         self.setLayout(layout)
+        self._connect_auto_save_signals()
+
+    def _connect_auto_save_signals(self):
+        for checkbox in self.checkboxes.values():
+            checkbox.toggled.connect(self._on_ui_value_changed)
+        if self.entity_overlap_same_radio:
+            self.entity_overlap_same_radio.toggled.connect(self._on_ui_value_changed)
+        if self.entity_overlap_any_radio:
+            self.entity_overlap_any_radio.toggled.connect(self._on_ui_value_changed)
+        if self.overlap_contain_radio:
+            self.overlap_contain_radio.toggled.connect(self._on_ui_value_changed)
+        if self.overlap_overlap_radio:
+            self.overlap_overlap_radio.toggled.connect(self._on_ui_value_changed)
+        if self.model_combo:
+            self.model_combo.currentIndexChanged.connect(self._on_ui_value_changed)
+
+    def _on_ui_value_changed(self, *_):
+        if self._suspend_auto_save:
+            return
+        self.save_current_to_file()
 
     def set_enabled_entities(self, enabled_entities: List[str]):
         enabled = {str(name).strip().upper() for name in (enabled_entities or [])}
-        for entity, checkbox in self.checkboxes.items():
-            checkbox.setChecked(entity in enabled)
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            for entity, checkbox in self.checkboxes.items():
+                checkbox.setChecked(entity in enabled)
+        finally:
+            self._suspend_auto_save = previous
 
     def get_enabled_entities(self) -> List[str]:
         result = []
@@ -171,18 +195,23 @@ class DetectConfigDialog(QDialog):
 
     def set_duplicate_settings(self, entity_overlap_mode: str, overlap_mode: str):
         entity_mode = str(entity_overlap_mode or "any").strip().lower()
-        if self.entity_overlap_same_radio and self.entity_overlap_any_radio:
-            if entity_mode == "same":
-                self.entity_overlap_same_radio.setChecked(True)
-            else:
-                self.entity_overlap_any_radio.setChecked(True)
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            if self.entity_overlap_same_radio and self.entity_overlap_any_radio:
+                if entity_mode == "same":
+                    self.entity_overlap_same_radio.setChecked(True)
+                else:
+                    self.entity_overlap_any_radio.setChecked(True)
 
-        overlap = str(overlap_mode or "overlap").strip().lower()
-        if self.overlap_contain_radio and self.overlap_overlap_radio:
-            if overlap == "contain":
-                self.overlap_contain_radio.setChecked(True)
-            else:
-                self.overlap_overlap_radio.setChecked(True)
+            overlap = str(overlap_mode or "overlap").strip().lower()
+            if self.overlap_contain_radio and self.overlap_overlap_radio:
+                if overlap == "contain":
+                    self.overlap_contain_radio.setChecked(True)
+                else:
+                    self.overlap_overlap_radio.setChecked(True)
+        finally:
+            self._suspend_auto_save = previous
 
     def get_duplicate_settings(self) -> Dict[str, str]:
         entity_overlap_mode = "any"
@@ -206,10 +235,15 @@ class DetectConfigDialog(QDialog):
     def set_spacy_model(self, model_name: str):
         if not self.model_combo:
             return
-        for i in range(self.model_combo.count()):
-            if self.model_combo.itemData(i) == model_name:
-                self.model_combo.setCurrentIndex(i)
-                return
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            for i in range(self.model_combo.count()):
+                if self.model_combo.itemData(i) == model_name:
+                    self.model_combo.setCurrentIndex(i)
+                    return
+        finally:
+            self._suspend_auto_save = previous
 
     def _on_select_all_clicked(self):
         checkboxes = list(self.checkboxes.values())
@@ -217,8 +251,14 @@ class DetectConfigDialog(QDialog):
             return
 
         should_select_all = not all(checkbox.isChecked() for checkbox in checkboxes)
-        for checkbox in checkboxes:
-            checkbox.setChecked(should_select_all)
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            for checkbox in checkboxes:
+                checkbox.setChecked(should_select_all)
+        finally:
+            self._suspend_auto_save = previous
+        self._on_ui_value_changed()
 
     # ── ファイル監視・同期 ──
 

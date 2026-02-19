@@ -545,22 +545,14 @@ class MainWindow(QMainWindow):
                     lambda: self._on_open_json_config_clicked(dialog)
                 )
 
-            if not dialog.exec():
-                return
+            dialog.exec()
 
-            self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
-                dialog.get_enabled_entities()
-            )
-            duplicate_settings = dialog.get_duplicate_settings()
-            saved_duplicate_settings = self.detect_config_service.save_duplicate_settings(
-                duplicate_settings["entity_overlap_mode"],
-                duplicate_settings["overlap"],
-            )
+            # 設定はダイアログでリアルタイム保存されるため、終了後に再読込する
+            self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
+            saved_duplicate_settings = self.detect_config_service.load_duplicate_settings()
             self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
-            selected_model = dialog.get_spacy_model()
-            if selected_model:
-                self.spacy_model = self.detect_config_service.save_spacy_model(selected_model)
+            self.spacy_model = self.detect_config_service.load_spacy_model()
             self.log_message(
                 f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
                 f"({self.detect_config_service.config_path.name}), "
