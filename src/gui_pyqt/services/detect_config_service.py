@@ -22,14 +22,14 @@ class DetectConfigService:
 
     CONFIG_FILE_NAME = ".config.json"
     SPACY_MODELS = [
-        "ja_ginza_electra",
-        "ja_ginza",
-        "ja_core_news_trf",
-        "ja_core_news_lg",
-        "ja_core_news_md",
         "ja_core_news_sm",
+        "ja_core_news_md",
+        "ja_core_news_lg",
+        "ja_core_news_trf",
+        "ja_ginza",
+        "ja_ginza_electra",
     ]
-    DEFAULT_SPACY_MODEL = "ja_core_news_lg"
+    DEFAULT_SPACY_MODEL = "ja_core_news_sm"
     ENTITY_TYPES = [
         "PERSON",
         "LOCATION",

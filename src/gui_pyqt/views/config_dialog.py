@@ -32,7 +32,7 @@ class DetectConfigDialog(QDialog):
         config_path: Path,
         duplicate_entity_overlap_mode: str = "any",
         duplicate_overlap_mode: str = "overlap",
-        spacy_model: str = "ja_core_news_trf",
+        spacy_model: str = "ja_core_news_sm",
         installed_models: Optional[List[str]] = None,
         all_models: Optional[List[str]] = None,
         parent=None,

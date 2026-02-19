@@ -100,7 +100,7 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         """UIの初期化"""
         # ウィンドウの基本設定
-        self.setWindowTitle("PresidioPDF - PyQt版 (Phase 4)")
+        self.setWindowTitle("PresidioPDF")
         self.setGeometry(100, 100, 1400, 900)
 
         # ツールバーの作成

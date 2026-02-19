@@ -14,8 +14,16 @@ def _read_config(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_spacy_models_prioritize_ginza_electra_then_ginza():
-    assert DetectConfigService.SPACY_MODELS[:2] == ["ja_ginza_electra", "ja_ginza"]
+def test_spacy_models_order_and_default():
+    assert DetectConfigService.SPACY_MODELS == [
+        "ja_core_news_sm",
+        "ja_core_news_md",
+        "ja_core_news_lg",
+        "ja_core_news_trf",
+        "ja_ginza",
+        "ja_ginza_electra",
+    ]
+    assert DetectConfigService.DEFAULT_SPACY_MODEL == "ja_core_news_sm"
 
 
 def test_add_entity_preserves_unknown_japanese_keys(tmp_path):
