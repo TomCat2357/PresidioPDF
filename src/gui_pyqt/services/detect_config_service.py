@@ -233,7 +233,11 @@ class DetectConfigService:
         if raw_entities is None:
             return list(self.ENTITY_TYPES)
         normalized = self._normalize_entities(raw_entities)
-        return normalized if normalized else list(self.ENTITY_TYPES)
+        if normalized:
+            return normalized
+        if len(raw_entities) == 0:
+            return []
+        return list(self.ENTITY_TYPES)
 
     def _normalize_entities(self, entities: List[Any]) -> List[str]:
         normalized: List[str] = []

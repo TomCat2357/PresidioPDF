@@ -113,4 +113,9 @@ ja-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/do
 ja-ginza = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.2.0/ja_ginza-5.2.0-py3-none-any.whl" }
 ja-ginza-electra = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.2.0/ja_ginza_electra-5.2.0-py3-none-any.whl" }
 
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+]
+
 # [dependency-groups] - 不要なので削除

@@ -508,8 +508,11 @@ class MainWindow(QMainWindow):
 
         try:
             current_enabled = self.detect_config_service.ensure_config_file()
-            if current_enabled:
-                self.enabled_detect_entities = current_enabled
+            dialog_enabled_entities = (
+                list(current_enabled)
+                if isinstance(current_enabled, list)
+                else list(self.enabled_detect_entities)
+            )
             duplicate_settings = self.detect_config_service.load_duplicate_settings()
             self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
@@ -518,7 +521,7 @@ class MainWindow(QMainWindow):
 
             dialog = DetectConfigDialog(
                 entity_types=DetectConfigService.ENTITY_TYPES,
-                enabled_entities=self.enabled_detect_entities,
+                enabled_entities=dialog_enabled_entities,
                 config_path=self.detect_config_service.config_path,
                 duplicate_entity_overlap_mode=self.duplicate_entity_overlap_mode,
                 duplicate_overlap_mode=self.duplicate_overlap_mode,

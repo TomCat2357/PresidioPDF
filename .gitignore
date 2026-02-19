@@ -18,7 +18,7 @@ tmp_docs/
 # 環境変数
 .env
 
-tests/
+
 
 # パッケージマネージャ関連
 uv.lock

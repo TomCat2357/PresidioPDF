@@ -61,6 +61,23 @@ def test_add_entity_preserves_unknown_japanese_keys(tmp_path):
     assert add_entity.get("ほげほげ") == ["テスト語"]
 
 
+def test_explicit_empty_enabled_entities_is_preserved(tmp_path):
+    service = DetectConfigService(tmp_path)
+    config_path = service.config_path
+    _write_config(
+        config_path,
+        {
+            "enabled_entities": [],
+        },
+    )
+
+    loaded = service.ensure_config_file()
+    normalized = _read_config(config_path)
+
+    assert loaded == []
+    assert normalized.get("enabled_entities") == []
+
+
 def test_save_operations_do_not_drop_unknown_add_entity_keys(tmp_path):
     service = DetectConfigService(tmp_path)
     config_path = service.config_path
