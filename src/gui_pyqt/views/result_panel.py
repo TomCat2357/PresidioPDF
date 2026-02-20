@@ -466,7 +466,7 @@ class ResultPanel(QWidget):
             "確認",
             f"{count}件のエンティティを削除しますか?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.Yes
         )
 
         if reply != QMessageBox.StandardButton.Yes:
