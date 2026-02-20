@@ -166,6 +166,13 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.on_open_pdf)
         toolbar.addAction(open_action)
 
+        # ファイルを閉じる
+        close_pdf_action = QAction("閉じる", self)
+        close_pdf_action.setStatusTip("現在開いているPDFファイルを閉じる")
+        close_pdf_action.triggered.connect(self.on_close_pdf)
+        toolbar.addAction(close_pdf_action)
+        self.close_pdf_action = close_pdf_action
+
         # 設定（検出/重複設定）
         config_action = QAction("設定", self)
         config_action.setStatusTip(
@@ -377,6 +384,27 @@ class MainWindow(QMainWindow):
         if not self._maybe_proceed_with_unsaved():
             return
         self._open_pdf_path(Path(file_path))
+
+    def on_close_pdf(self):
+        """現在開いているPDFファイルを閉じる"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        if not self.app_state.has_pdf():
+            return
+
+        if not self._maybe_proceed_with_unsaved():
+            return
+
+        closed_pdf = self.app_state.pdf_path
+        self.app_state.clear()
+        self._reset_detect_scope_context()
+        self._reset_duplicate_scope_context()
+        self._set_dirty(False)
+        self.update_action_states()
+        if closed_pdf:
+            self.log_message(f"PDFファイルを閉じました: {closed_pdf}")
 
     def on_pdf_dropped(self, file_path: str):
         """左ペインへドロップされたPDFを開く"""
@@ -1863,6 +1891,9 @@ class MainWindow(QMainWindow):
 
         # Read: PDFが選択されていて、タスクが実行中でなければ有効
         self.read_action.setEnabled(has_pdf and not is_running)
+
+        # ファイルを閉じる: PDFが選択されていて、タスクが実行中でなければ有効
+        self.close_pdf_action.setEnabled(has_pdf and not is_running)
 
         # 設定: タスク実行中は無効
         self.config_action.setEnabled(not is_running)

@@ -29,7 +29,7 @@ from src.core.entity_types import get_entity_type_name_ja
 
 class DetectConfigDialog(QDialog):
     """検出エンティティ設定ダイアログ"""
-    DISPLAY_CONFIG_NAME = "config.toml"
+    DISPLAY_CONFIG_NAME = "config.json"
 
     def __init__(
         self,

@@ -22,7 +22,7 @@ class DetectConfigService:
 
     CONFIG_DIR_NAME = ".presidio"
     CONFIG_FILE_NAME = "config.json"
-    DISPLAY_FILE_NAME = "config.toml"
+    DISPLAY_FILE_NAME = "config.json"
     SPACY_MODELS = [
         "ja_core_news_sm",
         "ja_core_news_md",
