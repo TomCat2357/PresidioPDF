@@ -29,6 +29,8 @@ class Analyzer:
             config_manager: 設定管理インスタンス
         """
         self.config_manager = config_manager
+        self._chunk_delimiter = config_manager.get_chunk_delimiter()
+        self._chunk_max_chars = config_manager.get_chunk_max_chars()
         self.analyzer = self._setup_presidio()
 
     def _setup_presidio(self) -> AnalyzerEngine:
@@ -141,10 +143,10 @@ class Analyzer:
         if entities is None:
             entities = self.config_manager.get_enabled_entities()
 
-        text_bytes = len(text.encode("utf-8"))
-        if text_bytes > 45000:
+        max_chars = self._chunk_max_chars
+        if len(text) > max_chars:
             logger.info(
-                f"大容量テキスト検出 ({text_bytes:,} bytes) - チャンク処理を実行"
+                f"大容量テキスト検出 ({len(text):,} 文字) - チャンク処理を実行"
             )
             return self._analyze_text_chunked(text, entities)
 
@@ -249,13 +251,13 @@ class Analyzer:
 
             try:
                 logger.debug(
-                    f"チャンク {i+1}/{len(chunks)} 処理中 (サイズ: {len(chunk_text.encode('utf-8'))} bytes)"
+                    f"チャンク {i+1}/{len(chunks)} 処理中 ({len(chunk_text):,} 文字)"
                 )
                 chunk_results = self._analyze_text_single(chunk_text, entities)
 
                 for result in chunk_results:
-                    result["start"] += len(text[:start_offset])
-                    result["end"] += len(text[:start_offset])
+                    result["start"] += start_offset
+                    result["end"] += start_offset
 
                 all_results.extend(chunk_results)
 
@@ -267,10 +269,10 @@ class Analyzer:
 
     def _detect_proper_nouns(self, text: str) -> List[RecognizerResult]:
         """固有名詞を検出（大容量テキスト対応）"""
-        text_bytes = len(text.encode("utf-8"))
-        if text_bytes > 45000:
+        max_chars = self._chunk_max_chars
+        if len(text) > max_chars:
             logger.debug(
-                f"固有名詞検出: 大容量テキスト ({text_bytes:,} bytes) - チャンク処理"
+                f"固有名詞検出: 大容量テキスト ({len(text):,} 文字) - チャンク処理"
             )
             return self._detect_proper_nouns_chunked(text)
 
@@ -307,8 +309,8 @@ class Analyzer:
                 chunk_results = self._detect_proper_nouns_single(chunk_text)
 
                 for result in chunk_results:
-                    result.start += len(text[:start_offset])
-                    result.end += len(text[:start_offset])
+                    result.start += start_offset
+                    result.end += start_offset
 
                 all_results.extend(chunk_results)
 
@@ -318,37 +320,51 @@ class Analyzer:
 
         return all_results
 
-    def _chunk_text(self, text: str, max_bytes: int = 45000) -> List[Dict]:
-        """テキストをチャンクに分割（spaCyの制限対応）"""
-        chunks = []
-        text_bytes = text.encode("utf-8")
+    def _chunk_text(self, text: str) -> List[Dict]:
+        """テキストをチャンクに分割（区切り文字→文字数フォールバック）"""
+        max_chars = self._chunk_max_chars
 
-        if len(text_bytes) <= max_bytes:
+        if len(text) <= max_chars:
             return [{"text": text, "start_offset": 0}]
 
-        sentences = text.split("\n")
-        current_chunk = ""
-        current_offset = 0
+        delimiter = self._chunk_delimiter
+        chunks = []
 
-        for sentence in sentences:
-            sentence_with_newline = sentence + "\n"
-            test_chunk = current_chunk + sentence_with_newline
+        # 1) 区切り文字で分割を試みる
+        segments = text.split(delimiter)
 
-            if len(test_chunk.encode("utf-8")) > max_bytes and current_chunk:
+        if len(segments) > 1:
+            current_chunk = ""
+            current_offset = 0
+
+            for i, segment in enumerate(segments):
+                # 最後のセグメント以外は区切り文字を付加
+                seg = segment + delimiter if i < len(segments) - 1 else segment
+                test_chunk = current_chunk + seg
+
+                if len(test_chunk) > max_chars and current_chunk:
+                    chunks.append(
+                        {"text": current_chunk, "start_offset": current_offset}
+                    )
+                    current_offset += len(current_chunk)
+                    current_chunk = seg
+                else:
+                    current_chunk = test_chunk
+
+            if current_chunk:
                 chunks.append(
-                    {"text": current_chunk.rstrip(), "start_offset": current_offset}
+                    {"text": current_chunk, "start_offset": current_offset}
                 )
-                current_offset += len(current_chunk.encode("utf-8"))
-                current_chunk = sentence_with_newline
-            else:
-                current_chunk = test_chunk
-
-        if current_chunk.strip():
-            chunks.append(
-                {"text": current_chunk.rstrip(), "start_offset": current_offset}
+        else:
+            # 2) 区切り文字がない場合、文字数で強制分割
+            logger.info(
+                f"区切り文字 '{delimiter}' が見つからないため文字数で分割"
             )
+            for start in range(0, len(text), max_chars):
+                end = min(start + max_chars, len(text))
+                chunks.append({"text": text[start:end], "start_offset": start})
 
-        return chunks
+        return chunks if chunks else [{"text": text, "start_offset": 0}]
 
     # Analyzer系の独自重複除去実装は廃止（共通ユーティリティへ移行）
 

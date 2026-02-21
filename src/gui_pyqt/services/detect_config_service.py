@@ -52,6 +52,10 @@ class DetectConfigService:
         "entity_overlap_mode": "any",
         "overlap": "overlap",
     }
+    DEFAULT_CHUNK_SETTINGS = {
+        "delimiter": "。",
+        "max_chars": 15000,
+    }
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else Path.home()
@@ -358,6 +362,54 @@ class DetectConfigService:
             merged.append(pattern)
         return merged
 
+    def load_chunk_settings(self) -> Dict[str, Any]:
+        """チャンク分割設定を読み込む"""
+        self.ensure_config_file()
+        try:
+            data = self._normalize_config_data(self._load_json(self.config_path))
+            return data.get("chunk_settings", dict(self.DEFAULT_CHUNK_SETTINGS))
+        except Exception as exc:
+            logger.warning(f"チャンク設定の読み込みに失敗: {self.config_path} ({exc})")
+        return dict(self.DEFAULT_CHUNK_SETTINGS)
+
+    def save_chunk_settings(self, delimiter: str, max_chars: int) -> Dict[str, Any]:
+        """チャンク分割設定を保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+        data["chunk_settings"] = {
+            "delimiter": str(delimiter or "。"),
+            "max_chars": max(100, int(max_chars or 15000)),
+        }
+        self._write_json(data)
+        return dict(data["chunk_settings"])
+
+    def _extract_chunk_settings(self, data: Any) -> Dict[str, Any]:
+        """チャンク分割設定を抽出・正規化する"""
+        if not isinstance(data, dict):
+            return dict(self.DEFAULT_CHUNK_SETTINGS)
+
+        chunk_section = data.get("chunk_settings", {})
+        if not isinstance(chunk_section, dict):
+            chunk_section = {}
+
+        delimiter = chunk_section.get(
+            "delimiter", self.DEFAULT_CHUNK_SETTINGS["delimiter"]
+        )
+        if not isinstance(delimiter, str) or not delimiter:
+            delimiter = self.DEFAULT_CHUNK_SETTINGS["delimiter"]
+
+        max_chars = chunk_section.get(
+            "max_chars", self.DEFAULT_CHUNK_SETTINGS["max_chars"]
+        )
+        try:
+            max_chars = max(100, int(max_chars))
+        except (ValueError, TypeError):
+            max_chars = self.DEFAULT_CHUNK_SETTINGS["max_chars"]
+
+        return {"delimiter": delimiter, "max_chars": max_chars}
+
     def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
         if not isinstance(data, dict):
             return dict(self.DEFAULT_DUPLICATE_SETTINGS)
@@ -395,6 +447,7 @@ class DetectConfigService:
             "add_entity": {entity: [] for entity in cls.ENTITY_TYPES},
             "ommit_entity": [],
             "duplicate_settings": dict(cls.DEFAULT_DUPLICATE_SETTINGS),
+            "chunk_settings": dict(cls.DEFAULT_CHUNK_SETTINGS),
         }
 
     def _normalize_config_data(self, data: Any) -> Dict[str, Any]:
@@ -432,6 +485,7 @@ class DetectConfigService:
         normalized.pop("omit_entity", None)
 
         normalized["duplicate_settings"] = self._extract_duplicate_settings(normalized)
+        normalized["chunk_settings"] = self._extract_chunk_settings(normalized)
 
         return normalized
 

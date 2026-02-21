@@ -84,6 +84,8 @@ class ConfigManager:
                     "ja_core_news_sm",
                 ],
                 "auto_download": True,
+                "chunk_delimiter": "。",
+                "chunk_max_chars": 15000,
             },
             "deduplication": {
                 "enabled": False,  # デフォルトは無効
@@ -583,6 +585,26 @@ class ConfigManager:
             models = ["ja_core_news_trf", "ja_ginza_electra", "ja_ginza", "ja_core_news_lg"]
 
         return tuple(models)
+
+    def get_chunk_delimiter(self) -> str:
+        """チャンク分割の区切り文字を返す"""
+        return self._safe_get_config("nlp.chunk_delimiter", "。")
+
+    def set_chunk_delimiter(self, delimiter: str):
+        """チャンク分割の区切り文字を設定する"""
+        if "nlp" not in self.config:
+            self.config["nlp"] = {}
+        self.config["nlp"]["chunk_delimiter"] = str(delimiter or "。")
+
+    def get_chunk_max_chars(self) -> int:
+        """チャンク分割の最大文字数を返す"""
+        return self._safe_get_config("nlp.chunk_max_chars", 15000)
+
+    def set_chunk_max_chars(self, max_chars: int):
+        """チャンク分割の最大文字数を設定する"""
+        if "nlp" not in self.config:
+            self.config["nlp"] = {}
+        self.config["nlp"]["chunk_max_chars"] = max(100, int(max_chars or 15000))
 
     def get_fallback_models(self) -> List[str]:
         """フォールバックモデルのリストを返す"""

@@ -548,6 +548,7 @@ class MainWindow(QMainWindow):
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
             installed_models = DetectConfigService.get_installed_spacy_models()
+            chunk_settings = self.detect_config_service.load_chunk_settings()
 
             dialog = DetectConfigDialog(
                 entity_types=DetectConfigService.ENTITY_TYPES,
@@ -558,6 +559,8 @@ class MainWindow(QMainWindow):
                 spacy_model=self.spacy_model,
                 installed_models=installed_models,
                 all_models=DetectConfigService.SPACY_MODELS,
+                chunk_delimiter=chunk_settings.get("delimiter", "。"),
+                chunk_max_chars=chunk_settings.get("max_chars", 15000),
                 parent=self,
             )
             if dialog.import_button:
@@ -734,9 +737,12 @@ class MainWindow(QMainWindow):
             else None
         )
 
+        chunk_settings = self.detect_config_service.load_chunk_settings()
         task_kwargs: Dict[str, Any] = {
             "entities": list(self.enabled_detect_entities),
             "model_names": (self.spacy_model,),
+            "chunk_delimiter": chunk_settings.get("delimiter", "。"),
+            "chunk_max_chars": chunk_settings.get("max_chars", 15000),
         }
         add_patterns, omit_patterns = self.detect_config_service.load_custom_patterns()
         if add_patterns:

@@ -19,8 +19,10 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -41,6 +43,8 @@ class DetectConfigDialog(QDialog):
         spacy_model: str = "ja_core_news_sm",
         installed_models: Optional[List[str]] = None,
         all_models: Optional[List[str]] = None,
+        chunk_delimiter: str = "。",
+        chunk_max_chars: int = 15000,
         parent=None,
     ):
         super().__init__(parent)
@@ -56,6 +60,8 @@ class DetectConfigDialog(QDialog):
         self.overlap_contain_radio: Optional[QRadioButton] = None
         self.overlap_overlap_radio: Optional[QRadioButton] = None
         self.model_combo: Optional[QComboBox] = None
+        self.chunk_delimiter_edit: Optional[QLineEdit] = None
+        self.chunk_max_chars_spin: Optional[QSpinBox] = None
         self._installed_models: List[str] = list(installed_models or [])
         self._all_models: List[str] = list(all_models or [])
         self._file_watcher: Optional[QFileSystemWatcher] = None
@@ -67,6 +73,7 @@ class DetectConfigDialog(QDialog):
             duplicate_overlap_mode,
         )
         self.set_spacy_model(spacy_model)
+        self.set_chunk_settings(chunk_delimiter, chunk_max_chars)
         self._start_watching()
 
     def _init_ui(self):
@@ -137,6 +144,33 @@ class DetectConfigDialog(QDialog):
         duplicate_group.setLayout(duplicate_layout)
         layout.addWidget(duplicate_group)
 
+        # チャンク分割設定
+        chunk_group = QGroupBox("テキスト分割設定")
+        chunk_layout = QHBoxLayout()
+
+        delim_label = QLabel("区切り文字:")
+        self.chunk_delimiter_edit = QLineEdit()
+        self.chunk_delimiter_edit.setMaximumWidth(60)
+        self.chunk_delimiter_edit.setToolTip(
+            "大容量テキストを分割する際の区切り文字（デフォルト: 。）"
+        )
+        chunk_layout.addWidget(delim_label)
+        chunk_layout.addWidget(self.chunk_delimiter_edit)
+
+        chars_label = QLabel("最大文字数:")
+        self.chunk_max_chars_spin = QSpinBox()
+        self.chunk_max_chars_spin.setRange(100, 100000)
+        self.chunk_max_chars_spin.setSingleStep(1000)
+        self.chunk_max_chars_spin.setToolTip(
+            "1チャンクあたりの最大文字数（デフォルト: 15000）"
+        )
+        chunk_layout.addWidget(chars_label)
+        chunk_layout.addWidget(self.chunk_max_chars_spin)
+        chunk_layout.addStretch()
+
+        chunk_group.setLayout(chunk_layout)
+        layout.addWidget(chunk_group)
+
         action_row = QHBoxLayout()
         self.open_json_button = QPushButton(self.DISPLAY_CONFIG_NAME)
         self.import_button = QPushButton("インポート")
@@ -169,6 +203,10 @@ class DetectConfigDialog(QDialog):
             self.overlap_overlap_radio.toggled.connect(self._on_ui_value_changed)
         if self.model_combo:
             self.model_combo.currentIndexChanged.connect(self._on_ui_value_changed)
+        if self.chunk_delimiter_edit:
+            self.chunk_delimiter_edit.textChanged.connect(self._on_ui_value_changed)
+        if self.chunk_max_chars_spin:
+            self.chunk_max_chars_spin.valueChanged.connect(self._on_ui_value_changed)
 
     def _on_ui_value_changed(self, *_):
         if self._suspend_auto_save:
@@ -245,6 +283,26 @@ class DetectConfigDialog(QDialog):
         finally:
             self._suspend_auto_save = previous
 
+    def set_chunk_settings(self, delimiter: str, max_chars: int):
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            if self.chunk_delimiter_edit:
+                self.chunk_delimiter_edit.setText(str(delimiter or "。"))
+            if self.chunk_max_chars_spin:
+                self.chunk_max_chars_spin.setValue(max(100, int(max_chars or 15000)))
+        finally:
+            self._suspend_auto_save = previous
+
+    def get_chunk_settings(self) -> Dict[str, Any]:
+        delimiter = "。"
+        max_chars = 15000
+        if self.chunk_delimiter_edit:
+            delimiter = self.chunk_delimiter_edit.text() or "。"
+        if self.chunk_max_chars_spin:
+            max_chars = self.chunk_max_chars_spin.value()
+        return {"delimiter": delimiter, "max_chars": max_chars}
+
     def _on_select_all_clicked(self):
         checkboxes = list(self.checkboxes.values())
         if not checkboxes:
@@ -289,6 +347,13 @@ class DetectConfigDialog(QDialog):
                     dup.get("entity_overlap_mode", "any"),
                     dup.get("overlap", "overlap"),
                 )
+            # チャンク分割設定
+            chunk = data.get("chunk_settings", {})
+            if isinstance(chunk, dict):
+                self.set_chunk_settings(
+                    chunk.get("delimiter", "。"),
+                    chunk.get("max_chars", 15000),
+                )
         except Exception as exc:
             logger.warning(f"設定ファイルの変更反映に失敗: {exc}")
         finally:
@@ -311,6 +376,7 @@ class DetectConfigDialog(QDialog):
             model = self.get_spacy_model()
             if model:
                 data["spacy_model"] = model
+            data["chunk_settings"] = self.get_chunk_settings()
             # 書き込み中は監視を一時停止して自己トリガーを防ぐ
             config_str = str(self.config_path)
             if self._file_watcher:

@@ -164,6 +164,8 @@ class PipelineService:
         add_patterns: Optional[List[Tuple[str, str]]] = None,
         exclude_patterns: Optional[List[str]] = None,
         page_filter: Optional[List[int]] = None,
+        chunk_delimiter: Optional[str] = None,
+        chunk_max_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         """PII検出処理（detect）
 
@@ -211,6 +213,12 @@ class PipelineService:
             model_names = cfg.get_models()
         else:
             model_names = cfg.get_models()
+
+        # チャンク分割設定の適用
+        if chunk_delimiter is not None:
+            cfg.set_chunk_delimiter(chunk_delimiter)
+        if chunk_max_chars is not None:
+            cfg.set_chunk_max_chars(chunk_max_chars)
 
         # read_resultからテキストとメタデータを取得
         metadata = read_result.get("metadata", {}) or {}
