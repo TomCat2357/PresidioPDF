@@ -8,7 +8,8 @@ Phase 4: 編集UI
 - テーブル選択時のシグナル発行
 """
 
-from typing import Optional, List, Dict, Any
+import re
+from typing import Optional, List, Dict, Any, Pattern
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -16,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QTableWidget,
     QTableWidgetItem,
+    QHeaderView,
     QMenu,
     QPushButton,
     QMessageBox,
@@ -23,6 +25,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QDialogButtonBox,
+    QLineEdit,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QItemSelectionModel
 from PyQt6.QtGui import QAction, QShortcut, QKeySequence
@@ -184,8 +187,12 @@ class ResultPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.entities: List[Dict] = []  # 現在表示中のエンティティリスト
+        self._visible_entities: List[Dict] = []
+        self._visible_entity_indices: List[int] = []
         self._sort_column: Optional[int] = None
         self._sort_ascending: bool = True
+        self._filter_inputs: List[QLineEdit] = []
+        self._filter_patterns: List[Optional[Pattern[str]]] = [None] * 5
         self.init_ui()
 
     def init_ui(self):
@@ -223,6 +230,14 @@ class ResultPanel(QWidget):
 
         layout.addLayout(header_layout)
 
+        # フィルター入力ウィジェット作成（テーブルのrow 0に埋め込む）
+        filter_columns = ["ページ", "種別", "テキスト", "位置", "手動"]
+        for col, column_name in enumerate(filter_columns):
+            filter_input = QLineEdit(self)
+            filter_input.setPlaceholderText(column_name)
+            filter_input.textChanged.connect(self.on_filter_changed)
+            self._filter_inputs.append(filter_input)
+
         # 検出結果テーブル
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(5)
@@ -247,6 +262,21 @@ class ResultPanel(QWidget):
                 color: #ffffff;
             }
         """)
+        # row 0 をフィルター行として固定
+        self.results_table.setRowCount(1)
+        for col, fi in enumerate(self._filter_inputs):
+            self.results_table.setCellWidget(0, col, fi)
+
+        # 列幅の初期設定
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # テキスト列: 残りスペース
+        self.results_table.setColumnWidth(0, 45)   # ページ
+        self.results_table.setColumnWidth(1, 90)   # 種別
+        self.results_table.setColumnWidth(3, 130)  # 位置
+        self.results_table.setColumnWidth(4, 38)   # 手動
+
+        # フィルター行（row 0）の垂直ヘッダーを空にする
+        self.results_table.setVerticalHeaderLabels([""])
+
         layout.addWidget(self.results_table)
 
         self.setLayout(layout)
@@ -270,11 +300,20 @@ class ResultPanel(QWidget):
         )
         self.register_omit_shortcut.activated.connect(self.register_selected_to_omit)
 
+        self.register_add_shortcut = QShortcut(QKeySequence("Insert"), self.results_table)
+        self.register_add_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.register_add_shortcut.activated.connect(self.register_selected_to_add)
+
     def load_entities(self, result: Optional[dict]):
         """検出結果を読み込んでテーブルに表示"""
         if not result:
             self.entities = []
-            self.results_table.setRowCount(0)
+            self._visible_entities = []
+            self._visible_entity_indices = []
+            self.results_table.setRowCount(1)
+            self.results_table.setVerticalHeaderLabels([""])
             self.count_label.setText("0件")
             self.delete_button.setEnabled(False)
             self.omit_register_button.setEnabled(False)
@@ -290,24 +329,44 @@ class ResultPanel(QWidget):
         self.update_table()
         self.on_selection_changed()
 
+    def on_filter_changed(self):
+        """フィルター入力変更時に正規表現を更新"""
+        for col, filter_input in enumerate(self._filter_inputs):
+            expr = filter_input.text()
+            if not expr:
+                self._filter_patterns[col] = None
+                filter_input.setStyleSheet("")
+                continue
+            try:
+                self._filter_patterns[col] = re.compile(expr)
+                filter_input.setStyleSheet("")
+            except re.error:
+                # 入力途中の不正な正規表現は赤枠で明示し、当該列の条件は無効化
+                self._filter_patterns[col] = None
+                filter_input.setStyleSheet("border: 1px solid #d93025;")
+
+        self.update_table()
+        self.on_selection_changed()
+
     def update_table(self):
         """テーブル表示を更新（1始まりで表示）"""
         self._apply_sort()
-        self.results_table.setRowCount(len(self.entities))
+        self._rebuild_visible_entities()
+        self.results_table.setRowCount(len(self._visible_entities) + 1)
 
-        for i, entity in enumerate(self.entities):
+        for i, entity in enumerate(self._visible_entities):
             # ページ番号（1始まりで表示）
             start_pos = entity.get("start", {})
             page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
-            self.results_table.setItem(i, 0, QTableWidgetItem(str(page_num + 1)))
+            self.results_table.setItem(i + 1, 0, QTableWidgetItem(str(page_num + 1)))
 
             # エンティティタイプ（日本語表示）
             entity_type = entity.get("entity", "")
-            self.results_table.setItem(i, 1, QTableWidgetItem(get_entity_type_name_ja(entity_type)))
+            self.results_table.setItem(i + 1, 1, QTableWidgetItem(get_entity_type_name_ja(entity_type)))
 
             # テキスト
             text = entity.get("word", "")
-            self.results_table.setItem(i, 2, QTableWidgetItem(text))
+            self.results_table.setItem(i + 1, 2, QTableWidgetItem(text))
 
             # 位置情報（1始まりで表示）
             end_pos = entity.get("end", {})
@@ -317,18 +376,24 @@ class ResultPanel(QWidget):
                 position_str = f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
             else:
                 position_str = ""
-            self.results_table.setItem(i, 3, QTableWidgetItem(position_str))
+            self.results_table.setItem(i + 1, 3, QTableWidgetItem(position_str))
 
             # 手動追加フラグ
             is_manual = self._is_manual_entity(entity)
             manual_str = "✓" if is_manual else ""
-            self.results_table.setItem(i, 4, QTableWidgetItem(manual_str))
+            self.results_table.setItem(i + 1, 4, QTableWidgetItem(manual_str))
 
-        # テーブルのリサイズ
-        self.results_table.resizeColumnsToContents()
+        # 垂直ヘッダー: row 0（フィルター行）は空、以降は 1, 2, 3...
+        v_labels = [""] + [str(i + 1) for i in range(len(self._visible_entities))]
+        self.results_table.setVerticalHeaderLabels(v_labels)
 
         # カウント更新
-        self.count_label.setText(f"{len(self.entities)}件")
+        visible_count = len(self._visible_entities)
+        total_count = len(self.entities)
+        if visible_count == total_count:
+            self.count_label.setText(f"{total_count}件")
+        else:
+            self.count_label.setText(f"{visible_count}件 / 全{total_count}件")
 
         # ソート状態のインジケータを更新
         header = self.results_table.horizontalHeader()
@@ -361,6 +426,51 @@ class ResultPanel(QWidget):
             key=lambda entity: self._entity_sort_key(entity, self._sort_column),
             reverse=not self._sort_ascending,
         )
+
+    def _rebuild_visible_entities(self):
+        """正規表現フィルター（AND条件）で表示対象を再構築"""
+        self._visible_entities = []
+        self._visible_entity_indices = []
+        for index, entity in enumerate(self.entities):
+            if not self._matches_filters(entity):
+                continue
+            self._visible_entity_indices.append(index)
+            self._visible_entities.append(entity)
+
+    def _matches_filters(self, entity: Dict) -> bool:
+        for col, pattern in enumerate(self._filter_patterns):
+            if pattern is None:
+                continue
+            if pattern.search(self._entity_column_text(entity, col)) is None:
+                return False
+        return True
+
+    @classmethod
+    def _entity_column_text(cls, entity: Dict, column: int) -> str:
+        start_pos = entity.get("start", {})
+        end_pos = entity.get("end", {})
+        if not isinstance(start_pos, dict):
+            start_pos = {}
+        if not isinstance(end_pos, dict):
+            end_pos = {}
+
+        page_num = cls._safe_int(start_pos.get("page_num", 0))
+        block_num = cls._safe_int(start_pos.get("block_num", 0))
+        offset = cls._safe_int(start_pos.get("offset", 0))
+
+        if column == 0:
+            return str(page_num + 1)
+        if column == 1:
+            return get_entity_type_name_ja(str(entity.get("entity", "")))
+        if column == 2:
+            return str(entity.get("word", ""))
+        if column == 3:
+            if isinstance(start_pos, dict) and isinstance(end_pos, dict):
+                return f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
+            return ""
+        if column == 4:
+            return "✓" if cls._is_manual_entity(entity) else ""
+        return ""
 
     @staticmethod
     def _safe_int(value: Any, default: int = 0) -> int:
@@ -441,7 +551,11 @@ class ResultPanel(QWidget):
         self.add_register_button.setEnabled(has_selection)
 
         # 選択されたエンティティのリストを取得
-        selected_entities = [self.entities[row] for row in selected_rows if row < len(self.entities)]
+        selected_entities = [
+            self._visible_entities[row]
+            for row in selected_rows
+            if row < len(self._visible_entities)
+        ]
         self.entity_selected.emit(selected_entities)
 
     def clear_entity_selection(self):
@@ -470,7 +584,9 @@ class ResultPanel(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         selected_entities = [
-            self.entities[row] for row in selected_rows if row < len(self.entities)
+            self._visible_entities[row]
+            for row in selected_rows
+            if row < len(self._visible_entities)
         ]
         self.register_selected_to_omit_requested.emit(selected_entities)
 
@@ -491,7 +607,9 @@ class ResultPanel(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         selected_entities = [
-            self.entities[row] for row in selected_rows if row < len(self.entities)
+            self._visible_entities[row]
+            for row in selected_rows
+            if row < len(self._visible_entities)
         ]
         self.register_selected_to_add_requested.emit(selected_entities)
 
@@ -501,8 +619,10 @@ class ResultPanel(QWidget):
         if not selected_items:
             return []
 
-        # 行番号を重複なく取得
-        selected_rows = sorted(set(item.row() for item in selected_items))
+        # 行番号を重複なく取得（row 0 はフィルター行のため除外し、-1 してデータ行インデックスに変換）
+        selected_rows = sorted(set(
+            item.row() - 1 for item in selected_items if item.row() > 0
+        ))
         return selected_rows
 
     def edit_selected(self):
@@ -513,10 +633,11 @@ class ResultPanel(QWidget):
             return
 
         # 最初の選択項目のみ編集
-        row = selected_rows[0]
-        if row >= len(self.entities):
+        visible_row = selected_rows[0]
+        if visible_row >= len(self._visible_entities):
             return
 
+        row = self._visible_entity_indices[visible_row]
         entity = self.entities[row]
 
         # 編集ダイアログを表示
@@ -553,7 +674,12 @@ class ResultPanel(QWidget):
             return
 
         # 後ろから削除（インデックスがずれないように）
-        for row in sorted(selected_rows, reverse=True):
+        delete_rows = []
+        for visible_row in selected_rows:
+            if visible_row < len(self._visible_entity_indices):
+                delete_rows.append(self._visible_entity_indices[visible_row])
+
+        for row in sorted(set(delete_rows), reverse=True):
             if row < len(self.entities):
                 del self.entities[row]
                 self.entity_deleted.emit(row)
@@ -573,10 +699,11 @@ class ResultPanel(QWidget):
 
     def select_row(self, row: int):
         """指定行を選択してスクロール表示する"""
-        if 0 <= row < self.results_table.rowCount():
-            self.results_table.selectRow(row)
+        if row in self._visible_entity_indices:
+            visible_row = self._visible_entity_indices.index(row)
+            self.results_table.selectRow(visible_row + 1)
             self.results_table.scrollToItem(
-                self.results_table.item(row, 0),
+                self.results_table.item(visible_row + 1, 0),
                 QTableWidget.ScrollHint.PositionAtCenter,
             )
 
@@ -587,20 +714,23 @@ class ResultPanel(QWidget):
         if selection_model is None:
             return
 
+        visible_rows = []
         for row in rows:
-            if row < 0 or row >= self.results_table.rowCount():
+            if row not in self._visible_entity_indices:
                 continue
-            index = self.results_table.model().index(row, 0)
+            visible_row = self._visible_entity_indices.index(row)
+            visible_rows.append(visible_row)
+            index = self.results_table.model().index(visible_row + 1, 0)
             selection_model.select(
                 index,
                 QItemSelectionModel.SelectionFlag.Select
                 | QItemSelectionModel.SelectionFlag.Rows,
             )
 
-        if rows:
-            first_row = min(rows)
+        if visible_rows:
+            first_row = min(visible_rows)
             self.results_table.scrollToItem(
-                self.results_table.item(first_row, 0),
+                self.results_table.item(first_row + 1, 0),
                 QTableWidget.ScrollHint.PositionAtCenter,
             )
 
