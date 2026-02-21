@@ -1184,16 +1184,34 @@ class PDFPreviewWidget(QWidget):
         except Exception:
             return False
 
+    def _current_zoom_percent(self) -> int:
+        """現在のズーム率(%)を整数で返す"""
+        return int(self.zoom_level * 100 + 1e-6)
+
+    def _set_zoom_percent(self, zoom_percent: int):
+        """ズーム率(%)を範囲内で設定し、ラベルを更新する"""
+        clamped_percent = max(25, min(zoom_percent, 400))
+        self.zoom_level = clamped_percent / 100.0
+        self.zoom_label.setText(f"{clamped_percent}%")
+
     def zoom_in(self):
         """ズームイン"""
-        self.zoom_level = min(self.zoom_level + 0.25, 4.0)
-        self.zoom_label.setText(f"{int(self.zoom_level * 100)}%")
+        current_percent = self._current_zoom_percent()
+        if current_percent % 10 == 0:
+            next_percent = current_percent + 10
+        else:
+            next_percent = ((current_percent // 10) + 1) * 10
+        self._set_zoom_percent(next_percent)
         self.update_preview()
 
     def zoom_out(self):
         """ズームアウト"""
-        self.zoom_level = max(self.zoom_level - 0.25, 0.25)
-        self.zoom_label.setText(f"{int(self.zoom_level * 100)}%")
+        current_percent = self._current_zoom_percent()
+        if current_percent % 10 == 0:
+            next_percent = current_percent - 10
+        else:
+            next_percent = (current_percent // 10) * 10
+        self._set_zoom_percent(next_percent)
         self.update_preview()
 
     def zoom_fit(self):
@@ -1210,7 +1228,7 @@ class PDFPreviewWidget(QWidget):
             self.zoom_level = max(0.25, min(self.zoom_level, 4.0))
         else:
             self.zoom_level = 0.5
-        self.zoom_label.setText(f"{int(self.zoom_level * 100)}%")
+        self.zoom_label.setText(f"{self._current_zoom_percent()}%")
         self.update_preview()
 
     def close_pdf(self):

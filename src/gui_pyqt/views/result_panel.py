@@ -202,20 +202,24 @@ class ResultPanel(QWidget):
         header_layout.addWidget(self.count_label)
         header_layout.addStretch()
 
+        action_buttons_layout = QVBoxLayout()
+
         self.delete_button = QPushButton("🗑 選択を削除")
         self.delete_button.clicked.connect(self.delete_selected)
         self.delete_button.setEnabled(False)
-        header_layout.addWidget(self.delete_button)
+        action_buttons_layout.addWidget(self.delete_button)
 
         self.omit_register_button = QPushButton("選択語を無視対象に登録")
         self.omit_register_button.clicked.connect(self.register_selected_to_omit)
         self.omit_register_button.setEnabled(False)
-        header_layout.addWidget(self.omit_register_button)
+        action_buttons_layout.addWidget(self.omit_register_button)
 
         self.add_register_button = QPushButton("選択語を検出対象に登録")
         self.add_register_button.clicked.connect(self.register_selected_to_add)
         self.add_register_button.setEnabled(False)
-        header_layout.addWidget(self.add_register_button)
+        action_buttons_layout.addWidget(self.add_register_button)
+
+        header_layout.addLayout(action_buttons_layout)
 
         layout.addLayout(header_layout)
 
