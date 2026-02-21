@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -56,6 +57,11 @@ class DetectConfigService:
         "delimiter": "。",
         "max_chars": 15000,
     }
+    CHUNK_MAX_CHARS_MIN = 100
+    CHUNK_MAX_CHARS_MAX = 100000
+    EXACT_MATCH_BOUNDARY_CHAR_CLASS = (
+        r"0-9A-Za-zＡ-Ｚａ-ｚァ-ヶー一-龯々〆ヵヶ"
+    )
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else Path.home()
@@ -317,6 +323,55 @@ class DetectConfigService:
         return add_patterns, omit_patterns
 
     @classmethod
+    def build_exact_word_pattern(cls, word: Any) -> str:
+        """語の完全一致を狙う正規表現パターンを返す"""
+        normalized_word = str(word or "").strip()
+        if not normalized_word:
+            return ""
+        escaped = re.escape(normalized_word)
+        return (
+            rf"(?<![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
+            rf"{escaped}"
+            rf"(?![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
+        )
+
+    def add_omit_patterns(self, patterns: List[Any]) -> List[str]:
+        """ommit_entity にパターンを追記して保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+
+        additional = self._normalize_pattern_list(patterns)
+        current = self._normalize_pattern_list(data.get("ommit_entity", []))
+        data["ommit_entity"] = self._merge_pattern_list(current, additional)
+        self._write_json(data)
+        return list(data.get("ommit_entity", []))
+
+    def add_add_patterns(self, patterns: List[Tuple[Any, Any]]) -> Dict[str, List[str]]:
+        """add_entity に (entity, pattern) を追記して保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+
+        add_entity = data.get("add_entity", {})
+        if not isinstance(add_entity, dict):
+            add_entity = {entity: [] for entity in self.ENTITY_TYPES}
+
+        for raw_entity, raw_pattern in patterns or []:
+            entity = self._normalize_add_entity_key(raw_entity)
+            pattern = str(raw_pattern or "").strip()
+            if not entity or not pattern:
+                continue
+            current_patterns = self._normalize_pattern_list(add_entity.get(entity, []))
+            add_entity[entity] = self._merge_pattern_list(current_patterns, [pattern])
+
+        data["add_entity"] = add_entity
+        self._write_json(data)
+        return dict(data.get("add_entity", {}))
+
+    @classmethod
     def _normalize_entity_name(cls, value: Any) -> str:
         name = str(value or "").strip().upper()
         return cls.ENTITY_ALIASES.get(name, name)
@@ -379,8 +434,12 @@ class DetectConfigService:
             data = {}
         data = self._normalize_config_data(data)
         data["chunk_settings"] = {
-            "delimiter": str(delimiter or "。"),
-            "max_chars": max(100, int(max_chars or 15000)),
+            "delimiter": (
+                self.DEFAULT_CHUNK_SETTINGS["delimiter"]
+                if delimiter is None
+                else str(delimiter)
+            ),
+            "max_chars": self._coerce_chunk_max_chars(max_chars),
         }
         self._write_json(data)
         return dict(data["chunk_settings"])
@@ -397,18 +456,26 @@ class DetectConfigService:
         delimiter = chunk_section.get(
             "delimiter", self.DEFAULT_CHUNK_SETTINGS["delimiter"]
         )
-        if not isinstance(delimiter, str) or not delimiter:
+        if not isinstance(delimiter, str):
             delimiter = self.DEFAULT_CHUNK_SETTINGS["delimiter"]
 
-        max_chars = chunk_section.get(
-            "max_chars", self.DEFAULT_CHUNK_SETTINGS["max_chars"]
+        max_chars = self._coerce_chunk_max_chars(
+            chunk_section.get(
+                "max_chars", self.DEFAULT_CHUNK_SETTINGS["max_chars"]
+            )
         )
-        try:
-            max_chars = max(100, int(max_chars))
-        except (ValueError, TypeError):
-            max_chars = self.DEFAULT_CHUNK_SETTINGS["max_chars"]
 
         return {"delimiter": delimiter, "max_chars": max_chars}
+
+    def _coerce_chunk_max_chars(self, value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(self.DEFAULT_CHUNK_SETTINGS["max_chars"])
+        return min(
+            self.CHUNK_MAX_CHARS_MAX,
+            max(self.CHUNK_MAX_CHARS_MIN, parsed),
+        )
 
     def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
         if not isinstance(data, dict):

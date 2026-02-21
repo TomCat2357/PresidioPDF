@@ -16,6 +16,7 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from typing import List, Dict
 
 from src.core.config_manager import ConfigManager
+from src.core.regex_match_utils import resolve_mark_span
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ class Analyzer:
                 logger.warning(f"無効な追加正規表現をスキップ: {pat}: {e}")
                 continue
             for m in cre.finditer(text):
-                s, e = m.span()
+                s, e = resolve_mark_span(m)
                 if s == e:
                     continue
                 add_candidates.append(
@@ -329,6 +330,13 @@ class Analyzer:
 
         delimiter = self._chunk_delimiter
         chunks = []
+
+        if delimiter == "":
+            logger.info("区切り文字が未設定のため文字数で分割")
+            for start in range(0, len(text), max_chars):
+                end = min(start + max_chars, len(text))
+                chunks.append({"text": text[start:end], "start_offset": start})
+            return chunks if chunks else [{"text": text, "start_offset": 0}]
 
         # 1) 区切り文字で分割を試みる
         segments = text.split(delimiter)

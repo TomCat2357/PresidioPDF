@@ -177,6 +177,8 @@ class ResultPanel(QWidget):
     entity_deleted = pyqtSignal(int)  # 削除されたエンティティのインデックス
     entity_updated = pyqtSignal(int, dict)  # 更新されたエンティティ（インデックス、新しいデータ）
     entity_added = pyqtSignal(dict)  # 追加されたエンティティ
+    register_selected_to_omit_requested = pyqtSignal(list)  # 選択項目をommitへ登録
+    register_selected_to_add_requested = pyqtSignal(list)  # 選択項目をadd_entityへ登録
     select_current_page_requested = pyqtSignal()  # Ctrl+A: 表示ページの全選択要求
 
     def __init__(self, parent=None):
@@ -204,6 +206,16 @@ class ResultPanel(QWidget):
         self.delete_button.clicked.connect(self.delete_selected)
         self.delete_button.setEnabled(False)
         header_layout.addWidget(self.delete_button)
+
+        self.omit_register_button = QPushButton("選択語を無視対象に登録")
+        self.omit_register_button.clicked.connect(self.register_selected_to_omit)
+        self.omit_register_button.setEnabled(False)
+        header_layout.addWidget(self.omit_register_button)
+
+        self.add_register_button = QPushButton("選択語を検出対象に登録")
+        self.add_register_button.clicked.connect(self.register_selected_to_add)
+        self.add_register_button.setEnabled(False)
+        header_layout.addWidget(self.add_register_button)
 
         layout.addLayout(header_layout)
 
@@ -254,6 +266,9 @@ class ResultPanel(QWidget):
             self.entities = []
             self.results_table.setRowCount(0)
             self.count_label.setText("0件")
+            self.delete_button.setEnabled(False)
+            self.omit_register_button.setEnabled(False)
+            self.add_register_button.setEnabled(False)
             return
 
         # detect配列を取得（新仕様形式）
@@ -263,6 +278,7 @@ class ResultPanel(QWidget):
 
         self.entities = list(detect_list)
         self.update_table()
+        self.on_selection_changed()
 
     def update_table(self):
         """テーブル表示を更新（1始まりで表示）"""
@@ -409,11 +425,45 @@ class ResultPanel(QWidget):
     def on_selection_changed(self):
         """選択状態が変更された"""
         selected_rows = self.get_selected_rows()
-        self.delete_button.setEnabled(len(selected_rows) > 0)
+        has_selection = len(selected_rows) > 0
+        self.delete_button.setEnabled(has_selection)
+        self.omit_register_button.setEnabled(has_selection)
+        self.add_register_button.setEnabled(has_selection)
 
         # 選択されたエンティティのリストを取得
         selected_entities = [self.entities[row] for row in selected_rows if row < len(self.entities)]
         self.entity_selected.emit(selected_entities)
+
+    def clear_entity_selection(self):
+        """テーブル選択を明示的に解除し、空選択を通知する"""
+        selection_model = self.results_table.selectionModel()
+        if selection_model is not None:
+            selection_model.clearSelection()
+            selection_model.clearCurrentIndex()
+        self.results_table.clearSelection()
+        self.on_selection_changed()
+
+    def register_selected_to_omit(self):
+        """選択語を無視対象（ommit_entity）へ登録する"""
+        selected_rows = self.get_selected_rows()
+        if not selected_rows:
+            QMessageBox.warning(self, "警告", "登録する項目を選択してください")
+            return
+        selected_entities = [
+            self.entities[row] for row in selected_rows if row < len(self.entities)
+        ]
+        self.register_selected_to_omit_requested.emit(selected_entities)
+
+    def register_selected_to_add(self):
+        """選択語を検出対象（add_entity）へ登録する"""
+        selected_rows = self.get_selected_rows()
+        if not selected_rows:
+            QMessageBox.warning(self, "警告", "登録する項目を選択してください")
+            return
+        selected_entities = [
+            self.entities[row] for row in selected_rows if row < len(self.entities)
+        ]
+        self.register_selected_to_add_requested.emit(selected_entities)
 
     def get_selected_rows(self) -> List[int]:
         """選択されている行のインデックスリストを取得"""
@@ -478,8 +528,17 @@ class ResultPanel(QWidget):
                 del self.entities[row]
                 self.entity_deleted.emit(row)
 
-        # テーブルを更新
-        self.update_table()
+        # テーブル更新後に選択を必ず空へ戻す（他行の自動選択を防止）
+        self.results_table.blockSignals(True)
+        try:
+            self.update_table()
+            selection_model = self.results_table.selectionModel()
+            if selection_model is not None:
+                selection_model.clearSelection()
+                selection_model.clearCurrentIndex()
+            self.results_table.clearSelection()
+        finally:
+            self.results_table.blockSignals(False)
         self.on_selection_changed()
 
     def select_row(self, row: int):

@@ -16,6 +16,8 @@ Phase 4: 編集UI
 import logging
 import json
 import copy
+import csv
+import re
 import shutil
 import fitz
 from pathlib import Path
@@ -45,6 +47,7 @@ from ..models.app_state import AppState
 from ..controllers.task_runner import TaskRunner
 from ..services.pipeline_service import PipelineService
 from ..services.detect_config_service import DetectConfigService
+from src.core.entity_types import get_entity_type_name_ja, normalize_entity_key
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
 from .config_dialog import DetectConfigDialog
@@ -262,12 +265,16 @@ class MainWindow(QMainWindow):
         self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
         self.export_marked_as_image_action = QAction("マーク（画像として保存）", self)
         self.export_marked_as_image_action.triggered.connect(self.on_export_marked_as_image)
+        self.export_detect_list_csv_action = QAction("検出結果一覧（CSV）", self)
+        self.export_detect_list_csv_action.triggered.connect(self.on_export_detect_list_csv)
 
         export_menu = QMenu(self)
         export_menu.addAction(self.export_annotations_action)
         export_menu.addAction(self.export_mask_action)
         export_menu.addAction(self.export_mask_as_image_action)
         export_menu.addAction(self.export_marked_as_image_action)
+        export_menu.addSeparator()
+        export_menu.addAction(self.export_detect_list_csv_action)
 
         export_button = QToolButton(self)
         export_button.setText("エクスポート")
@@ -351,6 +358,12 @@ class MainWindow(QMainWindow):
         self.result_panel.entity_deleted.connect(self.on_entity_deleted)
         self.result_panel.entity_updated.connect(self.on_entity_updated)
         self.result_panel.entity_added.connect(self.on_entity_added)
+        self.result_panel.register_selected_to_omit_requested.connect(
+            self.on_register_selected_to_omit_requested
+        )
+        self.result_panel.register_selected_to_add_requested.connect(
+            self.on_register_selected_to_add_requested
+        )
         self.result_panel.select_current_page_requested.connect(
             self.on_select_current_page_requested
         )
@@ -847,7 +860,7 @@ class MainWindow(QMainWindow):
             return
 
         target_pages = set(int(page_num) for page_num in (page_filter or []))
-        kept_entities: List[Dict[str, Any]] = []
+        kept_entities: List[Any] = []
         removed_count = 0
         for entity in entities:
             page_num = self._entity_page_num(entity)
@@ -862,9 +875,7 @@ class MainWindow(QMainWindow):
             self.log_message("削除対象の自動検出項目はありませんでした")
             return
 
-        self.result_panel.entities = kept_entities
-        self.result_panel.update_table()
-        self.result_panel.on_selection_changed()
+        self._replace_result_panel_entities(kept_entities, clear_selection=True)
         self._sync_all_result_states_from_entities(kept_entities)
 
         current_result = self._get_current_result()
@@ -878,6 +889,27 @@ class MainWindow(QMainWindow):
         self.log_message(f"対象削除を実行: {target_desc}, 自動項目 {removed_count}件を削除")
         self._set_dirty(True)
         self.update_action_states()
+
+    def _replace_result_panel_entities(
+        self,
+        entities: List[Any],
+        clear_selection: bool = False,
+    ):
+        """ResultPanelの一覧を差し替え、必要に応じて選択状態を解除する。"""
+        self.result_panel.entities = list(entities)
+        table = self.result_panel.results_table
+        table.blockSignals(True)
+        try:
+            self.result_panel.update_table()
+            if clear_selection:
+                selection_model = table.selectionModel()
+                if selection_model is not None:
+                    selection_model.clearSelection()
+                    selection_model.clearCurrentIndex()
+                table.clearSelection()
+        finally:
+            table.blockSignals(False)
+        self.result_panel.on_selection_changed()
 
     def on_mask(self):
         """Mask処理（Phase 3: 非同期実行）"""
@@ -1009,6 +1041,88 @@ class MainWindow(QMainWindow):
             output_pdf_path,
             dpi,
         )
+
+    def on_export_detect_list_csv(self):
+        """検出結果一覧をCSVとして保存"""
+        source_result = self._get_export_source_result()
+        if not source_result:
+            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            return
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        detect_list = source_result.get("detect", [])
+        if not isinstance(detect_list, list) or not detect_list:
+            QMessageBox.warning(self, "警告", "CSVに出力する検出結果がありません")
+            return
+
+        base_name = "detect_results.csv"
+        if self.app_state.has_pdf():
+            base_name = f"{self.app_state.pdf_path.stem}_detect_results.csv"
+        initial_dir = self.detect_config_service.load_last_directory("export_csv")
+        initial_path = (
+            str(Path(initial_dir) / base_name) if initial_dir else base_name
+        )
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "検出結果一覧CSVの保存先",
+            initial_path,
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not output_path:
+            return
+
+        csv_path = Path(output_path)
+        if csv_path.suffix.lower() != ".csv":
+            csv_path = csv_path.with_suffix(".csv")
+        self.detect_config_service.save_last_directory(
+            "export_csv",
+            str(csv_path.parent),
+        )
+
+        try:
+            rows = self._build_detect_list_csv_rows(detect_list)
+
+            with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["ページ", "種別", "テキスト", "位置", "手動"])
+                writer.writerows(rows)
+
+            self.log_message(f"検出結果一覧CSVを保存: {csv_path} ({len(rows)}件)")
+            self.statusBar().showMessage("検出結果一覧CSVを保存しました")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "エラー",
+                f"CSVエクスポートに失敗しました: {e}",
+            )
+
+    @classmethod
+    def _build_detect_list_csv_rows(cls, detect_list: List[Any]) -> List[List[str]]:
+        rows: List[List[str]] = []
+        for entity in detect_list:
+            if not isinstance(entity, dict):
+                continue
+            start_pos = entity.get("start", {})
+            end_pos = entity.get("end", {})
+            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            block_num = start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0
+            offset = start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0
+            if isinstance(start_pos, dict) and isinstance(end_pos, dict):
+                position_str = f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
+            else:
+                position_str = ""
+            rows.append(
+                [
+                    str(page_num + 1),
+                    get_entity_type_name_ja(str(entity.get("entity", ""))),
+                    str(entity.get("word", "")),
+                    position_str,
+                    "✓" if cls._is_manual_entity(entity) else "",
+                ]
+            )
+        return rows
 
     def on_save(self):
         """保存処理（PDF + サイドカーJSONマッピング）"""
@@ -1277,6 +1391,236 @@ class MainWindow(QMainWindow):
         )
         if current_result:
             self._highlight_all_entities(current_result)
+
+    def on_register_selected_to_omit_requested(self, entities: list):
+        """選択語を ommit_entity に登録し、同語の検出項目を除外する"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        word_entity_pairs = self._collect_unique_word_entity_pairs(entities)
+        if not word_entity_pairs:
+            QMessageBox.warning(self, "警告", "登録対象の語がありません")
+            return
+
+        words = [word for word, _ in word_entity_pairs]
+        omit_patterns = [
+            self.detect_config_service.build_exact_word_pattern(word)
+            for word in words
+        ]
+        omit_patterns = [pattern for pattern in omit_patterns if pattern]
+        if omit_patterns:
+            self.detect_config_service.add_omit_patterns(omit_patterns)
+
+        target_words = set(words)
+        current_entities = self.result_panel.get_entities()
+        kept_entities: List[Dict[str, Any]] = []
+        removed_count = 0
+        for entity in current_entities:
+            if not isinstance(entity, dict):
+                kept_entities.append(copy.deepcopy(entity))
+                continue
+            if str(entity.get("word", "")) in target_words:
+                removed_count += 1
+                continue
+            kept_entities.append(copy.deepcopy(entity))
+
+        if removed_count > 0:
+            self._replace_result_panel_entities(kept_entities, clear_selection=True)
+            self._sync_all_result_states_from_entities(kept_entities)
+            current_result = self._get_current_result()
+            if current_result:
+                self._highlight_all_entities(current_result)
+            else:
+                self._all_preview_entities = []
+                self.pdf_preview.set_highlighted_entities([])
+
+        self.log_message(
+            "無視対象へ登録: "
+            f"{len(words)}語, 検出結果から{removed_count}件を除外"
+        )
+        self._set_dirty(True)
+        self.update_action_states()
+
+    def on_register_selected_to_add_requested(self, entities: list):
+        """選択語を add_entity に登録し、未マークの同語を即時追加する"""
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        word_entity_pairs = self._collect_unique_word_entity_pairs(entities)
+        if not word_entity_pairs:
+            QMessageBox.warning(self, "警告", "登録対象の語がありません")
+            return
+
+        add_patterns: List[tuple] = []
+        runtime_pairs: List[tuple] = []
+        for word, raw_entity in word_entity_pairs:
+            exact_pattern = self.detect_config_service.build_exact_word_pattern(word)
+            if not exact_pattern:
+                continue
+            add_patterns.append((raw_entity, exact_pattern))
+            runtime_pairs.append((word, self._normalize_runtime_entity_name(raw_entity)))
+
+        if add_patterns:
+            self.detect_config_service.add_add_patterns(add_patterns)
+
+        current_entities = self.result_panel.get_entities()
+        new_entities = self._build_exact_match_entities(runtime_pairs, current_entities)
+        if new_entities:
+            merged_entities = [copy.deepcopy(entity) for entity in current_entities]
+            merged_entities.extend(new_entities)
+            self._replace_result_panel_entities(merged_entities, clear_selection=False)
+            self._sync_all_result_states_from_entities(merged_entities)
+            current_result = self._get_current_result()
+            if current_result:
+                self._highlight_all_entities(current_result)
+
+        self.log_message(
+            "検出対象へ登録: "
+            f"{len(word_entity_pairs)}語, 検出結果へ{len(new_entities)}件を追加"
+        )
+        self._set_dirty(True)
+        self.update_action_states()
+
+    def _collect_unique_word_entity_pairs(self, entities: List[Any]) -> List[tuple]:
+        """選択項目から重複のない (word, entity) を抽出する"""
+        collected: List[tuple] = []
+        word_to_entity: Dict[str, str] = {}
+
+        for entity in entities or []:
+            if not isinstance(entity, dict):
+                continue
+            word = str(entity.get("word", "")).strip()
+            if not word:
+                continue
+            entity_name = str(entity.get("entity", "")).strip() or "OTHER"
+            if word not in word_to_entity:
+                word_to_entity[word] = entity_name
+                collected.append((word, entity_name))
+                continue
+            if word_to_entity[word] != entity_name:
+                self.log_message(
+                    f"同一語の複数エンティティ指定を検知: '{word}' は "
+                    f"{word_to_entity[word]} を優先"
+                )
+        return collected
+
+    @staticmethod
+    def _normalize_runtime_entity_name(entity_name: Any) -> str:
+        """即時追加時に利用するエンティティ名を正規化する"""
+        raw_name = str(entity_name or "").strip()
+        if not raw_name:
+            return "OTHER"
+        normalized = normalize_entity_key(raw_name)
+        alias = DetectConfigService.ENTITY_ALIASES.get(raw_name.upper())
+        if alias:
+            normalized = alias
+        return normalized or "OTHER"
+
+    @staticmethod
+    def _extract_text_2d_from_result(result: Optional[dict]) -> List[List[str]]:
+        if not isinstance(result, dict):
+            return []
+        text_2d = result.get("text", [])
+        if isinstance(text_2d, list):
+            return text_2d
+        return []
+
+    @staticmethod
+    def _build_span_key_from_positions(start_pos: Dict[str, Any], end_pos: Dict[str, Any]) -> tuple:
+        def _to_int(value: Any, default: int = -1) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        return (
+            _to_int(start_pos.get("page_num")),
+            _to_int(start_pos.get("block_num")),
+            _to_int(start_pos.get("offset")),
+            _to_int(end_pos.get("page_num")),
+            _to_int(end_pos.get("block_num")),
+            _to_int(end_pos.get("offset")),
+        )
+
+    def _build_exact_match_entities(
+        self,
+        word_entity_pairs: List[tuple],
+        current_entities: List[Any],
+    ) -> List[Dict[str, Any]]:
+        """全文検索で完全一致語を抽出し、未マーク分のみ検出項目として返す"""
+        if not word_entity_pairs:
+            return []
+
+        source_result = self._get_current_result()
+        text_2d = self._extract_text_2d_from_result(source_result)
+        if not text_2d:
+            text_2d = self._extract_text_2d_from_result(self.app_state.read_result)
+        if not text_2d:
+            self.log_message("即時追加をスキップ: text情報が見つかりません")
+            return []
+
+        full_text_parts: List[str] = []
+        for page_blocks in text_2d:
+            if not isinstance(page_blocks, list):
+                continue
+            for block in page_blocks:
+                full_text_parts.append(str(block or ""))
+        target_text = "".join(full_text_parts)
+        if not target_text:
+            return []
+
+        existing_spans = set()
+        for entity in current_entities or []:
+            if not isinstance(entity, dict):
+                continue
+            start_pos = entity.get("start", {})
+            end_pos = entity.get("end", {})
+            if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
+                continue
+            existing_spans.add(
+                self._build_span_key_from_positions(start_pos, end_pos)
+            )
+
+        from src.cli.detect_main import _convert_offsets_to_position
+
+        added_spans = set()
+        new_entities: List[Dict[str, Any]] = []
+        for word, entity_name in word_entity_pairs:
+            pattern = self.detect_config_service.build_exact_word_pattern(word)
+            if not pattern:
+                continue
+            try:
+                regex = re.compile(pattern)
+            except re.error as exc:
+                self.log_message(f"追加パターンをスキップ: {word} ({exc})")
+                continue
+
+            for match in regex.finditer(target_text):
+                start_offset = int(match.start())
+                end_offset_exclusive = int(match.end())
+                start_pos, end_pos = _convert_offsets_to_position(
+                    start_offset,
+                    end_offset_exclusive,
+                    text_2d,
+                )
+                span_key = self._build_span_key_from_positions(start_pos, end_pos)
+                if span_key in existing_spans or span_key in added_spans:
+                    continue
+
+                new_entities.append(
+                    {
+                        "word": str(match.group(0)),
+                        "entity": entity_name,
+                        "start": start_pos,
+                        "end": end_pos,
+                        "origin": "custom",
+                    }
+                )
+                added_spans.add(span_key)
+
+        return new_entities
 
     def on_text_selected(self, selection_data: dict):
         """PDFプレビューでテキストが選択された"""
@@ -1929,6 +2273,7 @@ class MainWindow(QMainWindow):
         self.export_mask_action.setEnabled(export_enabled)
         self.export_mask_as_image_action.setEnabled(export_enabled)
         self.export_marked_as_image_action.setEnabled(export_enabled)
+        self.export_detect_list_csv_action.setEnabled(export_enabled)
 
         # Save: PDF + Read結果があり、タスクが実行中でなければ有効
         self.save_action.setEnabled(has_pdf and has_read and not is_running)

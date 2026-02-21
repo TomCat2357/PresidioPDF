@@ -11,6 +11,7 @@ import click
 
 from src.core.config_manager import ConfigManager
 from src.core.entity_types import ENTITY_ALIASES, ENTITY_TYPES, normalize_entity_key
+from src.core.regex_match_utils import resolve_mark_span
 from src.cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
 
 
@@ -233,7 +234,9 @@ def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[s
 
         for ent_name, rx in compiled_adds:
             for m in rx.finditer(target_text):
-                s, e = m.start(), m.end()
+                s, e = resolve_mark_span(m)
+                if s == e:
+                    continue
                 txt = target_text[s:e]
                 did = _detection_id(ent_name, txt, (s, e))
                 # endは包含端に合わせる

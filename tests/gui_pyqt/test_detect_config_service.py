@@ -1,7 +1,9 @@
 import json
+import re
 
 from src.gui_pyqt.services.detect_config_service import DetectConfigService
 from src.gui_pyqt.services.pipeline_service import PipelineService
+from src.gui_pyqt.views.main_window import MainWindow
 
 
 def _write_config(path, payload):
@@ -131,3 +133,90 @@ def test_add_pattern_unknown_entity_always_enabled():
         ["PERSON"],
     )
     assert resolved == "MUHO"
+
+
+def test_chunk_settings_allow_empty_delimiter(tmp_path):
+    service = DetectConfigService(tmp_path)
+    service.ensure_config_file()
+
+    saved = service.save_chunk_settings("", 1200)
+    loaded = service.load_chunk_settings()
+
+    assert saved["delimiter"] == ""
+    assert loaded["delimiter"] == ""
+    assert loaded["max_chars"] == 1200
+
+
+def test_add_omit_patterns_appends_without_duplicates(tmp_path):
+    service = DetectConfigService(tmp_path)
+    service.ensure_config_file()
+
+    pattern = DetectConfigService.build_exact_word_pattern("山田")
+    service.add_omit_patterns([pattern, pattern])
+    _, omit_patterns = service.load_custom_patterns()
+
+    assert omit_patterns.count(pattern) == 1
+
+
+def test_add_add_patterns_appends_and_keeps_unknown_keys(tmp_path):
+    service = DetectConfigService(tmp_path)
+    config_path = service.config_path
+    _write_config(
+        config_path,
+        {
+            "spacy_model": "ja_core_news_sm",
+            "enabled_entities": ["PERSON"],
+            "add_entity": {
+                "固有名詞": ["東京タワー"],
+            },
+            "ommit_entity": [],
+            "duplicate_settings": {"entity_overlap_mode": "any", "overlap": "overlap"},
+        },
+    )
+
+    pattern = DetectConfigService.build_exact_word_pattern("山田")
+    service.add_add_patterns([("PEARSON", pattern), ("固有名詞", "大阪城")])
+    data = _read_config(config_path)
+    add_entity = data.get("add_entity", {})
+
+    assert pattern in add_entity.get("PERSON", [])
+    assert add_entity.get("固有名詞") == ["東京タワー", "大阪城"]
+
+
+def test_build_exact_word_pattern_matches_exact_only():
+    pattern = DetectConfigService.build_exact_word_pattern("山田")
+    regex = re.compile(pattern)
+
+    assert regex.search("山田です")
+    assert regex.search("  山田  ")
+    assert regex.search("（山田）")
+    assert regex.search("山田")
+    assert regex.search("山田。")
+    assert not regex.search("大山田")
+
+
+def test_build_detect_list_csv_rows_formats_columns():
+    detect_list = [
+        {
+            "word": "山田",
+            "entity": "PERSON",
+            "origin": "auto",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+        },
+        {
+            "word": "渋谷",
+            "entity": "LOCATION",
+            "origin": "manual",
+            "manual": True,
+            "start": {"page_num": 1, "block_num": 2, "offset": 10},
+            "end": {"page_num": 1, "block_num": 2, "offset": 11},
+        },
+    ]
+
+    rows = MainWindow._build_detect_list_csv_rows(detect_list)
+
+    assert rows == [
+        ["1", "人名", "山田", "p1:b1:1", ""],
+        ["2", "場所", "渋谷", "p2:b3:11", "✓"],
+    ]

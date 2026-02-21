@@ -594,7 +594,7 @@ class ConfigManager:
         """チャンク分割の区切り文字を設定する"""
         if "nlp" not in self.config:
             self.config["nlp"] = {}
-        self.config["nlp"]["chunk_delimiter"] = str(delimiter or "。")
+        self.config["nlp"]["chunk_delimiter"] = "。" if delimiter is None else str(delimiter)
 
     def get_chunk_max_chars(self) -> int:
         """チャンク分割の最大文字数を返す"""
@@ -604,7 +604,8 @@ class ConfigManager:
         """チャンク分割の最大文字数を設定する"""
         if "nlp" not in self.config:
             self.config["nlp"] = {}
-        self.config["nlp"]["chunk_max_chars"] = max(100, int(max_chars or 15000))
+        parsed = int(max_chars or 15000)
+        self.config["nlp"]["chunk_max_chars"] = min(100000, max(100, parsed))
 
     def get_fallback_models(self) -> List[str]:
         """フォールバックモデルのリストを返す"""

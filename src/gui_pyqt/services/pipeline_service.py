@@ -31,6 +31,7 @@ from src.cli.read_main import (
     _generate_coordinate_maps,
 )
 from src.core.config_manager import ConfigManager
+from src.core.regex_match_utils import resolve_mark_span
 
 
 class PipelineService:
@@ -303,7 +304,9 @@ class PipelineService:
                     try:
                         rx = re.compile(rx_str)
                         for m in rx.finditer(target_text):
-                            s, e = m.start(), m.end()
+                            s, e = resolve_mark_span(m)
+                            if s == e:
+                                continue
                             txt = target_text[s:e]
                             start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
                             if (

@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.entity_types import get_entity_type_name_ja
+from src.gui_pyqt.services.detect_config_service import DetectConfigService
 
 
 class DetectConfigDialog(QDialog):
@@ -152,17 +153,25 @@ class DetectConfigDialog(QDialog):
         self.chunk_delimiter_edit = QLineEdit()
         self.chunk_delimiter_edit.setMaximumWidth(60)
         self.chunk_delimiter_edit.setToolTip(
-            "大容量テキストを分割する際の区切り文字（デフォルト: 。）"
+            "大容量テキストを分割する際の区切り文字（空欄で区切り文字分割を無効化）"
         )
         chunk_layout.addWidget(delim_label)
         chunk_layout.addWidget(self.chunk_delimiter_edit)
 
-        chars_label = QLabel("最大文字数:")
+        chars_label = QLabel(
+            f"最大文字数 ({DetectConfigService.CHUNK_MAX_CHARS_MIN}"
+            f"〜{DetectConfigService.CHUNK_MAX_CHARS_MAX}):"
+        )
         self.chunk_max_chars_spin = QSpinBox()
-        self.chunk_max_chars_spin.setRange(100, 100000)
+        self.chunk_max_chars_spin.setRange(
+            DetectConfigService.CHUNK_MAX_CHARS_MIN,
+            DetectConfigService.CHUNK_MAX_CHARS_MAX,
+        )
         self.chunk_max_chars_spin.setSingleStep(1000)
         self.chunk_max_chars_spin.setToolTip(
-            "1チャンクあたりの最大文字数（デフォルト: 15000）"
+            "1チャンクあたりの最大文字数"
+            f"（{DetectConfigService.CHUNK_MAX_CHARS_MIN}"
+            f"〜{DetectConfigService.CHUNK_MAX_CHARS_MAX}、デフォルト: 15000）"
         )
         chunk_layout.addWidget(chars_label)
         chunk_layout.addWidget(self.chunk_max_chars_spin)
@@ -288,9 +297,19 @@ class DetectConfigDialog(QDialog):
         self._suspend_auto_save = True
         try:
             if self.chunk_delimiter_edit:
-                self.chunk_delimiter_edit.setText(str(delimiter or "。"))
+                if delimiter is None:
+                    self.chunk_delimiter_edit.setText("。")
+                else:
+                    self.chunk_delimiter_edit.setText(str(delimiter))
             if self.chunk_max_chars_spin:
-                self.chunk_max_chars_spin.setValue(max(100, int(max_chars or 15000)))
+                clamped = min(
+                    DetectConfigService.CHUNK_MAX_CHARS_MAX,
+                    max(
+                        DetectConfigService.CHUNK_MAX_CHARS_MIN,
+                        int(max_chars or 15000),
+                    ),
+                )
+                self.chunk_max_chars_spin.setValue(clamped)
         finally:
             self._suspend_auto_save = previous
 
@@ -298,7 +317,7 @@ class DetectConfigDialog(QDialog):
         delimiter = "。"
         max_chars = 15000
         if self.chunk_delimiter_edit:
-            delimiter = self.chunk_delimiter_edit.text() or "。"
+            delimiter = self.chunk_delimiter_edit.text()
         if self.chunk_max_chars_spin:
             max_chars = self.chunk_max_chars_spin.value()
         return {"delimiter": delimiter, "max_chars": max_chars}
