@@ -264,6 +264,12 @@ class ResultPanel(QWidget):
             self._on_select_current_page_shortcut
         )
 
+        self.register_omit_shortcut = QShortcut(QKeySequence("Backspace"), self.results_table)
+        self.register_omit_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.register_omit_shortcut.activated.connect(self.register_selected_to_omit)
+
     def load_entities(self, result: Optional[dict]):
         """検出結果を読み込んでテーブルに表示"""
         if not result:
@@ -453,6 +459,16 @@ class ResultPanel(QWidget):
         if not selected_rows:
             QMessageBox.warning(self, "警告", "登録する項目を選択してください")
             return
+        count = len(selected_rows)
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            f"{count}件を無視対象に登録しますか?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         selected_entities = [
             self.entities[row] for row in selected_rows if row < len(self.entities)
         ]
@@ -463,6 +479,16 @@ class ResultPanel(QWidget):
         selected_rows = self.get_selected_rows()
         if not selected_rows:
             QMessageBox.warning(self, "警告", "登録する項目を選択してください")
+            return
+        count = len(selected_rows)
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            f"{count}件を検出対象に登録しますか?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
             return
         selected_entities = [
             self.entities[row] for row in selected_rows if row < len(self.entities)

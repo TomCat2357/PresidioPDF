@@ -39,7 +39,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QUrl, QEvent, QObject
-from PyQt6.QtGui import QAction, QDesktopServices, QCloseEvent
+from PyQt6.QtGui import QAction, QDesktopServices, QCloseEvent, QShortcut, QKeySequence
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
         self.connect_signals()
+        self._setup_keyboard_shortcuts()
 
     def init_ui(self):
         """UIの初期化"""
@@ -372,6 +373,37 @@ class MainWindow(QMainWindow):
         self.pdf_preview.entity_clicked.connect(self.on_preview_entity_clicked)
         self.pdf_preview.text_selected.connect(self.on_text_selected)
         self.pdf_preview.pdf_file_dropped.connect(self.on_pdf_dropped)
+
+    def _setup_keyboard_shortcuts(self):
+        """全体ショートカットを設定"""
+        self.next_page_shortcut = QShortcut(QKeySequence("PgDown"), self)
+        self.next_page_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.next_page_shortcut.activated.connect(self.pdf_preview.next_page)
+
+        self.prev_page_shortcut = QShortcut(QKeySequence("PgUp"), self)
+        self.prev_page_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.prev_page_shortcut.activated.connect(self.pdf_preview.previous_page)
+
+        self.first_page_shortcut = QShortcut(QKeySequence("Home"), self)
+        self.first_page_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.first_page_shortcut.activated.connect(self._go_to_first_page)
+
+        self.last_page_shortcut = QShortcut(QKeySequence("End"), self)
+        self.last_page_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.last_page_shortcut.activated.connect(self._go_to_last_page)
+
+    def _go_to_first_page(self):
+        """先頭ページへ移動"""
+        if not self.pdf_preview.pdf_document:
+            return
+        self.pdf_preview.go_to_page(0)
+
+    def _go_to_last_page(self):
+        """最終ページへ移動"""
+        pdf_document = self.pdf_preview.pdf_document
+        if not pdf_document:
+            return
+        self.pdf_preview.go_to_page(len(pdf_document) - 1)
 
     # =========================================================================
     # アクションハンドラー（Phase 1: スタブ実装）
