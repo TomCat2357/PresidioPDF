@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 class Analyzer:
     """Presidioエンジンの設定とPII分析を担当するクラス"""
+    # spaCy(ja_core_news_*) が利用する Sudachi の入力上限に合わせ、
+    # 上限値手前でチャンクを確定して tokenization エラーを回避する。
+    _SUDACHI_MAX_INPUT_BYTES = 49149
+    _SUDACHI_SAFE_MARGIN_BYTES = 1024
 
     def __init__(self, config_manager: ConfigManager):
         """
@@ -144,10 +148,10 @@ class Analyzer:
         if entities is None:
             entities = self.config_manager.get_enabled_entities()
 
-        max_chars = self._chunk_max_chars
-        if len(text) > max_chars:
+        if self._needs_chunking(text):
             logger.info(
-                f"大容量テキスト検出 ({len(text):,} 文字) - チャンク処理を実行"
+                f"大容量テキスト検出 ({len(text):,} 文字 / {self._utf8_len(text):,} bytes)"
+                " - チャンク処理を実行"
             )
             return self._analyze_text_chunked(text, entities)
 
@@ -270,14 +274,73 @@ class Analyzer:
 
     def _detect_proper_nouns(self, text: str) -> List[RecognizerResult]:
         """固有名詞を検出（大容量テキスト対応）"""
-        max_chars = self._chunk_max_chars
-        if len(text) > max_chars:
+        if self._needs_chunking(text):
             logger.debug(
-                f"固有名詞検出: 大容量テキスト ({len(text):,} 文字) - チャンク処理"
+                f"固有名詞検出: 大容量テキスト ({len(text):,} 文字 / {self._utf8_len(text):,} bytes)"
+                " - チャンク処理"
             )
             return self._detect_proper_nouns_chunked(text)
 
         return self._detect_proper_nouns_single(text)
+
+    @staticmethod
+    def _utf8_len(text: str) -> int:
+        """UTF-8バイト長を返す"""
+        return len(text.encode("utf-8"))
+
+    def _chunk_max_bytes(self) -> int:
+        """Sudachi入力上限より手前の安全なチャンクバイト上限"""
+        return max(1, self._SUDACHI_MAX_INPUT_BYTES - self._SUDACHI_SAFE_MARGIN_BYTES)
+
+    def _is_within_chunk_limits(self, text: str, max_chars: int, max_bytes: int) -> bool:
+        """文字数・UTF-8バイト数の両方でチャンク制約を判定"""
+        return len(text) <= max_chars and self._utf8_len(text) <= max_bytes
+
+    def _needs_chunking(self, text: str) -> bool:
+        """文字数またはUTF-8バイト数が上限を超える場合にチャンク分割が必要"""
+        return not self._is_within_chunk_limits(
+            text,
+            self._chunk_max_chars,
+            self._chunk_max_bytes(),
+        )
+
+    def _split_text_by_hard_limits(
+        self,
+        text: str,
+        start_offset: int,
+        max_chars: int,
+        max_bytes: int,
+    ) -> List[Dict]:
+        """文字数・バイト数制約でテキストを強制分割する"""
+        chunks: List[Dict] = []
+        cursor = 0
+        text_length = len(text)
+
+        while cursor < text_length:
+            end = min(cursor + max_chars, text_length)
+            if end <= cursor:
+                end = min(cursor + 1, text_length)
+
+            candidate = text[cursor:end]
+            if self._utf8_len(candidate) > max_bytes:
+                low = cursor + 1
+                high = end
+                best = low
+                while low <= high:
+                    mid = (low + high) // 2
+                    probe = text[cursor:mid]
+                    if self._utf8_len(probe) <= max_bytes:
+                        best = mid
+                        low = mid + 1
+                    else:
+                        high = mid - 1
+                end = best
+                candidate = text[cursor:end]
+
+            chunks.append({"text": candidate, "start_offset": start_offset + cursor})
+            cursor = end
+
+        return chunks
 
     def _detect_proper_nouns_single(self, text: str) -> List[RecognizerResult]:
         """単一テキストの固有名詞検出"""
@@ -322,21 +385,19 @@ class Analyzer:
         return all_results
 
     def _chunk_text(self, text: str) -> List[Dict]:
-        """テキストをチャンクに分割（区切り文字→文字数フォールバック）"""
+        """テキストをチャンクに分割（区切り文字→文字数/バイト数フォールバック）"""
         max_chars = self._chunk_max_chars
+        max_bytes = self._chunk_max_bytes()
 
-        if len(text) <= max_chars:
+        if self._is_within_chunk_limits(text, max_chars, max_bytes):
             return [{"text": text, "start_offset": 0}]
 
         delimiter = self._chunk_delimiter
-        chunks = []
+        chunks: List[Dict] = []
 
         if delimiter == "":
-            logger.info("区切り文字が未設定のため文字数で分割")
-            for start in range(0, len(text), max_chars):
-                end = min(start + max_chars, len(text))
-                chunks.append({"text": text[start:end], "start_offset": start})
-            return chunks if chunks else [{"text": text, "start_offset": 0}]
+            logger.info("区切り文字が未設定のため文字数/バイト数で分割")
+            return self._split_text_by_hard_limits(text, 0, max_chars, max_bytes)
 
         # 1) 区切り文字で分割を試みる
         segments = text.split(delimiter)
@@ -350,27 +411,44 @@ class Analyzer:
                 seg = segment + delimiter if i < len(segments) - 1 else segment
                 test_chunk = current_chunk + seg
 
-                if len(test_chunk) > max_chars and current_chunk:
+                if self._is_within_chunk_limits(test_chunk, max_chars, max_bytes):
+                    current_chunk = test_chunk
+                    continue
+
+                if current_chunk:
                     chunks.append(
                         {"text": current_chunk, "start_offset": current_offset}
                     )
                     current_offset += len(current_chunk)
+                    current_chunk = ""
+
+                if self._is_within_chunk_limits(seg, max_chars, max_bytes):
                     current_chunk = seg
+                    continue
+
+                forced_chunks = self._split_text_by_hard_limits(
+                    seg,
+                    current_offset,
+                    max_chars,
+                    max_bytes,
+                )
+                chunks.extend(forced_chunks)
+                if forced_chunks:
+                    last_chunk = forced_chunks[-1]
+                    current_offset = last_chunk["start_offset"] + len(last_chunk["text"])
                 else:
-                    current_chunk = test_chunk
+                    current_offset += len(seg)
 
             if current_chunk:
                 chunks.append(
                     {"text": current_chunk, "start_offset": current_offset}
                 )
         else:
-            # 2) 区切り文字がない場合、文字数で強制分割
+            # 2) 区切り文字がない場合、文字数/バイト数で強制分割
             logger.info(
-                f"区切り文字 '{delimiter}' が見つからないため文字数で分割"
+                f"区切り文字 '{delimiter}' が見つからないため文字数/バイト数で分割"
             )
-            for start in range(0, len(text), max_chars):
-                end = min(start + max_chars, len(text))
-                chunks.append({"text": text[start:end], "start_offset": start})
+            chunks = self._split_text_by_hard_limits(text, 0, max_chars, max_bytes)
 
         return chunks if chunks else [{"text": text, "start_offset": 0}]
 
