@@ -135,6 +135,75 @@ def test_add_pattern_unknown_entity_always_enabled():
     assert resolved == "MUHO"
 
 
+def test_build_detect_target_text_newline_ignored_is_backward_compatible():
+    text_2d = [["AB", "CD"], ["EF"]]
+
+    target, spans, base_length = PipelineService._build_detect_target_text(
+        text_2d=text_2d,
+        ignore_newlines=True,
+        ignore_whitespace=False,
+    )
+
+    assert target == "ABCDEF"
+    assert base_length == 6
+    assert spans == [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)]
+    assert PipelineService._map_target_span_to_base_offsets(1, 4, spans, base_length) == (
+        1,
+        4,
+    )
+
+
+def test_build_detect_target_text_inserts_newline_when_disabled():
+    text_2d = [["AB", "CD"], ["EF"]]
+
+    target, spans, base_length = PipelineService._build_detect_target_text(
+        text_2d=text_2d,
+        ignore_newlines=False,
+        ignore_whitespace=False,
+    )
+
+    assert target == "AB\nCD\nEF"
+    assert base_length == 6
+    assert spans[2] == (2, 2)  # block境界の挿入改行
+    assert spans[5] == (4, 4)  # page境界の挿入改行
+    assert PipelineService._map_target_span_to_base_offsets(3, 5, spans, base_length) == (
+        2,
+        4,
+    )
+
+
+def test_build_detect_target_text_whitespace_ignored_uses_original_offsets():
+    text_2d = [["A B", " C"], ["D\tE"]]
+
+    target, spans, base_length = PipelineService._build_detect_target_text(
+        text_2d=text_2d,
+        ignore_newlines=True,
+        ignore_whitespace=True,
+    )
+
+    assert target == "ABCDE"
+    assert base_length == 8
+    assert spans == [(0, 1), (2, 3), (4, 5), (5, 6), (7, 8)]
+    assert PipelineService._map_target_span_to_base_offsets(1, 4, spans, base_length) == (
+        2,
+        6,
+    )
+
+
+def test_build_detect_target_text_both_options_on_and_off_interaction():
+    text_2d = [["AB", "CD"], ["EF"]]
+
+    target, spans, base_length = PipelineService._build_detect_target_text(
+        text_2d=text_2d,
+        ignore_newlines=False,
+        ignore_whitespace=True,
+    )
+
+    assert target == "ABCDEF"
+    assert base_length == 6
+    assert spans == [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)]
+
+
 def test_chunk_settings_allow_empty_delimiter(tmp_path):
     service = DetectConfigService(tmp_path)
     service.ensure_config_file()
@@ -156,6 +225,59 @@ def test_add_omit_patterns_appends_without_duplicates(tmp_path):
     _, omit_patterns = service.load_custom_patterns()
 
     assert omit_patterns.count(pattern) == 1
+
+
+def test_text_preprocess_settings_default_values(tmp_path):
+    service = DetectConfigService(tmp_path)
+    loaded = service.ensure_config_file()
+    assert isinstance(loaded, list)
+
+    settings = service.load_text_preprocess_settings()
+    assert settings == {
+        "ignore_newlines": True,
+        "ignore_whitespace": False,
+    }
+
+    normalized = _read_config(service.config_path)
+    assert normalized.get("text_preprocess_settings") == {
+        "ignore_newlines": True,
+        "ignore_whitespace": False,
+    }
+
+
+def test_text_preprocess_settings_save_and_load(tmp_path):
+    service = DetectConfigService(tmp_path)
+    service.ensure_config_file()
+
+    saved = service.save_text_preprocess_settings(
+        ignore_newlines=False,
+        ignore_whitespace=True,
+    )
+    loaded = service.load_text_preprocess_settings()
+
+    assert saved == {
+        "ignore_newlines": False,
+        "ignore_whitespace": True,
+    }
+    assert loaded == saved
+
+
+def test_text_preprocess_settings_are_normalized_when_missing(tmp_path):
+    service = DetectConfigService(tmp_path)
+    _write_config(
+        service.config_path,
+        {
+            "enabled_entities": ["PERSON"],
+            "text_preprocess_settings": {},
+        },
+    )
+
+    service.ensure_config_file()
+    normalized = _read_config(service.config_path)
+    assert normalized.get("text_preprocess_settings") == {
+        "ignore_newlines": True,
+        "ignore_whitespace": False,
+    }
 
 
 def test_add_add_patterns_appends_and_keeps_unknown_keys(tmp_path):

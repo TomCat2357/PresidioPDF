@@ -81,12 +81,18 @@ class MainWindow(QMainWindow):
             self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
+            self.detect_text_preprocess_settings = (
+                self.detect_config_service.load_text_preprocess_settings()
+            )
         except Exception as e:
             logger.warning(f"検出設定の初期化に失敗: {e}")
             self.enabled_detect_entities = list(DetectConfigService.ENTITY_TYPES)
             self.duplicate_entity_overlap_mode = "any"
             self.duplicate_overlap_mode = "overlap"
             self.spacy_model = DetectConfigService.DEFAULT_SPACY_MODEL
+            self.detect_text_preprocess_settings = dict(
+                DetectConfigService.DEFAULT_TEXT_PREPROCESS_SETTINGS
+            )
 
         # Detect実行スコープの管理
         self._detect_scope = "all"
@@ -594,6 +600,9 @@ class MainWindow(QMainWindow):
             self.spacy_model = self.detect_config_service.load_spacy_model()
             installed_models = DetectConfigService.get_installed_spacy_models()
             chunk_settings = self.detect_config_service.load_chunk_settings()
+            text_preprocess_settings = (
+                self.detect_config_service.load_text_preprocess_settings()
+            )
 
             dialog = DetectConfigDialog(
                 entity_types=DetectConfigService.ENTITY_TYPES,
@@ -606,6 +615,8 @@ class MainWindow(QMainWindow):
                 all_models=DetectConfigService.SPACY_MODELS,
                 chunk_delimiter=chunk_settings.get("delimiter", "。"),
                 chunk_max_chars=chunk_settings.get("max_chars", 15000),
+                ignore_newlines=text_preprocess_settings.get("ignore_newlines", True),
+                ignore_whitespace=text_preprocess_settings.get("ignore_whitespace", False),
                 parent=self,
             )
             if dialog.import_button:
@@ -629,12 +640,17 @@ class MainWindow(QMainWindow):
             self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
+            self.detect_text_preprocess_settings = (
+                self.detect_config_service.load_text_preprocess_settings()
+            )
             self.log_message(
                 f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
                 f"({self.detect_config_service.config_path.name}), "
                 f"モデル={self.spacy_model}, "
                 f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
-                f"overlap:{self.duplicate_overlap_mode}"
+                f"overlap:{self.duplicate_overlap_mode}, "
+                f"ignore_newlines={self.detect_text_preprocess_settings.get('ignore_newlines', True)}, "
+                f"ignore_whitespace={self.detect_text_preprocess_settings.get('ignore_whitespace', False)}"
             )
         except Exception as e:
             logger.exception("検出設定ダイアログの表示/保存に失敗")
@@ -686,12 +702,19 @@ class MainWindow(QMainWindow):
             self.duplicate_entity_overlap_mode = imported_duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = imported_duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
+            self.detect_text_preprocess_settings = (
+                self.detect_config_service.load_text_preprocess_settings()
+            )
             dialog.set_enabled_entities(imported_entities)
             dialog.set_duplicate_settings(
                 self.duplicate_entity_overlap_mode,
                 self.duplicate_overlap_mode,
             )
             dialog.set_spacy_model(self.spacy_model)
+            dialog.set_text_preprocess_settings(
+                self.detect_text_preprocess_settings.get("ignore_newlines", True),
+                self.detect_text_preprocess_settings.get("ignore_whitespace", False),
+            )
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
             )
@@ -732,6 +755,13 @@ class MainWindow(QMainWindow):
             )
             self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
+            text_preprocess_settings = dialog.get_text_preprocess_settings()
+            self.detect_text_preprocess_settings = (
+                self.detect_config_service.save_text_preprocess_settings(
+                    text_preprocess_settings["ignore_newlines"],
+                    text_preprocess_settings["ignore_whitespace"],
+                )
+            )
             exported_path = self.detect_config_service.export_to(export_target)
             self.log_message(f"設定エクスポート: {exported_path}")
             self.statusBar().showMessage("設定をエクスポートしました")
@@ -783,11 +813,15 @@ class MainWindow(QMainWindow):
         )
 
         chunk_settings = self.detect_config_service.load_chunk_settings()
+        text_preprocess_settings = self.detect_config_service.load_text_preprocess_settings()
+        self.detect_text_preprocess_settings = dict(text_preprocess_settings)
         task_kwargs: Dict[str, Any] = {
             "entities": list(self.enabled_detect_entities),
             "model_names": (self.spacy_model,),
             "chunk_delimiter": chunk_settings.get("delimiter", "。"),
             "chunk_max_chars": chunk_settings.get("max_chars", 15000),
+            "ignore_newlines": text_preprocess_settings.get("ignore_newlines", True),
+            "ignore_whitespace": text_preprocess_settings.get("ignore_whitespace", False),
         }
         add_patterns, omit_patterns = self.detect_config_service.load_custom_patterns()
         if add_patterns:

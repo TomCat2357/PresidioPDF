@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -46,6 +47,8 @@ class DetectConfigDialog(QDialog):
         all_models: Optional[List[str]] = None,
         chunk_delimiter: str = "。",
         chunk_max_chars: int = 15000,
+        ignore_newlines: bool = True,
+        ignore_whitespace: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -63,6 +66,8 @@ class DetectConfigDialog(QDialog):
         self.model_combo: Optional[QComboBox] = None
         self.chunk_delimiter_edit: Optional[QLineEdit] = None
         self.chunk_max_chars_spin: Optional[QSpinBox] = None
+        self.ignore_newlines_checkbox: Optional[QCheckBox] = None
+        self.ignore_whitespace_checkbox: Optional[QCheckBox] = None
         self._installed_models: List[str] = list(installed_models or [])
         self._all_models: List[str] = list(all_models or [])
         self._file_watcher: Optional[QFileSystemWatcher] = None
@@ -75,6 +80,7 @@ class DetectConfigDialog(QDialog):
         )
         self.set_spacy_model(spacy_model)
         self.set_chunk_settings(chunk_delimiter, chunk_max_chars)
+        self.set_text_preprocess_settings(ignore_newlines, ignore_whitespace)
         self._start_watching()
 
     def _init_ui(self):
@@ -83,17 +89,23 @@ class DetectConfigDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        info = QLabel(
-            "チェックしたエンティティのみ検出します。\n"
-            f"設定ファイル: {self.DISPLAY_CONFIG_NAME}"
-        )
+        info = QLabel("チェックしたエンティティのみ検出します。")
         info.setWordWrap(True)
         layout.addWidget(info)
 
+        entity_group = QGroupBox("検出エンティティ")
+        entity_layout = QGridLayout()
         for entity in self.entity_types:
             checkbox = QCheckBox(get_entity_type_name_ja(entity))
             self.checkboxes[entity] = checkbox
-            layout.addWidget(checkbox)
+            index = len(self.checkboxes) - 1
+            row = index // 2
+            column = index % 2
+            entity_layout.addWidget(checkbox, row, column)
+        entity_layout.setColumnStretch(0, 1)
+        entity_layout.setColumnStretch(1, 1)
+        entity_group.setLayout(entity_layout)
+        layout.addWidget(entity_group)
 
         select_row = QHBoxLayout()
         self.select_all_button = QPushButton("全選択")
@@ -129,8 +141,11 @@ class DetectConfigDialog(QDialog):
         self._entity_overlap_group.addButton(self.entity_overlap_any_radio)
         self._entity_overlap_group.addButton(self.entity_overlap_same_radio)
         duplicate_layout.addWidget(entity_mode_label)
-        duplicate_layout.addWidget(self.entity_overlap_any_radio)
-        duplicate_layout.addWidget(self.entity_overlap_same_radio)
+        entity_mode_row = QHBoxLayout()
+        entity_mode_row.addWidget(self.entity_overlap_any_radio)
+        entity_mode_row.addWidget(self.entity_overlap_same_radio)
+        entity_mode_row.addStretch()
+        duplicate_layout.addLayout(entity_mode_row)
 
         overlap_mode_label = QLabel("重複判定")
         self.overlap_contain_radio = QRadioButton("包含関係のみ")
@@ -139,46 +154,27 @@ class DetectConfigDialog(QDialog):
         self._overlap_group.addButton(self.overlap_contain_radio)
         self._overlap_group.addButton(self.overlap_overlap_radio)
         duplicate_layout.addWidget(overlap_mode_label)
-        duplicate_layout.addWidget(self.overlap_contain_radio)
-        duplicate_layout.addWidget(self.overlap_overlap_radio)
+        overlap_mode_row = QHBoxLayout()
+        overlap_mode_row.addWidget(self.overlap_contain_radio)
+        overlap_mode_row.addWidget(self.overlap_overlap_radio)
+        overlap_mode_row.addStretch()
+        duplicate_layout.addLayout(overlap_mode_row)
 
         duplicate_group.setLayout(duplicate_layout)
         layout.addWidget(duplicate_group)
 
-        # チャンク分割設定
-        chunk_group = QGroupBox("テキスト分割設定")
-        chunk_layout = QHBoxLayout()
-
-        delim_label = QLabel("区切り文字:")
-        self.chunk_delimiter_edit = QLineEdit()
-        self.chunk_delimiter_edit.setMaximumWidth(60)
-        self.chunk_delimiter_edit.setToolTip(
-            "大容量テキストを分割する際の区切り文字（空欄で区切り文字分割を無効化）"
+        preprocess_group = QGroupBox("テキスト前処理設定")
+        preprocess_layout = QVBoxLayout()
+        self.ignore_newlines_checkbox = QCheckBox(
+            "改行無視（OFF時はブロック/ページ境界に改行を挿入）"
         )
-        chunk_layout.addWidget(delim_label)
-        chunk_layout.addWidget(self.chunk_delimiter_edit)
-
-        chars_label = QLabel(
-            f"最大文字数 ({DetectConfigService.CHUNK_MAX_CHARS_MIN}"
-            f"〜{DetectConfigService.CHUNK_MAX_CHARS_MAX}):"
+        self.ignore_whitespace_checkbox = QCheckBox(
+            "空白無視（空白文字を除去）"
         )
-        self.chunk_max_chars_spin = QSpinBox()
-        self.chunk_max_chars_spin.setRange(
-            DetectConfigService.CHUNK_MAX_CHARS_MIN,
-            DetectConfigService.CHUNK_MAX_CHARS_MAX,
-        )
-        self.chunk_max_chars_spin.setSingleStep(1000)
-        self.chunk_max_chars_spin.setToolTip(
-            "1チャンクあたりの最大文字数"
-            f"（{DetectConfigService.CHUNK_MAX_CHARS_MIN}"
-            f"〜{DetectConfigService.CHUNK_MAX_CHARS_MAX}、デフォルト: 15000）"
-        )
-        chunk_layout.addWidget(chars_label)
-        chunk_layout.addWidget(self.chunk_max_chars_spin)
-        chunk_layout.addStretch()
-
-        chunk_group.setLayout(chunk_layout)
-        layout.addWidget(chunk_group)
+        preprocess_layout.addWidget(self.ignore_newlines_checkbox)
+        preprocess_layout.addWidget(self.ignore_whitespace_checkbox)
+        preprocess_group.setLayout(preprocess_layout)
+        layout.addWidget(preprocess_group)
 
         action_row = QHBoxLayout()
         self.open_json_button = QPushButton(self.DISPLAY_CONFIG_NAME)
@@ -216,6 +212,10 @@ class DetectConfigDialog(QDialog):
             self.chunk_delimiter_edit.textChanged.connect(self._on_ui_value_changed)
         if self.chunk_max_chars_spin:
             self.chunk_max_chars_spin.valueChanged.connect(self._on_ui_value_changed)
+        if self.ignore_newlines_checkbox:
+            self.ignore_newlines_checkbox.toggled.connect(self._on_ui_value_changed)
+        if self.ignore_whitespace_checkbox:
+            self.ignore_whitespace_checkbox.toggled.connect(self._on_ui_value_changed)
 
     def _on_ui_value_changed(self, *_):
         if self._suspend_auto_save:
@@ -322,6 +322,33 @@ class DetectConfigDialog(QDialog):
             max_chars = self.chunk_max_chars_spin.value()
         return {"delimiter": delimiter, "max_chars": max_chars}
 
+    def set_text_preprocess_settings(
+        self,
+        ignore_newlines: bool,
+        ignore_whitespace: bool,
+    ):
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            if self.ignore_newlines_checkbox:
+                self.ignore_newlines_checkbox.setChecked(bool(ignore_newlines))
+            if self.ignore_whitespace_checkbox:
+                self.ignore_whitespace_checkbox.setChecked(bool(ignore_whitespace))
+        finally:
+            self._suspend_auto_save = previous
+
+    def get_text_preprocess_settings(self) -> Dict[str, bool]:
+        ignore_newlines = True
+        ignore_whitespace = False
+        if self.ignore_newlines_checkbox:
+            ignore_newlines = self.ignore_newlines_checkbox.isChecked()
+        if self.ignore_whitespace_checkbox:
+            ignore_whitespace = self.ignore_whitespace_checkbox.isChecked()
+        return {
+            "ignore_newlines": ignore_newlines,
+            "ignore_whitespace": ignore_whitespace,
+        }
+
     def _on_select_all_clicked(self):
         checkboxes = list(self.checkboxes.values())
         if not checkboxes:
@@ -373,6 +400,12 @@ class DetectConfigDialog(QDialog):
                     chunk.get("delimiter", "。"),
                     chunk.get("max_chars", 15000),
                 )
+            preprocess = data.get("text_preprocess_settings", {})
+            if isinstance(preprocess, dict):
+                self.set_text_preprocess_settings(
+                    preprocess.get("ignore_newlines", True),
+                    preprocess.get("ignore_whitespace", False),
+                )
         except Exception as exc:
             logger.warning(f"設定ファイルの変更反映に失敗: {exc}")
         finally:
@@ -395,7 +428,7 @@ class DetectConfigDialog(QDialog):
             model = self.get_spacy_model()
             if model:
                 data["spacy_model"] = model
-            data["chunk_settings"] = self.get_chunk_settings()
+            data["text_preprocess_settings"] = self.get_text_preprocess_settings()
             # 書き込み中は監視を一時停止して自己トリガーを防ぐ
             config_str = str(self.config_path)
             if self._file_watcher:

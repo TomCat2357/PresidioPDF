@@ -57,6 +57,10 @@ class DetectConfigService:
         "delimiter": "。",
         "max_chars": 15000,
     }
+    DEFAULT_TEXT_PREPROCESS_SETTINGS = {
+        "ignore_newlines": True,
+        "ignore_whitespace": False,
+    }
     CHUNK_MAX_CHARS_MIN = 100
     CHUNK_MAX_CHARS_MAX = 100000
     EXACT_MATCH_BOUNDARY_CHAR_CLASS = (
@@ -444,6 +448,44 @@ class DetectConfigService:
         self._write_json(data)
         return dict(data["chunk_settings"])
 
+    def load_text_preprocess_settings(self) -> Dict[str, bool]:
+        """検出用テキスト前処理設定を読み込む"""
+        self.ensure_config_file()
+        try:
+            data = self._normalize_config_data(self._load_json(self.config_path))
+            return data.get(
+                "text_preprocess_settings",
+                dict(self.DEFAULT_TEXT_PREPROCESS_SETTINGS),
+            )
+        except Exception as exc:
+            logger.warning(
+                f"テキスト前処理設定の読み込みに失敗: {self.config_path} ({exc})"
+            )
+        return dict(self.DEFAULT_TEXT_PREPROCESS_SETTINGS)
+
+    def save_text_preprocess_settings(
+        self,
+        ignore_newlines: Any,
+        ignore_whitespace: Any,
+    ) -> Dict[str, bool]:
+        """検出用テキスト前処理設定を保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+        data["text_preprocess_settings"] = {
+            "ignore_newlines": self._coerce_bool(
+                ignore_newlines,
+                self.DEFAULT_TEXT_PREPROCESS_SETTINGS["ignore_newlines"],
+            ),
+            "ignore_whitespace": self._coerce_bool(
+                ignore_whitespace,
+                self.DEFAULT_TEXT_PREPROCESS_SETTINGS["ignore_whitespace"],
+            ),
+        }
+        self._write_json(data)
+        return dict(data["text_preprocess_settings"])
+
     def _extract_chunk_settings(self, data: Any) -> Dict[str, Any]:
         """チャンク分割設定を抽出・正規化する"""
         if not isinstance(data, dict):
@@ -467,6 +509,32 @@ class DetectConfigService:
 
         return {"delimiter": delimiter, "max_chars": max_chars}
 
+    def _extract_text_preprocess_settings(self, data: Any) -> Dict[str, bool]:
+        """検出用テキスト前処理設定を抽出・正規化する"""
+        if not isinstance(data, dict):
+            return dict(self.DEFAULT_TEXT_PREPROCESS_SETTINGS)
+
+        settings = data.get("text_preprocess_settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
+
+        return {
+            "ignore_newlines": self._coerce_bool(
+                settings.get(
+                    "ignore_newlines",
+                    self.DEFAULT_TEXT_PREPROCESS_SETTINGS["ignore_newlines"],
+                ),
+                self.DEFAULT_TEXT_PREPROCESS_SETTINGS["ignore_newlines"],
+            ),
+            "ignore_whitespace": self._coerce_bool(
+                settings.get(
+                    "ignore_whitespace",
+                    self.DEFAULT_TEXT_PREPROCESS_SETTINGS["ignore_whitespace"],
+                ),
+                self.DEFAULT_TEXT_PREPROCESS_SETTINGS["ignore_whitespace"],
+            ),
+        }
+
     def _coerce_chunk_max_chars(self, value: Any) -> int:
         try:
             parsed = int(value)
@@ -476,6 +544,20 @@ class DetectConfigService:
             self.CHUNK_MAX_CHARS_MAX,
             max(self.CHUNK_MAX_CHARS_MIN, parsed),
         )
+
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return bool(default)
 
     def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
         if not isinstance(data, dict):
@@ -515,6 +597,7 @@ class DetectConfigService:
             "ommit_entity": [],
             "duplicate_settings": dict(cls.DEFAULT_DUPLICATE_SETTINGS),
             "chunk_settings": dict(cls.DEFAULT_CHUNK_SETTINGS),
+            "text_preprocess_settings": dict(cls.DEFAULT_TEXT_PREPROCESS_SETTINGS),
         }
 
     def _normalize_config_data(self, data: Any) -> Dict[str, Any]:
@@ -553,6 +636,9 @@ class DetectConfigService:
 
         normalized["duplicate_settings"] = self._extract_duplicate_settings(normalized)
         normalized["chunk_settings"] = self._extract_chunk_settings(normalized)
+        normalized["text_preprocess_settings"] = self._extract_text_preprocess_settings(
+            normalized
+        )
 
         return normalized
 

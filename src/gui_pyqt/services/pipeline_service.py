@@ -84,6 +84,96 @@ class PipelineService:
         return normalized_entity
 
     @staticmethod
+    def _build_detect_target_text(
+        text_2d: Any,
+        ignore_newlines: bool,
+        ignore_whitespace: bool,
+    ) -> Tuple[Optional[str], List[Tuple[int, int]], int]:
+        """Detectで使う対象テキストと、元オフセットへの逆引き情報を構築する。
+
+        Returns:
+            (
+                target_text or None,
+                target_text各文字に対応する(base_start, base_end_exclusive)の配列,
+                base_text_length,
+            )
+        """
+        if not isinstance(text_2d, list) or not text_2d:
+            return None, [], 0
+
+        target_chars: List[str] = []
+        target_spans: List[Tuple[int, int]] = []
+        base_offset = 0
+        total_pages = len(text_2d)
+
+        for page_idx, page_blocks in enumerate(text_2d):
+            if not isinstance(page_blocks, list):
+                continue
+
+            block_count = len(page_blocks)
+            for block_idx, block in enumerate(page_blocks):
+                block_text = str(block)
+                for ch in block_text:
+                    start_offset = base_offset
+                    end_offset = base_offset + 1
+                    if not (ignore_whitespace and ch.isspace()):
+                        target_chars.append(ch)
+                        target_spans.append((start_offset, end_offset))
+                    base_offset = end_offset
+
+                if not ignore_newlines and block_idx < block_count - 1:
+                    newline_char = "\n"
+                    if not (ignore_whitespace and newline_char.isspace()):
+                        target_chars.append(newline_char)
+                        # 挿入文字は元文字列上の境界位置を指す
+                        target_spans.append((base_offset, base_offset))
+
+            if not ignore_newlines and page_idx < total_pages - 1:
+                newline_char = "\n"
+                if not (ignore_whitespace and newline_char.isspace()):
+                    target_chars.append(newline_char)
+                    # 挿入文字は元文字列上の境界位置を指す
+                    target_spans.append((base_offset, base_offset))
+
+        return "".join(target_chars), target_spans, base_offset
+
+    @staticmethod
+    def _map_target_span_to_base_offsets(
+        start_offset: int,
+        end_offset_exclusive: int,
+        target_spans: List[Tuple[int, int]],
+        base_text_length: int,
+    ) -> Tuple[int, int]:
+        """前処理後target_textのspanを、text_2d直列化基準のspanへ戻す。"""
+        try:
+            s = int(start_offset)
+            e = int(end_offset_exclusive)
+        except (TypeError, ValueError):
+            return 0, 0
+
+        s = max(0, s)
+        e = max(s, e)
+        max_length = max(0, int(base_text_length))
+
+        if not target_spans:
+            return min(s, max_length), min(e, max_length)
+
+        if s >= len(target_spans):
+            return max_length, max_length
+
+        clamped_end = min(e, len(target_spans))
+        if clamped_end <= s:
+            mapped = target_spans[s][0]
+            mapped = min(max(0, mapped), max_length)
+            return mapped, mapped
+
+        base_start = target_spans[s][0]
+        base_end = target_spans[clamped_end - 1][1]
+        base_start = min(max(0, base_start), max_length)
+        base_end = min(max(base_start, base_end), max_length)
+        return base_start, base_end
+
+    @staticmethod
     def run_read(pdf_path: Path, include_coordinate_map: bool = True) -> Dict[str, Any]:
         """PDF読込処理（read）
 
@@ -167,6 +257,8 @@ class PipelineService:
         page_filter: Optional[List[int]] = None,
         chunk_delimiter: Optional[str] = None,
         chunk_max_chars: Optional[int] = None,
+        ignore_newlines: Optional[bool] = None,
+        ignore_whitespace: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """PII検出処理（detect）
 
@@ -178,6 +270,8 @@ class PipelineService:
             add_patterns: 追加パターン [(entity_type, regex), ...]
             exclude_patterns: 除外パターン [regex, ...]
             page_filter: 検出対象ページ番号（0始まり、Noneで全ページ）
+            ignore_newlines: 改行を無視するか（None時True）
+            ignore_whitespace: 空白を無視するか（None時False）
 
         Returns:
             detect結果のJSON（dict）
@@ -220,6 +314,10 @@ class PipelineService:
             cfg.set_chunk_delimiter(chunk_delimiter)
         if chunk_max_chars is not None:
             cfg.set_chunk_max_chars(chunk_max_chars)
+        if ignore_newlines is None:
+            ignore_newlines = True
+        if ignore_whitespace is None:
+            ignore_whitespace = False
 
         # read_resultからテキストとメタデータを取得
         metadata = read_result.get("metadata", {}) or {}
@@ -243,18 +341,11 @@ class PipelineService:
             }
             target_pages = {page_num for page_num in target_pages if page_num >= 0}
 
-        # 2D配列をフラット化してプレーンテキストを生成
-        plain_text = None
-        if isinstance(text_2d, list) and text_2d:
-            try:
-                full_plain_text_parts = []
-                for page_blocks in text_2d:
-                    if isinstance(page_blocks, list):
-                        for block in page_blocks:
-                            full_plain_text_parts.append(str(block))
-                plain_text = "".join(full_plain_text_parts)
-            except Exception:
-                plain_text = None
+        plain_text, target_spans, base_text_length = PipelineService._build_detect_target_text(
+            text_2d=text_2d,
+            ignore_newlines=bool(ignore_newlines),
+            ignore_whitespace=bool(ignore_whitespace),
+        )
 
         # Analyzerでモデル検出
         analyzer = Analyzer(cfg)
@@ -264,7 +355,17 @@ class PipelineService:
 
         with fitz.open(pdf_path) as doc:
             locator = PDFTextLocator(doc)
-            target_text = plain_text if isinstance(plain_text, str) else locator.full_text_no_newlines
+            if isinstance(plain_text, str):
+                target_text = plain_text
+            else:
+                fallback_text = locator.full_text_no_newlines
+                if ignore_whitespace:
+                    fallback_text = "".join(
+                        ch for ch in fallback_text if not ch.isspace()
+                    )
+                target_text = fallback_text
+                target_spans = []
+                base_text_length = len(target_text)
 
             # モデル検出
             model_results = analyzer.analyze_text(target_text, entities)
@@ -276,7 +377,13 @@ class PipelineService:
                 txt = target_text[s:e]
 
                 # 位置情報を変換
-                start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
+                base_s, base_e = PipelineService._map_target_span_to_base_offsets(
+                    s,
+                    e,
+                    target_spans,
+                    base_text_length,
+                )
+                start_pos, end_pos = _convert_offsets_to_position(base_s, base_e, text_2d)
                 if (
                     target_pages is not None
                     and int(start_pos.get("page_num", -1)) not in target_pages
@@ -308,7 +415,15 @@ class PipelineService:
                             if s == e:
                                 continue
                             txt = target_text[s:e]
-                            start_pos, end_pos = _convert_offsets_to_position(s, e, text_2d)
+                            base_s, base_e = PipelineService._map_target_span_to_base_offsets(
+                                s,
+                                e,
+                                target_spans,
+                                base_text_length,
+                            )
+                            start_pos, end_pos = _convert_offsets_to_position(
+                                base_s, base_e, text_2d
+                            )
                             if (
                                 target_pages is not None
                                 and int(start_pos.get("page_num", -1)) not in target_pages
