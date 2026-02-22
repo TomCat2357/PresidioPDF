@@ -567,6 +567,10 @@ class ResultPanel(QWidget):
         self.results_table.clearSelection()
         self.on_selection_changed()
 
+    def focus_results_table(self):
+        """結果テーブルにフォーカスを移す"""
+        self.results_table.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
     def register_selected_to_omit(self):
         """選択語を無視対象（ommit_entity）へ登録する"""
         selected_rows = self.get_selected_rows()

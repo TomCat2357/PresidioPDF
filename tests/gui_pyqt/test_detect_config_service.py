@@ -486,3 +486,150 @@ def test_build_exact_match_entities_allows_different_entity_same_span():
     assert new_entities[0]["entity"] == "PERSON"
     assert new_entities[0]["start"] == {"page_num": 0, "block_num": 0, "offset": 0}
     assert new_entities[0]["end"] == {"page_num": 0, "block_num": 0, "offset": 1}
+
+
+def test_dedupe_detect_by_entity_and_span_skips_complete_matches():
+    detect_list = [
+        {
+            "word": "田中",
+            "entity": "PERSON",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+            "origin": "auto",
+        },
+        {
+            "word": "田中太郎",
+            "entity": "PERSON",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+            "origin": "custom",
+        },
+    ]
+
+    deduped = PipelineService._dedupe_detect_by_entity_and_span(detect_list)
+
+    assert len(deduped) == 1
+    assert deduped[0]["word"] == "田中"
+    assert deduped[0]["origin"] == "auto"
+
+
+def test_dedupe_detect_by_entity_and_span_keeps_different_entity_same_span():
+    detect_list = [
+        {
+            "word": "田中",
+            "entity": "PERSON",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+        },
+        {
+            "word": "田中",
+            "entity": "LOCATION",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+        },
+    ]
+
+    deduped = PipelineService._dedupe_detect_by_entity_and_span(detect_list)
+
+    assert len(deduped) == 2
+    assert deduped[0]["entity"] == "PERSON"
+    assert deduped[1]["entity"] == "LOCATION"
+
+
+class _ResultPanelDetectInputDouble:
+    def __init__(self, entities):
+        self._entities = entities
+
+    def get_entities(self):
+        return self._entities
+
+
+class _MainWindowDetectInputDouble:
+    def __init__(self, read_result, panel_entities):
+        self.app_state = SimpleNamespace(read_result=read_result)
+        self.result_panel = _ResultPanelDetectInputDouble(panel_entities)
+        self.messages = []
+
+    def log_message(self, message):
+        self.messages.append(message)
+
+
+def test_build_read_result_for_detect_uses_current_panel_entities():
+    read_result = {
+        "metadata": {"pdf": {"path": "/tmp/sample.pdf"}},
+        "text": [["dummy"]],
+        "detect": [
+            {
+                "word": "旧検出",
+                "entity": "PERSON",
+                "start": {"page_num": 0, "block_num": 0, "offset": 0},
+                "end": {"page_num": 0, "block_num": 0, "offset": 1},
+            }
+        ],
+    }
+    panel_entities = [
+        {
+            "word": "既存1",
+            "entity": "PERSON",
+            "start": {"page_num": 0, "block_num": 0, "offset": 1},
+            "end": {"page_num": 0, "block_num": 0, "offset": 2},
+        },
+        {
+            "word": "既存2",
+            "entity": "LOCATION",
+            "start": {"page_num": 0, "block_num": 0, "offset": 3},
+            "end": {"page_num": 0, "block_num": 0, "offset": 4},
+        },
+    ]
+    fake = _MainWindowDetectInputDouble(read_result, panel_entities)
+
+    result = MainWindow._build_read_result_for_detect(fake)
+
+    assert result["detect"] == panel_entities
+    assert result["detect"] is not panel_entities
+    assert any("既存検出 2件を保持してDetectを実行します" in msg for msg in fake.messages)
+
+
+class _ResultPanelPreviewClickDouble:
+    def __init__(self, entities):
+        self.entities = entities
+        self.selected_rows = []
+        self.focused = False
+
+    def select_row(self, row):
+        self.selected_rows.append(row)
+
+    def focus_results_table(self):
+        self.focused = True
+
+
+class _MainWindowPreviewClickDouble:
+    def __init__(self):
+        self._all_preview_entities = [
+            {
+                "text": "田中",
+                "entity_type": "PERSON",
+                "page_num": 0,
+                "block_num": 0,
+                "offset": 0,
+            }
+        ]
+        self.result_panel = _ResultPanelPreviewClickDouble(
+            [
+                {
+                    "word": "田中",
+                    "entity": "PERSON",
+                    "start": {"page_num": 0, "block_num": 0, "offset": 0},
+                    "end": {"page_num": 0, "block_num": 0, "offset": 1},
+                }
+            ]
+        )
+
+
+def test_on_preview_entity_clicked_moves_focus_to_result_table():
+    fake = _MainWindowPreviewClickDouble()
+
+    MainWindow.on_preview_entity_clicked(fake, 0)
+
+    assert fake.result_panel.selected_rows == [0]
+    assert fake.result_panel.focused is True

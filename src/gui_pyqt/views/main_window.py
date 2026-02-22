@@ -1751,6 +1751,7 @@ class MainWindow(QMainWindow):
                     and block_num == clicked_block
                     and offset == clicked_offset):
                 self.result_panel.select_row(i)
+                self.result_panel.focus_results_table()
                 return
 
     def _highlight_all_entities(self, result: dict):
@@ -2135,7 +2136,7 @@ class MainWindow(QMainWindow):
         self._duplicate_base_result = None
 
     def _build_read_result_for_detect(self) -> Dict[str, Any]:
-        """Detect入力用にread_resultへ手動マークを統合したコピーを返す"""
+        """Detect入力用にread_resultへ現在の検出一覧を統合したコピーを返す"""
         base_read = self.app_state.read_result or {}
         if not isinstance(base_read, dict):
             return {}
@@ -2145,43 +2146,20 @@ class MainWindow(QMainWindow):
         if not isinstance(read_detect, list):
             read_detect = []
 
-        # ResultPanelに表示中の手動マークだけを保持対象として抽出
+        # ResultPanelに表示中の項目をDetect入力へそのまま反映する
         current_entities = self.result_panel.get_entities()
-        manual_entities = []
+        panel_entities: List[Dict[str, Any]] = []
         if isinstance(current_entities, list):
             for entity in current_entities:
-                if self._is_manual_entity(entity):
-                    manual_entities.append(copy.deepcopy(entity))
+                if isinstance(entity, dict):
+                    panel_entities.append(copy.deepcopy(entity))
 
-        if not manual_entities:
+        if not panel_entities:
             read_input["detect"] = read_detect
             return read_input
 
-        merged_detect = []
-        seen = set()
-
-        for entity in read_detect:
-            if not isinstance(entity, dict):
-                continue
-            key = self._entity_identity_key(entity)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged_detect.append(entity)
-
-        added_count = 0
-        for entity in manual_entities:
-            key = self._entity_identity_key(entity)
-            if key in seen:
-                continue
-            seen.add(key)
-            merged_detect.append(entity)
-            added_count += 1
-
-        if added_count > 0:
-            self.log_message(f"手動マーク {added_count}件を保持してDetectを実行します")
-
-        read_input["detect"] = merged_detect
+        read_input["detect"] = panel_entities
+        self.log_message(f"既存検出 {len(panel_entities)}件を保持してDetectを実行します")
         return read_input
 
     # =========================================================================

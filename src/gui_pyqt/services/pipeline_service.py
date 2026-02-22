@@ -174,6 +174,51 @@ class PipelineService:
         return base_start, base_end
 
     @staticmethod
+    def _build_detect_entity_span_key(entry: Dict[str, Any]) -> Tuple[Any, ...]:
+        """detect項目の重複判定キー（entity + start/end）を返す"""
+        start_pos = entry.get("start", {})
+        end_pos = entry.get("end", {})
+        if not isinstance(start_pos, dict):
+            start_pos = {}
+        if not isinstance(end_pos, dict):
+            end_pos = {}
+
+        def _to_int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return -1
+
+        return (
+            str(entry.get("entity", "")),
+            _to_int(start_pos.get("page_num")),
+            _to_int(start_pos.get("block_num")),
+            _to_int(start_pos.get("offset")),
+            _to_int(end_pos.get("page_num")),
+            _to_int(end_pos.get("block_num")),
+            _to_int(end_pos.get("offset")),
+        )
+
+    @staticmethod
+    def _dedupe_detect_by_entity_and_span(detect_list: List[Any]) -> List[Any]:
+        """entity + start/end が完全一致する detect 項目を先勝ちで重複排除する"""
+        deduped: List[Any] = []
+        seen_keys: set = set()
+
+        for entry in detect_list:
+            if not isinstance(entry, dict):
+                deduped.append(entry)
+                continue
+
+            key = PipelineService._build_detect_entity_span_key(entry)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(entry)
+
+        return deduped
+
+    @staticmethod
     def run_read(pdf_path: Path, include_coordinate_map: bool = True) -> Dict[str, Any]:
         """PDF読込処理（read）
 
@@ -458,6 +503,7 @@ class PipelineService:
             merged_detect = list(existing_detect) + detections_plain
         else:
             merged_detect = detections_plain
+        merged_detect = PipelineService._dedupe_detect_by_entity_and_span(merged_detect)
 
         # ommitはaddより優先: 最終検出結果に対して除外を適用
         if compiled_excludes:
