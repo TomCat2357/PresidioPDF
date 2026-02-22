@@ -375,6 +375,54 @@ class DetectConfigService:
         self._write_json(data)
         return dict(data.get("add_entity", {}))
 
+    def remove_omit_patterns_by_words(self, words: List[Any]) -> List[str]:
+        """ommit_entity から指定語の一致パターンを削除して保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+
+        removal_patterns = self._build_exact_pattern_keys_from_words(words)
+        current = self._normalize_pattern_list(data.get("ommit_entity", []))
+        data["ommit_entity"] = [
+            pattern
+            for pattern in current
+            if pattern not in removal_patterns
+        ]
+        self._write_json(data)
+        return list(data.get("ommit_entity", []))
+
+    def remove_add_patterns_by_words(self, words: List[Any]) -> Dict[str, List[str]]:
+        """add_entity から指定語の一致パターンを種別を問わず削除して保存する"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+
+        removal_patterns = self._build_exact_pattern_keys_from_words(words)
+        raw_add = data.get("add_entity", {})
+        add_entity = {entity: [] for entity in self.ENTITY_TYPES}
+        if isinstance(raw_add, dict):
+            for raw_entity, raw_patterns in raw_add.items():
+                entity = self._normalize_add_entity_key(raw_entity)
+                if not entity:
+                    continue
+                normalized_patterns = self._normalize_pattern_list(raw_patterns)
+                filtered_patterns = [
+                    pattern
+                    for pattern in normalized_patterns
+                    if pattern not in removal_patterns
+                ]
+                current_patterns = add_entity.get(entity, [])
+                add_entity[entity] = self._merge_pattern_list(
+                    current_patterns,
+                    filtered_patterns,
+                )
+
+        data["add_entity"] = add_entity
+        self._write_json(data)
+        return dict(data.get("add_entity", {}))
+
     @classmethod
     def _normalize_entity_name(cls, value: Any) -> str:
         name = str(value or "").strip().upper()
@@ -409,6 +457,19 @@ class DetectConfigService:
             seen.add(pattern)
             result.append(pattern)
         return result
+
+    @classmethod
+    def _build_exact_pattern_keys_from_words(cls, words: List[Any]) -> set[str]:
+        keys: set[str] = set()
+        for raw_word in words or []:
+            word = str(raw_word or "").strip()
+            if not word:
+                continue
+            keys.add(word)
+            pattern = cls.build_exact_word_pattern(word)
+            if pattern:
+                keys.add(pattern)
+        return keys
 
     @staticmethod
     def _merge_pattern_list(existing: List[str], additional: List[str]) -> List[str]:

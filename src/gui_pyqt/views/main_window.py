@@ -1470,6 +1470,7 @@ class MainWindow(QMainWindow):
             return
 
         words = [word for word, _ in word_entity_pairs]
+        add_patterns_before, _ = self.detect_config_service.load_custom_patterns()
         omit_patterns = [
             self.detect_config_service.build_exact_word_pattern(word)
             for word in words
@@ -1477,6 +1478,12 @@ class MainWindow(QMainWindow):
         omit_patterns = [pattern for pattern in omit_patterns if pattern]
         if omit_patterns:
             self.detect_config_service.add_omit_patterns(omit_patterns)
+        self.detect_config_service.remove_add_patterns_by_words(words)
+        add_patterns_after, _ = self.detect_config_service.load_custom_patterns()
+        removed_from_add_count = max(
+            0,
+            len(add_patterns_before) - len(add_patterns_after),
+        )
 
         target_words = set(words)
         current_entities = self.result_panel.get_entities()
@@ -1503,7 +1510,8 @@ class MainWindow(QMainWindow):
 
         self.log_message(
             "無視対象へ登録: "
-            f"{len(words)}語, 検出結果から{removed_count}件を除外"
+            f"{len(words)}語, 検出結果から{removed_count}件を除外, "
+            f"検出対象から{removed_from_add_count}件を解除"
         )
         self._set_dirty(True)
         self.update_action_states()
@@ -1519,6 +1527,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "登録対象の語がありません")
             return
 
+        words = [word for word, _ in word_entity_pairs]
+        _, omit_patterns_before = self.detect_config_service.load_custom_patterns()
+
         add_patterns: List[tuple] = []
         runtime_pairs: List[tuple] = []
         for word, raw_entity in word_entity_pairs:
@@ -1530,6 +1541,12 @@ class MainWindow(QMainWindow):
 
         if add_patterns:
             self.detect_config_service.add_add_patterns(add_patterns)
+        self.detect_config_service.remove_omit_patterns_by_words(words)
+        _, omit_patterns_after = self.detect_config_service.load_custom_patterns()
+        removed_from_omit_count = max(
+            0,
+            len(omit_patterns_before) - len(omit_patterns_after),
+        )
 
         current_entities = self.result_panel.get_entities()
         new_entities = self._build_exact_match_entities(runtime_pairs, current_entities)
@@ -1544,7 +1561,8 @@ class MainWindow(QMainWindow):
 
         self.log_message(
             "検出対象へ登録: "
-            f"{len(word_entity_pairs)}語, 検出結果へ{len(new_entities)}件を追加"
+            f"{len(word_entity_pairs)}語, 検出結果へ{len(new_entities)}件を追加, "
+            f"無視対象から{removed_from_omit_count}件を解除"
         )
         self._set_dirty(True)
         self.update_action_states()
@@ -1615,7 +1633,7 @@ class MainWindow(QMainWindow):
         word_entity_pairs: List[tuple],
         current_entities: List[Any],
     ) -> List[Dict[str, Any]]:
-        """全文検索で完全一致語を抽出し、未マーク分のみ検出項目として返す"""
+        """全文検索で完全一致語を抽出し、同種別・同範囲以外を検出項目として返す"""
         if not word_entity_pairs:
             return []
 
@@ -1637,7 +1655,7 @@ class MainWindow(QMainWindow):
         if not target_text:
             return []
 
-        existing_spans = set()
+        existing_entity_spans = set()
         for entity in current_entities or []:
             if not isinstance(entity, dict):
                 continue
@@ -1645,15 +1663,18 @@ class MainWindow(QMainWindow):
             end_pos = entity.get("end", {})
             if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
                 continue
-            existing_spans.add(
-                self._build_span_key_from_positions(start_pos, end_pos)
+            normalized_entity_name = self._normalize_runtime_entity_name(
+                entity.get("entity", "OTHER")
             )
+            span_key = self._build_span_key_from_positions(start_pos, end_pos)
+            existing_entity_spans.add((normalized_entity_name, span_key))
 
         from src.cli.detect_main import _convert_offsets_to_position
 
-        added_spans = set()
+        added_entity_spans = set()
         new_entities: List[Dict[str, Any]] = []
-        for word, entity_name in word_entity_pairs:
+        for word, raw_entity_name in word_entity_pairs:
+            entity_name = self._normalize_runtime_entity_name(raw_entity_name)
             pattern = self.detect_config_service.build_exact_word_pattern(word)
             if not pattern:
                 continue
@@ -1672,7 +1693,11 @@ class MainWindow(QMainWindow):
                     text_2d,
                 )
                 span_key = self._build_span_key_from_positions(start_pos, end_pos)
-                if span_key in existing_spans or span_key in added_spans:
+                entity_span_key = (entity_name, span_key)
+                if (
+                    entity_span_key in existing_entity_spans
+                    or entity_span_key in added_entity_spans
+                ):
                     continue
 
                 new_entities.append(
@@ -1684,7 +1709,7 @@ class MainWindow(QMainWindow):
                         "origin": "custom",
                     }
                 )
-                added_spans.add(span_key)
+                added_entity_spans.add(entity_span_key)
 
         return new_entities
 

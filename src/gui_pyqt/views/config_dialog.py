@@ -89,11 +89,11 @@ class DetectConfigDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        info = QLabel("チェックしたエンティティのみ検出します。")
+        info = QLabel("チェックした対象のみ検出します。")
         info.setWordWrap(True)
         layout.addWidget(info)
 
-        entity_group = QGroupBox("検出エンティティ")
+        entity_group = QGroupBox("検出対象")
         entity_layout = QGridLayout()
         for entity in self.entity_types:
             checkbox = QCheckBox(get_entity_type_name_ja(entity))
@@ -134,9 +134,9 @@ class DetectConfigDialog(QDialog):
         duplicate_group = QGroupBox("重複削除設定")
         duplicate_layout = QVBoxLayout()
 
-        entity_mode_label = QLabel("エンティティ重複判定")
-        self.entity_overlap_any_radio = QRadioButton("異なるエンティティでも同一扱い")
-        self.entity_overlap_same_radio = QRadioButton("同じエンティティのみ")
+        entity_mode_label = QLabel("対象重複判定")
+        self.entity_overlap_any_radio = QRadioButton("異なる対象でも同一扱い")
+        self.entity_overlap_same_radio = QRadioButton("同じ対象のみ")
         self._entity_overlap_group = QButtonGroup(self)
         self._entity_overlap_group.addButton(self.entity_overlap_any_radio)
         self._entity_overlap_group.addButton(self.entity_overlap_same_radio)

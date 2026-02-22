@@ -1,5 +1,7 @@
 import json
+import copy
 import re
+from types import SimpleNamespace
 
 from src.gui_pyqt.services.detect_config_service import DetectConfigService
 from src.gui_pyqt.services.pipeline_service import PipelineService
@@ -342,3 +344,145 @@ def test_build_detect_list_csv_rows_formats_columns():
         ["1", "人名", "山田", "p1:b1:1", ""],
         ["2", "場所", "渋谷", "p2:b3:11", "✓"],
     ]
+
+
+def test_remove_add_patterns_by_words_removes_all_entities(tmp_path):
+    service = DetectConfigService(tmp_path)
+    config_path = service.config_path
+    tanaka_pattern = DetectConfigService.build_exact_word_pattern("田中")
+    yamada_pattern = DetectConfigService.build_exact_word_pattern("山田")
+    _write_config(
+        config_path,
+        {
+            "spacy_model": "ja_core_news_sm",
+            "enabled_entities": ["PERSON", "LOCATION"],
+            "add_entity": {
+                "PERSON": [tanaka_pattern, "田中", yamada_pattern],
+                "LOCATION": [tanaka_pattern],
+            },
+            "ommit_entity": [],
+            "duplicate_settings": {"entity_overlap_mode": "any", "overlap": "overlap"},
+        },
+    )
+
+    service.remove_add_patterns_by_words(["田中"])
+    data = _read_config(config_path)
+    add_entity = data.get("add_entity", {})
+
+    assert add_entity.get("PERSON") == [yamada_pattern]
+    assert add_entity.get("LOCATION") == []
+
+
+def test_remove_omit_patterns_by_words_removes_exact_word_and_pattern(tmp_path):
+    service = DetectConfigService(tmp_path)
+    config_path = service.config_path
+    tanaka_pattern = DetectConfigService.build_exact_word_pattern("田中")
+    yamada_pattern = DetectConfigService.build_exact_word_pattern("山田")
+    _write_config(
+        config_path,
+        {
+            "spacy_model": "ja_core_news_sm",
+            "enabled_entities": ["PERSON"],
+            "add_entity": {"PERSON": []},
+            "ommit_entity": [tanaka_pattern, "田中", yamada_pattern],
+            "duplicate_settings": {"entity_overlap_mode": "any", "overlap": "overlap"},
+        },
+    )
+
+    updated = service.remove_omit_patterns_by_words(["田中"])
+    assert updated == [yamada_pattern]
+
+
+def test_normalize_config_data_deduplicates_same_word_entries(tmp_path):
+    service = DetectConfigService(tmp_path)
+    config_path = service.config_path
+    _write_config(
+        config_path,
+        {
+            "spacy_model": "ja_core_news_sm",
+            "enabled_entities": ["PERSON", "LOCATION"],
+            "add_entity": {
+                "PEARSON": ["田中", "田中"],
+                "LOCATION": ["田中", "田中"],
+            },
+            "ommit_entity": ["山田", "山田"],
+            "duplicate_settings": {"entity_overlap_mode": "any", "overlap": "overlap"},
+        },
+    )
+
+    service.ensure_config_file()
+    normalized = _read_config(config_path)
+    add_entity = normalized.get("add_entity", {})
+
+    assert add_entity.get("PERSON") == ["田中"]
+    assert add_entity.get("LOCATION") == ["田中"]
+    assert normalized.get("ommit_entity") == ["山田"]
+
+
+class _MainWindowExactMatchDouble:
+    def __init__(self, text_2d):
+        self.detect_config_service = DetectConfigService()
+        self.app_state = SimpleNamespace(read_result=None)
+        self._source_result = {"text": text_2d}
+        self.messages = []
+
+    def _get_current_result(self):
+        return self._source_result
+
+    def _extract_text_2d_from_result(self, result):
+        return MainWindow._extract_text_2d_from_result(result)
+
+    def _build_span_key_from_positions(self, start_pos, end_pos):
+        return MainWindow._build_span_key_from_positions(start_pos, end_pos)
+
+    def _normalize_runtime_entity_name(self, entity_name):
+        return MainWindow._normalize_runtime_entity_name(entity_name)
+
+    def log_message(self, message):
+        self.messages.append(message)
+
+
+def test_build_exact_match_entities_skips_same_entity_and_same_span():
+    fake = _MainWindowExactMatchDouble([["田中"]])
+    current_entities = [
+        {
+            "word": "田中",
+            "entity": "PERSON",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+        }
+    ]
+    snapshot = copy.deepcopy(current_entities)
+
+    new_entities = MainWindow._build_exact_match_entities(
+        fake,
+        [("田中", "PEARSON")],
+        current_entities,
+    )
+
+    assert new_entities == []
+    assert current_entities == snapshot
+
+
+def test_build_exact_match_entities_allows_different_entity_same_span():
+    fake = _MainWindowExactMatchDouble([["田中"]])
+    current_entities = [
+        {
+            "word": "田中",
+            "entity": "LOCATION",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+        }
+    ]
+
+    new_entities = MainWindow._build_exact_match_entities(
+        fake,
+        [("田中", "PERSON")],
+        current_entities,
+    )
+
+    assert len(new_entities) == 1
+    assert new_entities[0]["word"] == "田中"
+    assert new_entities[0]["entity"] == "PERSON"
+    assert new_entities[0]["start"] == {"page_num": 0, "block_num": 0, "offset": 0}
+    assert new_entities[0]["end"] == {"page_num": 0, "block_num": 0, "offset": 1}
