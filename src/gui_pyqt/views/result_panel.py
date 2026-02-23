@@ -231,7 +231,7 @@ class ResultPanel(QWidget):
         layout.addLayout(header_layout)
 
         # フィルター入力ウィジェット作成（テーブルのrow 0に埋め込む）
-        filter_columns = ["ページ", "種別", "テキスト", "位置", "手動"]
+        filter_columns = ["ページ", "種別", "テキスト", "位置", "検出元"]
         for col, column_name in enumerate(filter_columns):
             filter_input = QLineEdit(self)
             filter_input.setPlaceholderText(column_name)
@@ -242,7 +242,7 @@ class ResultPanel(QWidget):
         self.results_table = QTableWidget()
         self.results_table.setColumnCount(5)
         self.results_table.setHorizontalHeaderLabels([
-            "ページ", "種別", "テキスト", "位置", "手動"
+            "ページ", "種別", "テキスト", "位置", "検出元"
         ])
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -272,7 +272,7 @@ class ResultPanel(QWidget):
         self.results_table.setColumnWidth(0, 45)   # ページ
         self.results_table.setColumnWidth(1, 90)   # 種別
         self.results_table.setColumnWidth(3, 130)  # 位置
-        self.results_table.setColumnWidth(4, 38)   # 手動
+        self.results_table.setColumnWidth(4, 45)   # 検出元
 
         # フィルター行（row 0）の垂直ヘッダーを空にする
         self.results_table.setVerticalHeaderLabels([""])
@@ -325,7 +325,7 @@ class ResultPanel(QWidget):
         if not isinstance(detect_list, list):
             detect_list = []
 
-        self.entities = list(detect_list)
+        self.entities = self._dedupe_addition_vs_auto(list(detect_list))
         self.update_table()
         self.on_selection_changed()
 
@@ -378,10 +378,9 @@ class ResultPanel(QWidget):
                 position_str = ""
             self.results_table.setItem(i + 1, 3, QTableWidgetItem(position_str))
 
-            # 手動追加フラグ
-            is_manual = self._is_manual_entity(entity)
-            manual_str = "✓" if is_manual else ""
-            self.results_table.setItem(i + 1, 4, QTableWidgetItem(manual_str))
+            # 検出元ラベル（手動／追加／自動）
+            origin_label = self._get_origin_label(entity)
+            self.results_table.setItem(i + 1, 4, QTableWidgetItem(origin_label))
 
         # 垂直ヘッダー: row 0（フィルター行）は空、以降は 1, 2, 3...
         v_labels = [""] + [str(i + 1) for i in range(len(self._visible_entities))]
@@ -469,7 +468,7 @@ class ResultPanel(QWidget):
                 return f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
             return ""
         if column == 4:
-            return "✓" if cls._is_manual_entity(entity) else ""
+            return cls._get_origin_label(entity)
         return ""
 
     @staticmethod
@@ -481,13 +480,56 @@ class ResultPanel(QWidget):
             return default
 
     @staticmethod
-    def _is_manual_entity(entity: Dict) -> bool:
-        """手動追加項目かどうかを判定"""
+    def _get_origin_label(entity: Dict) -> str:
+        """エンティティの検出元ラベルを返す（手動／追加／自動）"""
         if not isinstance(entity, dict):
-            return False
+            return "自動"
         if entity.get("manual") is True:
-            return True
-        return str(entity.get("origin", "")).lower() == "manual"
+            return "手動"
+        origin = str(entity.get("origin", "")).strip().lower()
+        if origin == "manual":
+            return "手動"
+        if origin == "custom":
+            return "追加"
+        return "自動"
+
+    @classmethod
+    def _dedupe_addition_vs_auto(cls, entities: List[Dict]) -> List[Dict]:
+        """追加と自動が同じエンティティ・同じ位置の場合は自動のみ残す"""
+        from collections import defaultdict
+        span_map: Dict[Any, List[int]] = defaultdict(list)
+        no_key_indices: List[int] = []
+        for i, entity in enumerate(entities):
+            if not isinstance(entity, dict):
+                no_key_indices.append(i)
+                continue
+            start_pos = entity.get("start", {})
+            end_pos = entity.get("end", {})
+            if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
+                no_key_indices.append(i)
+                continue
+            span_key = (
+                str(entity.get("entity", "")),
+                start_pos.get("page_num"),
+                start_pos.get("block_num"),
+                start_pos.get("offset"),
+                end_pos.get("page_num"),
+                end_pos.get("block_num"),
+                end_pos.get("offset"),
+            )
+            span_map[span_key].append(i)
+
+        remove_indices: set = set()
+        for idxs in span_map.values():
+            if len(idxs) <= 1:
+                continue
+            has_auto = any(cls._get_origin_label(entities[i]) == "自動" for i in idxs)
+            if has_auto:
+                for i in idxs:
+                    if cls._get_origin_label(entities[i]) == "追加":
+                        remove_indices.add(i)
+
+        return [e for i, e in enumerate(entities) if i not in remove_indices]
 
     @classmethod
     def _entity_sort_key(cls, entity: Dict, column: int):
@@ -518,7 +560,9 @@ class ResultPanel(QWidget):
         if column == 3:
             return (page_num, block_num, offset, end_page_num, end_block_num, end_offset)
         if column == 4:
-            return 1 if cls._is_manual_entity(entity) else 0
+            label = cls._get_origin_label(entity)
+            order = {"手動": 0, "追加": 1, "自動": 2}
+            return order.get(label, 3)
         return str(entity)
 
     def _on_select_current_page_shortcut(self):

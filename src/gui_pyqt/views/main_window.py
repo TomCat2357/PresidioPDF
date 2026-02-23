@@ -291,6 +291,20 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(export_button)
         self.export_button = export_button
 
+        # ヘルプ（ぶら下がりメニュー）
+        dedupe_priority_action = QAction("重複削除優先順位", self)
+        dedupe_priority_action.triggered.connect(self._show_dedupe_priority_help)
+
+        help_menu = QMenu(self)
+        help_menu.addAction(dedupe_priority_action)
+
+        help_button = QToolButton(self)
+        help_button.setText("ヘルプ")
+        help_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        help_button.setMenu(help_menu)
+        toolbar.addWidget(help_button)
+        self.help_button = help_button
+
         # 初期状態では一部のアクションを無効化
         self.update_action_states()
 
@@ -343,6 +357,24 @@ class MainWindow(QMainWindow):
     def create_statusbar(self):
         """ステータスバーの作成"""
         self.statusBar().showMessage("準備完了")
+
+    def _show_dedupe_priority_help(self):
+        """重複削除優先順位の説明ダイアログを表示"""
+        msg = (
+            "<b>重複削除 優先順位</b><br><br>"
+            "重複するエンティティが存在する場合、以下の順位で残すものを決定します：<br><br>"
+            "<b>検出元 (origin)</b> &gt; <b>包含 (contain)</b> &gt; <b>長さ (length)</b> "
+            "&gt; <b>エンティティ種別 (entity)</b> &gt; <b>位置 (position)</b><br><br>"
+            "<u>検出元の優先順位：</u><br>"
+            "　手動（ダイアログで追加）&gt; 追加（検出対象に登録）= 自動（自動検出）<br><br>"
+            "<u>各基準の説明：</u><br>"
+            "　<b>検出元</b>：手動 &gt; 追加 = 自動<br>"
+            "　<b>包含</b>：検出範囲が広い方を優先<br>"
+            "　<b>長さ</b>：テキストが長い方を優先<br>"
+            "　<b>エンティティ種別</b>：設定された種別の順位で優先<br>"
+            "　<b>位置</b>：入力順が先のものを優先"
+        )
+        QMessageBox.information(self, "重複削除 優先順位", msg)
 
     def connect_signals(self):
         """AppStateとTaskRunnerのシグナルと接続"""
@@ -1493,7 +1525,11 @@ class MainWindow(QMainWindow):
             if not isinstance(entity, dict):
                 kept_entities.append(copy.deepcopy(entity))
                 continue
-            if str(entity.get("word", "")) in target_words:
+            is_manual = (
+                entity.get("manual") is True
+                or str(entity.get("origin", "")).strip().lower() == "manual"
+            )
+            if str(entity.get("word", "")) in target_words and not is_manual:
                 removed_count += 1
                 continue
             kept_entities.append(copy.deepcopy(entity))

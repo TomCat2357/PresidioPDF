@@ -328,16 +328,8 @@ class DetectConfigService:
 
     @classmethod
     def build_exact_word_pattern(cls, word: Any) -> str:
-        """語の完全一致を狙う正規表現パターンを返す"""
-        normalized_word = str(word or "").strip()
-        if not normalized_word:
-            return ""
-        escaped = re.escape(normalized_word)
-        return (
-            rf"(?<![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
-            rf"{escaped}"
-            rf"(?![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
-        )
+        """語をそのままパターンとして返す"""
+        return str(word or "").strip()
 
     def add_omit_patterns(self, patterns: List[Any]) -> List[str]:
         """ommit_entity にパターンを追記して保存する"""
@@ -466,9 +458,14 @@ class DetectConfigService:
             if not word:
                 continue
             keys.add(word)
-            pattern = cls.build_exact_word_pattern(word)
-            if pattern:
-                keys.add(pattern)
+            # 旧形式（境界チェック付き）のパターンも削除候補として追加
+            escaped = re.escape(word)
+            old_pattern = (
+                rf"(?<![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
+                rf"{escaped}"
+                rf"(?![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
+            )
+            keys.add(old_pattern)
         return keys
 
     @staticmethod
