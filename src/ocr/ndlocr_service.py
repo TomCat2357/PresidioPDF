@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import logging
 import tempfile
+from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -42,11 +44,13 @@ class OCRResult:
 class NDLOCRService:
     """NDLOCR-Liteのラッパー。"""
 
-    _MODULE_CANDIDATES: Tuple[Tuple[str, str], ...] = (
-        ("ndlocr_lite.ocr", "process"),
-        ("ndlocr_lite", "process"),
-        ("ndlocr.ocr", "process"),
-        ("ndlocr", "process"),
+    _MODULE_CANDIDATES: Tuple[Tuple[str, str, str], ...] = (
+        ("ndlocr_lite.ocr", "process", "legacy"),
+        ("ndlocr_lite", "process", "legacy"),
+        ("ndlocr.ocr", "process", "legacy"),
+        ("ndlocr", "process", "legacy"),
+        # ndlocr-lite>=1.0.0 はトップレベル `ocr.py` を提供する。
+        ("ocr", "process", "args"),
     )
 
     def __init__(self):
@@ -55,12 +59,19 @@ class NDLOCRService:
     @classmethod
     def is_available(cls) -> bool:
         """ndlocr-liteが利用可能か判定する。"""
-        for module_name, attr_name in cls._MODULE_CANDIDATES:
+        for module_name, attr_name, mode in cls._MODULE_CANDIDATES:
             try:
                 spec = importlib.util.find_spec(module_name)
             except Exception:
                 spec = None
             if spec is None:
+                continue
+            if mode == "args":
+                spec_origin = Path(spec.origin) if spec.origin else None
+                if spec_origin and spec_origin.exists():
+                    base_dir = spec_origin.resolve().parent
+                    if (base_dir / "model" / "deim-s-1024x1024.onnx").exists():
+                        return True
                 continue
             try:
                 module = importlib.import_module(module_name)
@@ -161,19 +172,90 @@ class NDLOCRService:
         if callable(self._process_callable):
             return self._process_callable
 
-        for module_name, attr_name in self._MODULE_CANDIDATES:
+        for module_name, attr_name, mode in self._MODULE_CANDIDATES:
             try:
                 module = importlib.import_module(module_name)
             except Exception:
                 continue
             candidate = getattr(module, attr_name, None)
             if callable(candidate):
-                self._process_callable = candidate
-                return candidate
+                if mode == "args":
+                    if not self._looks_like_ndlocr_ocr_module(module):
+                        continue
+                    self._process_callable = self._build_args_process_runner(
+                        module=module,
+                        process_callable=candidate,
+                    )
+                else:
+                    self._process_callable = candidate
+                return self._process_callable
 
         raise ImportError(
             "NDLOCR-Liteのprocess()が見つかりません。`pip install ndlocr-lite` を確認してください。"
         )
+
+    @staticmethod
+    def _looks_like_ndlocr_ocr_module(module: Any) -> bool:
+        module_path = Path(getattr(module, "__file__", "") or "")
+        if not module_path.exists():
+            return False
+        base_dir = module_path.resolve().parent
+        return (base_dir / "model" / "deim-s-1024x1024.onnx").exists()
+
+    @staticmethod
+    def _build_args_process_runner(
+        *,
+        module: Any,
+        process_callable: Callable[..., Any],
+    ) -> Callable[[str], Any]:
+        module_path = Path(getattr(module, "__file__", "") or "")
+        base_dir = module_path.resolve().parent
+
+        def _runner(image_path: str) -> Any:
+            source_image = Path(image_path)
+            output_dir = source_image.parent
+            args = Namespace(
+                sourcedir=None,
+                sourceimg=str(source_image),
+                output=str(output_dir),
+                viz=False,
+                det_weights=str(base_dir / "model" / "deim-s-1024x1024.onnx"),
+                det_classes=str(base_dir / "config" / "ndl.yaml"),
+                det_score_threshold=0.2,
+                det_conf_threshold=0.25,
+                det_iou_threshold=0.2,
+                simple_mode=False,
+                rec_weights30=str(
+                    base_dir / "model" / "parseq-ndl-16x256-30-tiny-192epoch-tegaki3.onnx"
+                ),
+                rec_weights50=str(
+                    base_dir / "model" / "parseq-ndl-16x384-50-tiny-146epoch-tegaki2.onnx"
+                ),
+                rec_weights=str(
+                    base_dir / "model" / "parseq-ndl-16x768-100-tiny-165epoch-tegaki2.onnx"
+                ),
+                rec_classes=str(base_dir / "config" / "NDLmoji.yaml"),
+                device="cpu",
+            )
+            process_callable(args)
+            output_json = output_dir / f"{source_image.stem}.json"
+            if not output_json.exists():
+                return []
+            try:
+                data = json.loads(output_json.read_text(encoding="utf-8"))
+            except Exception:
+                return []
+            if isinstance(data, dict):
+                contents = data.get("contents")
+                if (
+                    isinstance(contents, list)
+                    and contents
+                    and isinstance(contents[0], list)
+                ):
+                    return contents[0]
+            return data
+
+        return _runner
 
     @staticmethod
     def _resolve_target_pages(
@@ -264,25 +346,26 @@ class NDLOCRService:
             else:
                 return None
         elif isinstance(raw_rect, (list, tuple)):
-            if len(raw_rect) >= 8:
+            if raw_rect and all(
+                isinstance(point, (list, tuple)) and len(point) >= 2
+                for point in raw_rect
+            ):
                 points: List[Tuple[float, float]] = []
-                if all(
-                    isinstance(point, (list, tuple)) and len(point) >= 2
-                    for point in raw_rect
-                ):
-                    for point in raw_rect:
-                        try:
-                            points.append((float(point[0]), float(point[1])))
-                        except (TypeError, ValueError):
-                            return None
-                else:
+                for point in raw_rect:
                     try:
-                        numbers = [float(value) for value in raw_rect[:8]]
+                        points.append((float(point[0]), float(point[1])))
                     except (TypeError, ValueError):
                         return None
-                    points = list(zip(numbers[0::2], numbers[1::2]))
-                if not points:
+                x0 = min(point[0] for point in points)
+                y0 = min(point[1] for point in points)
+                x1 = max(point[0] for point in points)
+                y1 = max(point[1] for point in points)
+            elif len(raw_rect) >= 8:
+                try:
+                    numbers = [float(value) for value in raw_rect[:8]]
+                except (TypeError, ValueError):
                     return None
+                points = list(zip(numbers[0::2], numbers[1::2]))
                 x0 = min(point[0] for point in points)
                 y0 = min(point[1] for point in points)
                 x1 = max(point[0] for point in points)
@@ -336,6 +419,8 @@ class NDLOCRService:
                 raw_box = item.get("points")
             if raw_box is None:
                 raw_box = item.get("polygon")
+            if raw_box is None:
+                raw_box = item.get("boundingBox")
             confidence = item.get(
                 "confidence", item.get("score", item.get("prob", 0.0))
             )

@@ -20,6 +20,9 @@ uv sync
 # PyQt GUIを使う場合
 uv sync --extra gui
 
+# OCR機能（NDLOCR-Lite）も使う場合
+uv sync --extra gui --extra ocr
+
 # 開発用
 uv sync --extra dev
 ```
@@ -107,6 +110,12 @@ uv sync --extra gui
 uv run presidio-gui
 ```
 
+OCR機能を有効化する場合:
+```bash
+uv sync --extra gui --extra ocr
+uv run presidio-gui
+```
+
 ### GUI機能
 
 #### 基本操作
@@ -183,6 +192,7 @@ uv run presidio-gui
 | `gpu` | 大規模日本語モデル・GPU関連 |
 | `minimal` | 最小構成 |
 | `gui` | PyQt6 GUI関連 |
+| `ocr` | NDLOCR-Lite OCR関連 |
 | `model-sm` | spaCy `ja-core-news-sm` モデル |
 | `model-md` | spaCy `ja-core-news-md` モデル |
 | `model-lg` | spaCy `ja-core-news-lg` モデル |
