@@ -61,11 +61,15 @@ class DetectConfigService:
         "ignore_newlines": True,
         "ignore_whitespace": False,
     }
+    DEFAULT_OCR_SETTINGS = {
+        "enabled": False,
+        "font_color": [0, 0, 0],
+        "opacity": 0.0,
+        "ocr_before_detect": False,
+    }
     CHUNK_MAX_CHARS_MIN = 100
     CHUNK_MAX_CHARS_MAX = 100000
-    EXACT_MATCH_BOUNDARY_CHAR_CLASS = (
-        r"0-9A-Za-zＡ-Ｚａ-ｚァ-ヶー一-龯々〆ヵヶ"
-    )
+    EXACT_MATCH_BOUNDARY_CHAR_CLASS = r"0-9A-Za-zＡ-Ｚａ-ｚァ-ヶー一-龯々〆ヵヶ"
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = Path(base_dir) if base_dir else Path.home()
@@ -78,7 +82,9 @@ class DetectConfigService:
                 self._write_json(self._default_json_config())
             else:
                 # 既存JSONがあれば、必要キーを補完した正規化データで保存し直す
-                normalized_data = self._normalize_config_data(self._load_json(self.config_path))
+                normalized_data = self._normalize_config_data(
+                    self._load_json(self.config_path)
+                )
                 self._write_json(normalized_data)
             return self._extract_enabled_entities(self._load_json(self.config_path))
         except Exception as exc:
@@ -223,7 +229,9 @@ class DetectConfigService:
     def save_last_directory(self, key: str, directory: str) -> None:
         """最後に使用したディレクトリパスを config.json に保存する"""
         try:
-            data = self._load_json(self.config_path) if self.config_path.exists() else {}
+            data = (
+                self._load_json(self.config_path) if self.config_path.exists() else {}
+            )
             if not isinstance(data, dict):
                 data = {}
             last_dirs = data.get("last_directories", {})
@@ -377,9 +385,7 @@ class DetectConfigService:
         removal_patterns = self._build_exact_pattern_keys_from_words(words)
         current = self._normalize_pattern_list(data.get("ommit_entity", []))
         data["ommit_entity"] = [
-            pattern
-            for pattern in current
-            if pattern not in removal_patterns
+            pattern for pattern in current if pattern not in removal_patterns
         ]
         self._write_json(data)
         return list(data.get("ommit_entity", []))
@@ -544,6 +550,27 @@ class DetectConfigService:
         self._write_json(data)
         return dict(data["text_preprocess_settings"])
 
+    def load_ocr_settings(self) -> Dict[str, Any]:
+        """OCR設定を読み込む。"""
+        self.ensure_config_file()
+        try:
+            data = self._normalize_config_data(self._load_json(self.config_path))
+            return data.get("ocr_settings", dict(self.DEFAULT_OCR_SETTINGS))
+        except Exception as exc:
+            logger.warning(f"OCR設定の読み込みに失敗: {self.config_path} ({exc})")
+        return dict(self.DEFAULT_OCR_SETTINGS)
+
+    def save_ocr_settings(self, settings: Any) -> Dict[str, Any]:
+        """OCR設定を保存する。"""
+        data = self._load_json(self.config_path) if self.config_path.exists() else {}
+        if not isinstance(data, dict):
+            data = {}
+        data = self._normalize_config_data(data)
+        payload = settings if isinstance(settings, dict) else {}
+        data["ocr_settings"] = self._extract_ocr_settings({"ocr_settings": payload})
+        self._write_json(data)
+        return dict(data["ocr_settings"])
+
     def _extract_chunk_settings(self, data: Any) -> Dict[str, Any]:
         """チャンク分割設定を抽出・正規化する"""
         if not isinstance(data, dict):
@@ -560,9 +587,7 @@ class DetectConfigService:
             delimiter = self.DEFAULT_CHUNK_SETTINGS["delimiter"]
 
         max_chars = self._coerce_chunk_max_chars(
-            chunk_section.get(
-                "max_chars", self.DEFAULT_CHUNK_SETTINGS["max_chars"]
-            )
+            chunk_section.get("max_chars", self.DEFAULT_CHUNK_SETTINGS["max_chars"])
         )
 
         return {"delimiter": delimiter, "max_chars": max_chars}
@@ -593,6 +618,36 @@ class DetectConfigService:
             ),
         }
 
+    def _extract_ocr_settings(self, data: Any) -> Dict[str, Any]:
+        """OCR設定を抽出・正規化する。"""
+        if not isinstance(data, dict):
+            return dict(self.DEFAULT_OCR_SETTINGS)
+
+        settings = data.get("ocr_settings", {})
+        if not isinstance(settings, dict):
+            settings = {}
+
+        return {
+            "enabled": self._coerce_bool(
+                settings.get("enabled", self.DEFAULT_OCR_SETTINGS["enabled"]),
+                self.DEFAULT_OCR_SETTINGS["enabled"],
+            ),
+            "font_color": self._coerce_rgb_color(
+                settings.get("font_color", self.DEFAULT_OCR_SETTINGS["font_color"]),
+                self.DEFAULT_OCR_SETTINGS["font_color"],
+            ),
+            "opacity": self._coerce_opacity(
+                settings.get("opacity", self.DEFAULT_OCR_SETTINGS["opacity"])
+            ),
+            "ocr_before_detect": self._coerce_bool(
+                settings.get(
+                    "ocr_before_detect",
+                    self.DEFAULT_OCR_SETTINGS["ocr_before_detect"],
+                ),
+                self.DEFAULT_OCR_SETTINGS["ocr_before_detect"],
+            ),
+        }
+
     def _coerce_chunk_max_chars(self, value: Any) -> int:
         try:
             parsed = int(value)
@@ -616,6 +671,27 @@ class DetectConfigService:
             if normalized in {"0", "false", "no", "off"}:
                 return False
         return bool(default)
+
+    @staticmethod
+    def _coerce_rgb_color(value: Any, default: List[int]) -> List[int]:
+        if not isinstance(value, (list, tuple)) or len(value) < 3:
+            return list(default)
+        channels: List[int] = []
+        for raw_channel in value[:3]:
+            try:
+                channel = int(raw_channel)
+            except (TypeError, ValueError):
+                channel = 0
+            channels.append(min(255, max(0, channel)))
+        return channels
+
+    @staticmethod
+    def _coerce_opacity(value: Any) -> float:
+        try:
+            opacity = float(value)
+        except (TypeError, ValueError):
+            opacity = 0.0
+        return min(1.0, max(0.0, opacity))
 
     def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
         if not isinstance(data, dict):
@@ -656,6 +732,7 @@ class DetectConfigService:
             "duplicate_settings": dict(cls.DEFAULT_DUPLICATE_SETTINGS),
             "chunk_settings": dict(cls.DEFAULT_CHUNK_SETTINGS),
             "text_preprocess_settings": dict(cls.DEFAULT_TEXT_PREPROCESS_SETTINGS),
+            "ocr_settings": dict(cls.DEFAULT_OCR_SETTINGS),
         }
 
     def _normalize_config_data(self, data: Any) -> Dict[str, Any]:
@@ -697,6 +774,7 @@ class DetectConfigService:
         normalized["text_preprocess_settings"] = self._extract_text_preprocess_settings(
             normalized
         )
+        normalized["ocr_settings"] = self._extract_ocr_settings(normalized)
 
         return normalized
 

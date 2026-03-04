@@ -1,6 +1,8 @@
 import fitz
 
 from src.gui_pyqt.services.pipeline_service import PipelineService
+from src.ocr.ndlocr_service import NDLOCRService, OCRResult
+from src.pdf.pdf_text_embedder import PDFTextEmbedder
 
 
 def _create_sample_pdf(pdf_path):
@@ -52,7 +54,9 @@ def test_run_export_annotations_creates_pdf_annotations(tmp_path):
         "text": [["機密情報1234", "四角指定"]],
     }
 
-    result = PipelineService.run_export_annotations(detect_result, pdf_path, output_path)
+    result = PipelineService.run_export_annotations(
+        detect_result, pdf_path, output_path
+    )
     assert result["success"] is True
     assert output_path.exists()
     assert result["annotation_count"] >= 2
@@ -65,7 +69,9 @@ def test_run_export_annotations_creates_pdf_annotations(tmp_path):
             contents.append((annot.info or {}).get("content", ""))
 
     assert len(annotations) > 0
-    assert any("origin=auto" in content and "entity=PERSON" in content for content in contents)
+    assert any(
+        "origin=auto" in content and "entity=PERSON" in content for content in contents
+    )
 
 
 def test_run_mask_as_image_removes_extractable_text(tmp_path):
@@ -164,9 +170,7 @@ def test_run_export_marked_as_image_creates_image_pdf(tmp_path):
                 "manual": True,
                 "start": {"page_num": 0, "block_num": 0, "offset": 0},
                 "end": {"page_num": 0, "block_num": 0, "offset": 6},
-                "mask_rects_pdf": [
-                    [rect.x0, rect.y0, rect.x1, rect.y1]
-                ],
+                "mask_rects_pdf": [[rect.x0, rect.y0, rect.x1, rect.y1]],
             }
         ],
         "text": [["機密情報1234", "四角指定"]],
@@ -183,3 +187,91 @@ def test_run_export_marked_as_image_creates_image_pdf(tmp_path):
         extracted_text = "".join(page.get_text().strip() for page in marked_doc)
         assert extracted_text == ""
         assert all(len(page.get_images(full=True)) > 0 for page in marked_doc)
+
+
+def test_pdf_text_embedder_embed_and_remove(tmp_path):
+    source_pdf_path = tmp_path / "embed_target.pdf"
+    output_pdf_path = tmp_path / "embed_output.pdf"
+    _create_sample_pdf(source_pdf_path)
+
+    with fitz.open(str(source_pdf_path)) as doc:
+        inserted = PDFTextEmbedder.embed_ocr_results(
+            doc,
+            {
+                0: [
+                    {
+                        "text": "OCRTXT",
+                        "x": 72.0,
+                        "y": 240.0,
+                        "width": 180.0,
+                        "height": 24.0,
+                        "page_num": 0,
+                        "confidence": 0.9,
+                    }
+                ]
+            },
+            font_color=[0, 0, 0],
+            opacity=0.0,
+        )
+        assert inserted == 1
+        doc.save(str(output_pdf_path))
+
+    with fitz.open(str(output_pdf_path)) as doc:
+        assert "OCRTXT" in doc[0].get_text("text")
+        removed = PDFTextEmbedder.remove_ocr_text(doc)
+        assert removed == 1
+        doc.save(
+            str(output_pdf_path), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP
+        )
+
+    with fitz.open(str(output_pdf_path)) as doc:
+        assert "OCRTXT" not in doc[0].get_text("text")
+
+
+def test_run_ocr_and_clear_pipeline(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "ocr_pipeline.pdf"
+    _create_sample_pdf(pdf_path)
+
+    def _fake_run_ocr_on_page(self, page_pixmap, existing_text_rects, **kwargs):
+        _ = page_pixmap
+        _ = existing_text_rects
+        page_num = int(kwargs.get("page_num", 0))
+        return [
+            OCRResult(
+                text="OCR_WORD",
+                x=72.0,
+                y=300.0,
+                width=120.0,
+                height=20.0,
+                page_num=page_num,
+                confidence=0.8,
+            )
+        ]
+
+    monkeypatch.setattr(NDLOCRService, "is_available", staticmethod(lambda: True))
+    monkeypatch.setattr(NDLOCRService, "run_ocr_on_page", _fake_run_ocr_on_page)
+
+    ocr_settings = {
+        "enabled": True,
+        "font_color": [0, 0, 0],
+        "opacity": 0.0,
+        "ocr_before_detect": False,
+    }
+    ocr_result = PipelineService.run_ocr(
+        pdf_path=pdf_path,
+        page_filter=[0],
+        ocr_settings=ocr_settings,
+        dpi=72,
+    )
+    assert ocr_result["success"] is True
+    assert ocr_result["embedded_count"] == 1
+    with fitz.open(str(pdf_path)) as doc:
+        assert "OCR_WORD" in doc[0].get_text("text")
+
+    clear_result = PipelineService.run_clear_ocr_text(
+        pdf_path=pdf_path, page_filter=[0]
+    )
+    assert clear_result["success"] is True
+    assert clear_result["removed_count"] == 1
+    with fitz.open(str(pdf_path)) as doc:
+        assert "OCR_WORD" not in doc[0].get_text("text")

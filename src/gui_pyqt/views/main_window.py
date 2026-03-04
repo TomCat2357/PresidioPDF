@@ -48,6 +48,7 @@ from ..controllers.task_runner import TaskRunner
 from ..services.pipeline_service import PipelineService
 from ..services.detect_config_service import DetectConfigService
 from src.core.entity_types import get_entity_type_name_ja, normalize_entity_key
+from src.ocr.ndlocr_service import NDLOCRService
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
 from .config_dialog import DetectConfigDialog
@@ -55,6 +56,7 @@ from .config_dialog import DetectConfigDialog
 
 class MainWindow(QMainWindow):
     """メインウィンドウクラス"""
+
     EMBEDDED_MAPPING_FILENAME = "presidiopdf_mapping.json"
     SIDECAR_SUFFIX = ".presidiopdf.json"
 
@@ -76,14 +78,19 @@ class MainWindow(QMainWindow):
         # GUI検出設定（$HOME/.presidio/config.json）
         self.detect_config_service = DetectConfigService(Path.home())
         try:
-            self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
+            self.enabled_detect_entities = (
+                self.detect_config_service.ensure_config_file()
+            )
             duplicate_settings = self.detect_config_service.load_duplicate_settings()
-            self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
+            self.duplicate_entity_overlap_mode = duplicate_settings[
+                "entity_overlap_mode"
+            ]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
             self.detect_text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
+            self.ocr_settings = self.detect_config_service.load_ocr_settings()
         except Exception as e:
             logger.warning(f"検出設定の初期化に失敗: {e}")
             self.enabled_detect_entities = list(DetectConfigService.ENTITY_TYPES)
@@ -93,6 +100,7 @@ class MainWindow(QMainWindow):
             self.detect_text_preprocess_settings = dict(
                 DetectConfigService.DEFAULT_TEXT_PREPROCESS_SETTINGS
             )
+            self.ocr_settings = dict(DetectConfigService.DEFAULT_OCR_SETTINGS)
 
         # Detect実行スコープの管理
         self._detect_scope = "all"
@@ -216,9 +224,39 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(detect_button)
         self.detect_button = detect_button
 
+        # OCR（ぶら下がりメニュー）
+        self.ocr_current_action = QAction("OCR実行（表示ページ）", self)
+        self.ocr_current_action.triggered.connect(self.on_ocr_current_page)
+
+        self.ocr_all_action = QAction("OCR実行（全ページ）", self)
+        self.ocr_all_action.triggered.connect(self.on_ocr_all_pages)
+
+        self.ocr_clear_current_action = QAction("OCRテキスト削除（表示ページ）", self)
+        self.ocr_clear_current_action.triggered.connect(self.on_ocr_clear_current)
+
+        self.ocr_clear_all_action = QAction("OCRテキスト削除（全ページ）", self)
+        self.ocr_clear_all_action.triggered.connect(self.on_ocr_clear_all)
+
+        ocr_menu = QMenu(self)
+        ocr_menu.addAction(self.ocr_current_action)
+        ocr_menu.addAction(self.ocr_all_action)
+        ocr_menu.addSeparator()
+        ocr_menu.addAction(self.ocr_clear_current_action)
+        ocr_menu.addAction(self.ocr_clear_all_action)
+
+        ocr_button = QToolButton(self)
+        ocr_button.setText("OCR")
+        ocr_button.setToolTip("NDLOCR-LiteでOCRテキストを埋め込み")
+        ocr_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        ocr_button.setMenu(ocr_menu)
+        toolbar.addWidget(ocr_button)
+        self.ocr_button = ocr_button
+
         # 対象削除（自動検出のみ、ぶら下がりメニュー）
         self.target_delete_current_action = QAction("表示ページ", self)
-        self.target_delete_current_action.triggered.connect(self.on_target_delete_current_page)
+        self.target_delete_current_action.triggered.connect(
+            self.on_target_delete_current_page
+        )
 
         self.target_delete_all_action = QAction("全ページ", self)
         self.target_delete_all_action.triggered.connect(self.on_target_delete_all_pages)
@@ -271,9 +309,13 @@ class MainWindow(QMainWindow):
         self.export_mask_as_image_action = QAction("マスク（画像として保存）", self)
         self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
         self.export_marked_as_image_action = QAction("マーク（画像として保存）", self)
-        self.export_marked_as_image_action.triggered.connect(self.on_export_marked_as_image)
+        self.export_marked_as_image_action.triggered.connect(
+            self.on_export_marked_as_image
+        )
         self.export_detect_list_csv_action = QAction("検出結果一覧（CSV）", self)
-        self.export_detect_list_csv_action.triggered.connect(self.on_export_detect_list_csv)
+        self.export_detect_list_csv_action.triggered.connect(
+            self.on_export_detect_list_csv
+        )
 
         export_menu = QMenu(self)
         export_menu.addAction(self.export_annotations_action)
@@ -337,7 +379,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(vertical_splitter)
 
-
     def create_log_panel(self) -> QWidget:
         """ログ/メッセージ表示パネル"""
         panel = QWidget()
@@ -382,7 +423,10 @@ class MainWindow(QMainWindow):
         self.app_state.pdf_path_changed.connect(self.on_pdf_path_changed)
         self.app_state.read_result_changed.connect(self.on_read_result_changed)
         self.app_state.detect_result_changed.connect(self.on_detect_result_changed)
-        self.app_state.duplicate_result_changed.connect(self.on_duplicate_result_changed)
+        self.app_state.duplicate_result_changed.connect(
+            self.on_duplicate_result_changed
+        )
+        self.app_state.ocr_result_changed.connect(self.on_ocr_result_changed)
         self.app_state.status_message_changed.connect(self.on_status_message_changed)
 
         # Phase 2: TaskRunnerのシグナル
@@ -390,7 +434,9 @@ class MainWindow(QMainWindow):
         self.task_runner.finished.connect(self.on_task_finished)
         self.task_runner.error.connect(self.on_task_error)
         self.task_runner.started.connect(self.on_task_started)
-        self.task_runner.running_state_changed.connect(self.on_task_running_state_changed)
+        self.task_runner.running_state_changed.connect(
+            self.on_task_running_state_changed
+        )
 
         # ResultPanelのシグナル
         self.result_panel.entity_selected.connect(self.on_entity_selected)
@@ -455,15 +501,14 @@ class MainWindow(QMainWindow):
 
         initial_dir = self.detect_config_service.load_last_directory("open")
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "PDFファイルを選択",
-            initial_dir,
-            "PDF Files (*.pdf);;All Files (*)"
+            self, "PDFファイルを選択", initial_dir, "PDF Files (*.pdf);;All Files (*)"
         )
 
         if not file_path:
             return
-        self.detect_config_service.save_last_directory("open", str(Path(file_path).parent))
+        self.detect_config_service.save_last_directory(
+            "open", str(Path(file_path).parent)
+        )
         if not self._maybe_proceed_with_unsaved():
             return
         self._open_pdf_path(Path(file_path))
@@ -521,6 +566,7 @@ class MainWindow(QMainWindow):
         self.app_state.read_result = None
         self.app_state.detect_result = None
         self.app_state.duplicate_result = None
+        self.app_state.ocr_result = None
         self.log_message(f"PDFファイルを選択: {pdf_path}")
         self._set_dirty(False)
         self.update_action_states()
@@ -546,8 +592,12 @@ class MainWindow(QMainWindow):
         dialog.setInformativeText("保存してから続行しますか？")
 
         save_button = dialog.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
-        discard_button = dialog.addButton("破棄", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_button = dialog.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        discard_button = dialog.addButton(
+            "破棄", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = dialog.addButton(
+            "キャンセル", QMessageBox.ButtonRole.RejectRole
+        )
         dialog.setDefaultButton(save_button)
         dialog.exec()
 
@@ -610,7 +660,7 @@ class MainWindow(QMainWindow):
         self.task_runner.start_task(
             PipelineService.run_read,
             self.app_state.pdf_path,
-            True  # include_coordinate_map
+            True,  # include_coordinate_map
         )
 
     def on_open_config_dialog(self):
@@ -627,7 +677,9 @@ class MainWindow(QMainWindow):
                 else list(self.enabled_detect_entities)
             )
             duplicate_settings = self.detect_config_service.load_duplicate_settings()
-            self.duplicate_entity_overlap_mode = duplicate_settings["entity_overlap_mode"]
+            self.duplicate_entity_overlap_mode = duplicate_settings[
+                "entity_overlap_mode"
+            ]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
             installed_models = DetectConfigService.get_installed_spacy_models()
@@ -635,6 +687,9 @@ class MainWindow(QMainWindow):
             text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
+            ocr_settings = self.detect_config_service.load_ocr_settings()
+            self.ocr_settings = dict(ocr_settings)
+            ocr_available = NDLOCRService.is_available()
 
             dialog = DetectConfigDialog(
                 entity_types=DetectConfigService.ENTITY_TYPES,
@@ -648,7 +703,14 @@ class MainWindow(QMainWindow):
                 chunk_delimiter=chunk_settings.get("delimiter", "。"),
                 chunk_max_chars=chunk_settings.get("max_chars", 15000),
                 ignore_newlines=text_preprocess_settings.get("ignore_newlines", True),
-                ignore_whitespace=text_preprocess_settings.get("ignore_whitespace", False),
+                ignore_whitespace=text_preprocess_settings.get(
+                    "ignore_whitespace", False
+                ),
+                ocr_enabled=ocr_settings.get("enabled", False),
+                ocr_font_color=ocr_settings.get("font_color", [0, 0, 0]),
+                ocr_opacity=ocr_settings.get("opacity", 0.0),
+                ocr_before_detect=ocr_settings.get("ocr_before_detect", False),
+                ocr_available=ocr_available,
                 parent=self,
             )
             if dialog.import_button:
@@ -667,14 +729,21 @@ class MainWindow(QMainWindow):
             dialog.exec()
 
             # 設定はダイアログでリアルタイム保存されるため、終了後に再読込する
-            self.enabled_detect_entities = self.detect_config_service.ensure_config_file()
-            saved_duplicate_settings = self.detect_config_service.load_duplicate_settings()
-            self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
+            self.enabled_detect_entities = (
+                self.detect_config_service.ensure_config_file()
+            )
+            saved_duplicate_settings = (
+                self.detect_config_service.load_duplicate_settings()
+            )
+            self.duplicate_entity_overlap_mode = saved_duplicate_settings[
+                "entity_overlap_mode"
+            ]
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
             self.detect_text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
+            self.ocr_settings = self.detect_config_service.load_ocr_settings()
             self.log_message(
                 f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
                 f"({self.detect_config_service.config_path.name}), "
@@ -682,7 +751,9 @@ class MainWindow(QMainWindow):
                 f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
                 f"overlap:{self.duplicate_overlap_mode}, "
                 f"ignore_newlines={self.detect_text_preprocess_settings.get('ignore_newlines', True)}, "
-                f"ignore_whitespace={self.detect_text_preprocess_settings.get('ignore_whitespace', False)}"
+                f"ignore_whitespace={self.detect_text_preprocess_settings.get('ignore_whitespace', False)}, "
+                f"ocr_enabled={self.ocr_settings.get('enabled', False)}, "
+                f"ocr_before_detect={self.ocr_settings.get('ocr_before_detect', False)}"
             )
         except Exception as e:
             logger.exception("検出設定ダイアログの表示/保存に失敗")
@@ -730,13 +801,18 @@ class MainWindow(QMainWindow):
         try:
             imported_entities = self.detect_config_service.import_from(Path(file_path))
             self.enabled_detect_entities = imported_entities
-            imported_duplicate_settings = self.detect_config_service.load_duplicate_settings()
-            self.duplicate_entity_overlap_mode = imported_duplicate_settings["entity_overlap_mode"]
+            imported_duplicate_settings = (
+                self.detect_config_service.load_duplicate_settings()
+            )
+            self.duplicate_entity_overlap_mode = imported_duplicate_settings[
+                "entity_overlap_mode"
+            ]
             self.duplicate_overlap_mode = imported_duplicate_settings["overlap"]
             self.spacy_model = self.detect_config_service.load_spacy_model()
             self.detect_text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
+            self.ocr_settings = self.detect_config_service.load_ocr_settings()
             dialog.set_enabled_entities(imported_entities)
             dialog.set_duplicate_settings(
                 self.duplicate_entity_overlap_mode,
@@ -746,6 +822,12 @@ class MainWindow(QMainWindow):
             dialog.set_text_preprocess_settings(
                 self.detect_text_preprocess_settings.get("ignore_newlines", True),
                 self.detect_text_preprocess_settings.get("ignore_whitespace", False),
+            )
+            dialog.set_ocr_settings(
+                enabled=self.ocr_settings.get("enabled", False),
+                font_color=self.ocr_settings.get("font_color", [0, 0, 0]),
+                opacity=self.ocr_settings.get("opacity", 0.0),
+                ocr_before_detect=self.ocr_settings.get("ocr_before_detect", False),
             )
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
@@ -777,15 +859,19 @@ class MainWindow(QMainWindow):
 
             # ダイアログ上の最新チェック状態を同一フォルダ設定へ反映してから出力
             current_entities = dialog.get_enabled_entities()
-            self.enabled_detect_entities = self.detect_config_service.save_enabled_entities(
-                current_entities
+            self.enabled_detect_entities = (
+                self.detect_config_service.save_enabled_entities(current_entities)
             )
             duplicate_settings = dialog.get_duplicate_settings()
-            saved_duplicate_settings = self.detect_config_service.save_duplicate_settings(
-                duplicate_settings["entity_overlap_mode"],
-                duplicate_settings["overlap"],
+            saved_duplicate_settings = (
+                self.detect_config_service.save_duplicate_settings(
+                    duplicate_settings["entity_overlap_mode"],
+                    duplicate_settings["overlap"],
+                )
             )
-            self.duplicate_entity_overlap_mode = saved_duplicate_settings["entity_overlap_mode"]
+            self.duplicate_entity_overlap_mode = saved_duplicate_settings[
+                "entity_overlap_mode"
+            ]
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
             text_preprocess_settings = dialog.get_text_preprocess_settings()
             self.detect_text_preprocess_settings = (
@@ -793,6 +879,9 @@ class MainWindow(QMainWindow):
                     text_preprocess_settings["ignore_newlines"],
                     text_preprocess_settings["ignore_whitespace"],
                 )
+            )
+            self.ocr_settings = self.detect_config_service.save_ocr_settings(
+                dialog.get_ocr_settings()
             )
             exported_path = self.detect_config_service.export_to(export_target)
             self.log_message(f"設定エクスポート: {exported_path}")
@@ -803,6 +892,83 @@ class MainWindow(QMainWindow):
                 "エラー",
                 f"設定エクスポートに失敗しました: {e}",
             )
+
+    def on_ocr_all_pages(self):
+        """全ページにOCRを実行する。"""
+        self._start_ocr(scope="all", page_filter=None)
+
+    def on_ocr_current_page(self):
+        """表示中ページにOCRを実行する。"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        self._start_ocr(scope="current_page", page_filter=[current_page])
+
+    def _start_ocr(self, scope: str, page_filter: Optional[List[int]]):
+        if not self.app_state.has_pdf():
+            QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
+            return
+
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        self.ocr_settings = self.detect_config_service.load_ocr_settings()
+        if not self.ocr_settings.get("enabled", False):
+            QMessageBox.warning(self, "警告", "設定画面でOCRを有効化してください")
+            return
+        if not NDLOCRService.is_available():
+            QMessageBox.warning(
+                self,
+                "警告",
+                "NDLOCR-Liteが見つかりません。`pip install ndlocr-lite` を実行してください。",
+            )
+            return
+
+        target_desc = (
+            "全ページ"
+            if scope == "all"
+            else f"表示ページ({page_filter[0] + 1}ページ目)"
+        )
+        self.log_message(f"OCR処理を開始... 対象={target_desc}")
+
+        self.current_task = "ocr"
+        self.task_runner.start_task(
+            PipelineService.run_ocr,
+            self.app_state.pdf_path,
+            page_filter=list(page_filter) if page_filter else None,
+            ocr_settings=dict(self.ocr_settings),
+        )
+
+    def on_ocr_clear_all(self):
+        """全ページのOCRテキストを削除する。"""
+        self._start_ocr_clear(scope="all", page_filter=None)
+
+    def on_ocr_clear_current(self):
+        """表示中ページのOCRテキストを削除する。"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        self._start_ocr_clear(scope="current_page", page_filter=[current_page])
+
+    def _start_ocr_clear(self, scope: str, page_filter: Optional[List[int]]):
+        if not self.app_state.has_pdf():
+            QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
+            return
+
+        if self.task_runner.is_running():
+            QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        target_desc = (
+            "全ページ"
+            if scope == "all"
+            else f"表示ページ({page_filter[0] + 1}ページ目)"
+        )
+        self.log_message(f"OCRテキスト削除を開始... 対象={target_desc}")
+
+        self.current_task = "ocr_clear"
+        self.task_runner.start_task(
+            PipelineService.run_clear_ocr_text,
+            self.app_state.pdf_path,
+            page_filter=list(page_filter) if page_filter else None,
+        )
 
     def on_detect(self):
         """互換: 全ページ検出を実行"""
@@ -827,7 +993,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        target_desc = "全ページ" if scope == "all" else f"表示ページ({page_filter[0] + 1}ページ目)"
+        target_desc = (
+            "全ページ"
+            if scope == "all"
+            else f"表示ページ({page_filter[0] + 1}ページ目)"
+        )
         self.log_message(
             f"Detect処理を開始... 対象={target_desc}, "
             f"有効エンティティ={len(self.enabled_detect_entities)}件"
@@ -845,7 +1015,9 @@ class MainWindow(QMainWindow):
         )
 
         chunk_settings = self.detect_config_service.load_chunk_settings()
-        text_preprocess_settings = self.detect_config_service.load_text_preprocess_settings()
+        text_preprocess_settings = (
+            self.detect_config_service.load_text_preprocess_settings()
+        )
         self.detect_text_preprocess_settings = dict(text_preprocess_settings)
         task_kwargs: Dict[str, Any] = {
             "entities": list(self.enabled_detect_entities),
@@ -853,7 +1025,9 @@ class MainWindow(QMainWindow):
             "chunk_delimiter": chunk_settings.get("delimiter", "。"),
             "chunk_max_chars": chunk_settings.get("max_chars", 15000),
             "ignore_newlines": text_preprocess_settings.get("ignore_newlines", True),
-            "ignore_whitespace": text_preprocess_settings.get("ignore_whitespace", False),
+            "ignore_whitespace": text_preprocess_settings.get(
+                "ignore_whitespace", False
+            ),
         }
         add_patterns, omit_patterns = self.detect_config_service.load_custom_patterns()
         if add_patterns:
@@ -867,6 +1041,34 @@ class MainWindow(QMainWindow):
             )
         if page_filter:
             task_kwargs["page_filter"] = list(page_filter)
+
+        self.ocr_settings = self.detect_config_service.load_ocr_settings()
+        use_ocr_then_detect = bool(self.ocr_settings.get("ocr_before_detect", False))
+        if use_ocr_then_detect:
+            if not self.ocr_settings.get("enabled", False):
+                QMessageBox.warning(
+                    self, "警告", "OCR先行が有効ですがOCR設定が無効です"
+                )
+                self._reset_detect_scope_context()
+                return
+            if not NDLOCRService.is_available():
+                QMessageBox.warning(
+                    self,
+                    "警告",
+                    "OCR先行が有効ですがNDLOCR-Liteが見つかりません",
+                )
+                self._reset_detect_scope_context()
+                return
+            self.log_message("OCR先行モードでDetectを実行します")
+            self.current_task = "ocr_then_detect"
+            self.task_runner.start_task(
+                PipelineService.run_ocr_then_detect,
+                self.app_state.pdf_path,
+                read_input,
+                ocr_settings=dict(self.ocr_settings),
+                detect_args=task_kwargs,
+            )
+            return
 
         # TaskRunnerで非同期実行
         self.current_task = "detect"
@@ -983,8 +1185,14 @@ class MainWindow(QMainWindow):
             self._all_preview_entities = []
             self.pdf_preview.set_highlighted_entities([])
 
-        target_desc = "全ページ" if scope == "all" else f"表示ページ({page_filter[0] + 1}ページ目)"
-        self.log_message(f"対象削除を実行: {target_desc}, 自動項目 {removed_count}件を削除")
+        target_desc = (
+            "全ページ"
+            if scope == "all"
+            else f"表示ページ({page_filter[0] + 1}ページ目)"
+        )
+        self.log_message(
+            f"対象削除を実行: {target_desc}, 自動項目 {removed_count}件を削除"
+        )
         self._set_dirty(True)
         self.update_action_states()
 
@@ -1025,7 +1233,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
             return
 
-        output_pdf_path = self._select_output_pdf_path("マスキング結果の保存先", "_masked")
+        output_pdf_path = self._select_output_pdf_path(
+            "マスキング結果の保存先", "_masked"
+        )
         if not output_pdf_path:
             return
 
@@ -1159,9 +1369,7 @@ class MainWindow(QMainWindow):
         if self.app_state.has_pdf():
             base_name = f"{self.app_state.pdf_path.stem}_detect_results.csv"
         initial_dir = self.detect_config_service.load_last_directory("export_csv")
-        initial_path = (
-            str(Path(initial_dir) / base_name) if initial_dir else base_name
-        )
+        initial_path = str(Path(initial_dir) / base_name) if initial_dir else base_name
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             "検出結果一覧CSVの保存先",
@@ -1204,8 +1412,12 @@ class MainWindow(QMainWindow):
                 continue
             start_pos = entity.get("start", {})
             end_pos = entity.get("end", {})
-            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
-            block_num = start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0
+            page_num = (
+                start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            )
+            block_num = (
+                start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0
+            )
             offset = start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0
             if isinstance(start_pos, dict) and isinstance(end_pos, dict):
                 position_str = f"p{page_num + 1}:b{block_num + 1}:{offset + 1}"
@@ -1240,15 +1452,14 @@ class MainWindow(QMainWindow):
         initial_save = str(Path(save_dir) / default_name) if save_dir else default_name
 
         output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "保存先を選択",
-            initial_save,
-            "PDF Files (*.pdf);;All Files (*)"
+            self, "保存先を選択", initial_save, "PDF Files (*.pdf);;All Files (*)"
         )
 
         if not output_path:
             return False
-        self.detect_config_service.save_last_directory("save", str(Path(output_path).parent))
+        self.detect_config_service.save_last_directory(
+            "save", str(Path(output_path).parent)
+        )
 
         try:
             # マッピング未生成時はreadを同期実行して補完
@@ -1268,6 +1479,7 @@ class MainWindow(QMainWindow):
 
             # 2) サイドカーJSONマッピングを書き出し
             from src.cli.common import sha256_pdf_content
+
             mapping_payload = self._build_mapping_payload(out_pdf)
             mapping_payload["content_hash"] = sha256_pdf_content(str(out_pdf))
 
@@ -1301,12 +1513,14 @@ class MainWindow(QMainWindow):
             self,
             "セッションファイルを選択",
             initial_dir,
-            "JSON Files (*.json);;All Files (*)"
+            "JSON Files (*.json);;All Files (*)",
         )
 
         if not file_path:
             return
-        self.detect_config_service.save_last_directory("session", str(Path(file_path).parent))
+        self.detect_config_service.save_last_directory(
+            "session", str(Path(file_path).parent)
+        )
 
         try:
             # JSONファイルを読み込み
@@ -1323,13 +1537,14 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(
                         self,
                         "警告",
-                        f"PDFファイルが見つかりません:\n{pdf_path_str}\n\nセッションは読み込みますが、PDFプレビューは利用できません。"
+                        f"PDFファイルが見つかりません:\n{pdf_path_str}\n\nセッションは読み込みますが、PDFプレビューは利用できません。",
                     )
 
             # 各結果を復元
             self.app_state.read_result = session_data.get("read_result")
             self.app_state.detect_result = session_data.get("detect_result")
             self.app_state.duplicate_result = session_data.get("duplicate_result")
+            self.app_state.ocr_result = session_data.get("ocr_result")
 
             self.log_message(f"セッション読込完了: {file_path}")
             self.statusBar().showMessage("セッションを読み込みました")
@@ -1376,6 +1591,13 @@ class MainWindow(QMainWindow):
         """Duplicate結果が変更された"""
         self._refresh_result_view_from_state()
 
+    def on_ocr_result_changed(self, result: Optional[dict]):
+        """OCR結果が変更された"""
+        if result:
+            embedded_count = result.get("embedded_count", 0)
+            self.statusBar().showMessage(f"OCR埋め込み件数: {embedded_count}")
+        self.update_action_states()
+
     def on_status_message_changed(self, message: str):
         """ステータスメッセージが変更された"""
         self.statusBar().showMessage(message)
@@ -1405,7 +1627,9 @@ class MainWindow(QMainWindow):
         for entity in entities:
             start_pos = entity.get("start", {})
             end_pos = entity.get("end", {})
-            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            page_num = (
+                start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            )
             key = (
                 entity.get("word", ""),
                 entity.get("entity", ""),
@@ -1432,7 +1656,9 @@ class MainWindow(QMainWindow):
         # 選択されたエンティティのページに移動
         if entities:
             start_pos = entities[0].get("start", {})
-            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            page_num = (
+                start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            )
             self.pdf_preview.go_to_page(page_num)
 
     def on_entity_deleted(self, index: int):
@@ -1504,8 +1730,7 @@ class MainWindow(QMainWindow):
         words = [word for word, _ in word_entity_pairs]
         add_patterns_before, _ = self.detect_config_service.load_custom_patterns()
         omit_patterns = [
-            self.detect_config_service.build_exact_word_pattern(word)
-            for word in words
+            self.detect_config_service.build_exact_word_pattern(word) for word in words
         ]
         omit_patterns = [pattern for pattern in omit_patterns if pattern]
         if omit_patterns:
@@ -1573,7 +1798,9 @@ class MainWindow(QMainWindow):
             if not exact_pattern:
                 continue
             add_patterns.append((raw_entity, exact_pattern))
-            runtime_pairs.append((word, self._normalize_runtime_entity_name(raw_entity)))
+            runtime_pairs.append(
+                (word, self._normalize_runtime_entity_name(raw_entity))
+            )
 
         if add_patterns:
             self.detect_config_service.add_add_patterns(add_patterns)
@@ -1648,7 +1875,9 @@ class MainWindow(QMainWindow):
         return []
 
     @staticmethod
-    def _build_span_key_from_positions(start_pos: Dict[str, Any], end_pos: Dict[str, Any]) -> tuple:
+    def _build_span_key_from_positions(
+        start_pos: Dict[str, Any], end_pos: Dict[str, Any]
+    ) -> tuple:
         def _to_int(value: Any, default: int = -1) -> int:
             try:
                 return int(value)
@@ -1778,14 +2007,20 @@ class MainWindow(QMainWindow):
         # ResultPanelのエンティティリストから一致するものを検索
         for i, entity in enumerate(self.result_panel.entities):
             start_pos = entity.get("start", {})
-            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
-            block_num = start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0
+            page_num = (
+                start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            )
+            block_num = (
+                start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0
+            )
             offset = start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0
-            if (entity.get("word", "") == clicked_text
-                    and entity.get("entity", "") == clicked_type
-                    and page_num == clicked_page
-                    and block_num == clicked_block
-                    and offset == clicked_offset):
+            if (
+                entity.get("word", "") == clicked_text
+                and entity.get("entity", "") == clicked_type
+                and page_num == clicked_page
+                and block_num == clicked_block
+                and offset == clicked_offset
+            ):
                 self.result_panel.select_row(i)
                 self.result_panel.focus_results_table()
                 return
@@ -1806,13 +2041,20 @@ class MainWindow(QMainWindow):
         for entity in detect_list:
             start_pos = entity.get("start", {})
             end_pos = entity.get("end", {})
-            page_num = start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            page_num = (
+                start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
+            )
             selection_mode = entity.get("selection_mode", "")
             mask_circles_pdf = entity.get("mask_circles_pdf")
 
             # rects_pdf（行ごとの矩形リスト）を座標マップから解決
             rects_pdf = entity.get("rects_pdf")
-            if not rects_pdf and offset2coords and isinstance(start_pos, dict) and isinstance(end_pos, dict):
+            if (
+                not rects_pdf
+                and offset2coords
+                and isinstance(start_pos, dict)
+                and isinstance(end_pos, dict)
+            ):
                 rects_pdf = self._resolve_rects_from_offset_map(
                     start_pos, end_pos, offset2coords
                 )
@@ -1826,8 +2068,12 @@ class MainWindow(QMainWindow):
                 "mask_circles_pdf": mask_circles_pdf,
                 "selection_mode": selection_mode,
                 "is_selected": False,
-                "block_num": start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0,
-                "offset": start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0,
+                "block_num": (
+                    start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0
+                ),
+                "offset": (
+                    start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0
+                ),
             }
             self._all_preview_entities.append(preview_entity)
 
@@ -1853,6 +2099,7 @@ class MainWindow(QMainWindow):
     ) -> Optional[List[list]]:
         """offset2coordsMapからエンティティの行ごとの矩形リストを計算する"""
         try:
+
             def _group_rects_by_line(bboxes: List[list]) -> List[list]:
                 """同一ブロック内の文字bboxを行単位でまとめる。"""
                 if not bboxes:
@@ -1992,9 +2239,13 @@ class MainWindow(QMainWindow):
             return self.app_state.detect_result
         return None
 
-    def _sync_all_result_states_from_entities(self, entities: List[Dict[str, Any]]) -> None:
+    def _sync_all_result_states_from_entities(
+        self, entities: List[Dict[str, Any]]
+    ) -> None:
         """ResultPanelの検出項目をAppStateの全結果へ同期"""
-        normalized_entities = [copy.deepcopy(entity) for entity in entities if isinstance(entity, dict)]
+        normalized_entities = [
+            copy.deepcopy(entity) for entity in entities if isinstance(entity, dict)
+        ]
 
         if isinstance(self.app_state.read_result, dict):
             read_result = copy.deepcopy(self.app_state.read_result)
@@ -2093,7 +2344,9 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             return -1
 
-    def _merge_detect_result_for_scope(self, detect_result: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_detect_result_for_scope(
+        self, detect_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """表示ページ検出時は対象ページのみ差し替え、他ページは維持する"""
         if self._detect_scope != "current_page":
             return detect_result
@@ -2132,7 +2385,9 @@ class MainWindow(QMainWindow):
         self._detect_target_pages = None
         self._detect_base_result = None
 
-    def _merge_duplicate_result_for_scope(self, duplicate_result: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_duplicate_result_for_scope(
+        self, duplicate_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """表示ページ重複削除時は対象ページのみ差し替え、他ページは維持する"""
         if self._duplicate_scope != "current_page":
             return duplicate_result
@@ -2195,14 +2450,18 @@ class MainWindow(QMainWindow):
             return read_input
 
         read_input["detect"] = panel_entities
-        self.log_message(f"既存検出 {len(panel_entities)}件を保持してDetectを実行します")
+        self.log_message(
+            f"既存検出 {len(panel_entities)}件を保持してDetectを実行します"
+        )
         return read_input
 
     # =========================================================================
     # ユーティリティ
     # =========================================================================
 
-    def _retarget_result_pdf_path(self, result: Optional[dict], pdf_path: Path) -> Optional[dict]:
+    def _retarget_result_pdf_path(
+        self, result: Optional[dict], pdf_path: Path
+    ) -> Optional[dict]:
         """結果JSON内のmetadata.pdf.pathを保存先PDFに付け替える"""
         if not isinstance(result, dict):
             return result
@@ -2220,22 +2479,36 @@ class MainWindow(QMainWindow):
 
     def _build_mapping_payload(self, saved_pdf_path: Path) -> dict:
         """現在の状態から保存用マッピングJSONを構築"""
-        read_result = self._retarget_result_pdf_path(self.app_state.read_result, saved_pdf_path)
-        detect_result = self._retarget_result_pdf_path(self.app_state.detect_result, saved_pdf_path)
-        duplicate_result = self._retarget_result_pdf_path(self.app_state.duplicate_result, saved_pdf_path)
+        read_result = self._retarget_result_pdf_path(
+            self.app_state.read_result, saved_pdf_path
+        )
+        detect_result = self._retarget_result_pdf_path(
+            self.app_state.detect_result, saved_pdf_path
+        )
+        duplicate_result = self._retarget_result_pdf_path(
+            self.app_state.duplicate_result, saved_pdf_path
+        )
+        ocr_result = (
+            self.app_state.ocr_result
+            if isinstance(self.app_state.ocr_result, dict)
+            else None
+        )
 
         return {
             "pdf_path": str(saved_pdf_path.resolve()),
             "read_result": read_result,
             "detect_result": detect_result,
             "duplicate_result": duplicate_result,
+            "ocr_result": ocr_result,
         }
 
     def _embed_mapping_into_pdf(self, pdf_path: Path, payload: dict) -> bool:
         """マッピングJSONをPDF埋め込みファイルとして保存"""
         temp_path = pdf_path.with_suffix(pdf_path.suffix + ".tmp")
         try:
-            json_data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            json_data = json.dumps(payload, ensure_ascii=False, indent=2).encode(
+                "utf-8"
+            )
             with fitz.open(str(pdf_path)) as doc:
                 embedded_files = doc.embfile_names()
                 if self.EMBEDDED_MAPPING_FILENAME in embedded_files:
@@ -2270,6 +2543,7 @@ class MainWindow(QMainWindow):
                     stored_hash = payload.get("content_hash", "")
                     if stored_hash:
                         from src.cli.common import sha256_pdf_content
+
                         current_hash = sha256_pdf_content(str(pdf_path))
                         if current_hash != stored_hash:
                             reply = QMessageBox.question(
@@ -2277,14 +2551,17 @@ class MainWindow(QMainWindow):
                                 "ハッシュ不一致",
                                 "PDFの内容がサイドカーマッピング保存時と異なります。\n"
                                 "マッピングを読み込みますか？",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.Yes
+                                | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.Yes,
                             )
                             if reply != QMessageBox.StandardButton.Yes:
                                 return False
 
                     if self._restore_mapping_from_payload(payload, pdf_path):
-                        self.log_message(f"サイドカーマッピングを読み込みました: {sidecar}")
+                        self.log_message(
+                            f"サイドカーマッピングを読み込みました: {sidecar}"
+                        )
                         return True
             except Exception as e:
                 self.log_message(f"サイドカーマッピング読込に失敗: {sidecar} ({e})")
@@ -2314,25 +2591,37 @@ class MainWindow(QMainWindow):
         if not isinstance(payload, dict):
             return False
 
-        if any(k in payload for k in ["read_result", "detect_result", "duplicate_result"]):
+        if any(
+            k in payload
+            for k in ["read_result", "detect_result", "duplicate_result", "ocr_result"]
+        ):
             read_result = payload.get("read_result")
             detect_result = payload.get("detect_result")
             duplicate_result = payload.get("duplicate_result")
+            ocr_result = payload.get("ocr_result")
         else:
             # 互換: 旧フォーマット（単一結果JSON）
             read_result = payload
             detect_result = payload if payload.get("detect") else None
             duplicate_result = None
+            ocr_result = None
 
-        self.app_state.read_result = self._retarget_result_pdf_path(read_result, pdf_path)
-        self.app_state.detect_result = self._retarget_result_pdf_path(detect_result, pdf_path)
-        self.app_state.duplicate_result = self._retarget_result_pdf_path(duplicate_result, pdf_path)
+        self.app_state.read_result = self._retarget_result_pdf_path(
+            read_result, pdf_path
+        )
+        self.app_state.detect_result = self._retarget_result_pdf_path(
+            detect_result, pdf_path
+        )
+        self.app_state.duplicate_result = self._retarget_result_pdf_path(
+            duplicate_result, pdf_path
+        )
+        self.app_state.ocr_result = ocr_result if isinstance(ocr_result, dict) else None
         return True
 
     def log_message(self, message: str):
         """ログメッセージを追加"""
         # 初期化中はlog_textがまだ存在しない可能性がある
-        if hasattr(self, 'log_text') and self.log_text:
+        if hasattr(self, "log_text") and self.log_text:
             self.log_text.append(message)
 
     def update_action_states(self):
@@ -2358,6 +2647,14 @@ class MainWindow(QMainWindow):
         self.detect_button.setEnabled(detect_enabled)
         self.detect_all_action.setEnabled(detect_enabled)
         self.detect_current_action.setEnabled(detect_enabled and has_pdf)
+
+        # OCR: PDFがあり、タスク実行中でなければ有効
+        ocr_enabled = has_pdf and not is_running
+        self.ocr_button.setEnabled(ocr_enabled)
+        self.ocr_all_action.setEnabled(ocr_enabled)
+        self.ocr_current_action.setEnabled(ocr_enabled and has_pdf)
+        self.ocr_clear_all_action.setEnabled(ocr_enabled)
+        self.ocr_clear_current_action.setEnabled(ocr_enabled and has_pdf)
 
         # 対象削除: 現在表示中の結果があり、タスクが実行中でなければ有効
         target_delete_enabled = has_current_result and not is_running
@@ -2407,6 +2704,69 @@ class MainWindow(QMainWindow):
             self.app_state.read_result = result
             self.log_message("Read処理が完了しました")
             self._set_dirty(True)
+        elif self.current_task == "ocr":
+            result_dict = result if isinstance(result, dict) else {}
+            read_result = result_dict.get("read_result")
+            if isinstance(read_result, dict):
+                self.app_state.read_result = read_result
+            self.app_state.detect_result = None
+            self.app_state.duplicate_result = None
+            self.app_state.ocr_result = result_dict
+            embedded_count = int(result_dict.get("embedded_count", 0) or 0)
+            ocr_item_count = int(result_dict.get("ocr_item_count", 0) or 0)
+            self.log_message(
+                f"OCR処理が完了しました（認識={ocr_item_count}件, 埋め込み={embedded_count}件）"
+            )
+            if self.app_state.pdf_path:
+                self.pdf_preview.load_pdf(str(self.app_state.pdf_path))
+            self._set_dirty(True)
+        elif self.current_task == "ocr_clear":
+            result_dict = result if isinstance(result, dict) else {}
+            read_result = result_dict.get("read_result")
+            if isinstance(read_result, dict):
+                self.app_state.read_result = read_result
+            removed_count = int(result_dict.get("removed_count", 0) or 0)
+            self.app_state.detect_result = None
+            self.app_state.duplicate_result = None
+            self.app_state.ocr_result = result_dict
+            self.log_message(f"OCRテキスト削除が完了しました（削除={removed_count}件）")
+            if self.app_state.pdf_path:
+                self.pdf_preview.load_pdf(str(self.app_state.pdf_path))
+            self._set_dirty(True)
+        elif self.current_task == "ocr_then_detect":
+            result_dict = result if isinstance(result, dict) else {}
+            ocr_result = result_dict.get("ocr")
+            if isinstance(ocr_result, dict):
+                self.app_state.ocr_result = ocr_result
+                if self.app_state.pdf_path:
+                    self.pdf_preview.load_pdf(str(self.app_state.pdf_path))
+
+            read_result = result_dict.get("read_result")
+            if isinstance(read_result, dict):
+                self.app_state.read_result = read_result
+
+            detect_result = result_dict.get("detect")
+            detect_result = detect_result if isinstance(detect_result, dict) else {}
+            detect_result = self._merge_detect_result_for_scope(detect_result)
+            self.app_state.detect_result = detect_result
+            self.app_state.duplicate_result = None
+            detect_count = len(detect_result.get("detect", []))
+            ocr_embedded = 0
+            if isinstance(ocr_result, dict):
+                ocr_embedded = int(ocr_result.get("embedded_count", 0) or 0)
+            if self._detect_scope == "current_page" and self._detect_target_pages:
+                page_num = self._detect_target_pages[0] + 1
+                self.log_message(
+                    "OCR先行Detectが完了しました"
+                    f"（表示ページ {page_num} のみ更新, OCR埋め込み={ocr_embedded}件, "
+                    f"Detect={detect_count}件）"
+                )
+            else:
+                self.log_message(
+                    f"OCR先行Detectが完了しました（OCR埋め込み={ocr_embedded}件, Detect={detect_count}件）"
+                )
+            self._reset_detect_scope_context()
+            self._set_dirty(True)
         elif self.current_task == "detect":
             detect_result = result if isinstance(result, dict) else {}
             detect_result = self._merge_detect_result_for_scope(detect_result)
@@ -2448,7 +2808,9 @@ class MainWindow(QMainWindow):
             result_dict = result if isinstance(result, dict) else {}
             output_path = result_dict.get("output_path", "")
             annotation_count = result_dict.get("annotation_count", 0)
-            self.log_message(f"アノテーション付きエクスポート完了（{annotation_count}件）")
+            self.log_message(
+                f"アノテーション付きエクスポート完了（{annotation_count}件）"
+            )
             self.log_message(f"保存先: {output_path}")
             self.statusBar().showMessage("注釈付きPDFを保存しました")
             self._set_dirty(True)
@@ -2456,7 +2818,9 @@ class MainWindow(QMainWindow):
             result_dict = result if isinstance(result, dict) else {}
             output_path = result_dict.get("output_path", "")
             entity_count = result_dict.get("entity_count", 0)
-            self.log_message(f"マスク（画像として保存）が完了しました（{entity_count}件）")
+            self.log_message(
+                f"マスク（画像として保存）が完了しました（{entity_count}件）"
+            )
             self.log_message(f"保存先: {output_path}")
             self.statusBar().showMessage("マスク画像PDFを保存しました")
             self._set_dirty(True)
@@ -2464,7 +2828,9 @@ class MainWindow(QMainWindow):
             result_dict = result if isinstance(result, dict) else {}
             output_path = result_dict.get("output_path", "")
             entity_count = result_dict.get("entity_count", 0)
-            self.log_message(f"マーク（画像として保存）が完了しました（{entity_count}件）")
+            self.log_message(
+                f"マーク（画像として保存）が完了しました（{entity_count}件）"
+            )
             self.log_message(f"保存先: {output_path}")
             self.statusBar().showMessage("マーク画像PDFを保存しました")
             self._set_dirty(True)
@@ -2479,7 +2845,7 @@ class MainWindow(QMainWindow):
         self.log_message(f"エラー: {error_msg}")
         QMessageBox.critical(self, "エラー", error_msg)
         self.app_state.status_message = "エラーが発生しました"
-        if self.current_task == "detect":
+        if self.current_task in {"detect", "ocr_then_detect"}:
             self._reset_detect_scope_context()
         if self.current_task == "duplicate":
             self._reset_duplicate_scope_context()

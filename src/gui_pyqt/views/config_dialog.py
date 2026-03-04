@@ -9,10 +9,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from PyQt6.QtCore import QFileSystemWatcher
+from PyQt6.QtCore import QFileSystemWatcher, Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,6 +25,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
 )
@@ -33,6 +36,7 @@ from src.gui_pyqt.services.detect_config_service import DetectConfigService
 
 class DetectConfigDialog(QDialog):
     """検出エンティティ設定ダイアログ"""
+
     DISPLAY_CONFIG_NAME = "config.json"
 
     def __init__(
@@ -49,6 +53,11 @@ class DetectConfigDialog(QDialog):
         chunk_max_chars: int = 15000,
         ignore_newlines: bool = True,
         ignore_whitespace: bool = False,
+        ocr_enabled: bool = False,
+        ocr_font_color: Optional[List[int]] = None,
+        ocr_opacity: float = 0.0,
+        ocr_before_detect: bool = False,
+        ocr_available: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -68,6 +77,14 @@ class DetectConfigDialog(QDialog):
         self.chunk_max_chars_spin: Optional[QSpinBox] = None
         self.ignore_newlines_checkbox: Optional[QCheckBox] = None
         self.ignore_whitespace_checkbox: Optional[QCheckBox] = None
+        self.ocr_enabled_checkbox: Optional[QCheckBox] = None
+        self.ocr_status_label: Optional[QLabel] = None
+        self.ocr_color_button: Optional[QPushButton] = None
+        self.ocr_opacity_slider: Optional[QSlider] = None
+        self.ocr_opacity_spin: Optional[QSpinBox] = None
+        self.ocr_before_detect_checkbox: Optional[QCheckBox] = None
+        self._ocr_color: List[int] = [0, 0, 0]
+        self._ocr_available = bool(ocr_available)
         self._installed_models: List[str] = list(installed_models or [])
         self._all_models: List[str] = list(all_models or [])
         self._file_watcher: Optional[QFileSystemWatcher] = None
@@ -81,6 +98,13 @@ class DetectConfigDialog(QDialog):
         self.set_spacy_model(spacy_model)
         self.set_chunk_settings(chunk_delimiter, chunk_max_chars)
         self.set_text_preprocess_settings(ignore_newlines, ignore_whitespace)
+        self.set_ocr_settings(
+            enabled=ocr_enabled,
+            font_color=ocr_font_color
+            or DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
+            opacity=ocr_opacity,
+            ocr_before_detect=ocr_before_detect,
+        )
         self._start_watching()
 
     def _init_ui(self):
@@ -168,13 +192,63 @@ class DetectConfigDialog(QDialog):
         self.ignore_newlines_checkbox = QCheckBox(
             "改行無視（OFF時はブロック/ページ境界に改行を挿入）"
         )
-        self.ignore_whitespace_checkbox = QCheckBox(
-            "空白無視（空白文字を除去）"
-        )
+        self.ignore_whitespace_checkbox = QCheckBox("空白無視（空白文字を除去）")
         preprocess_layout.addWidget(self.ignore_newlines_checkbox)
         preprocess_layout.addWidget(self.ignore_whitespace_checkbox)
         preprocess_group.setLayout(preprocess_layout)
         layout.addWidget(preprocess_group)
+
+        ocr_group = QGroupBox("OCR設定 (NDLOCR-Lite)")
+        ocr_layout = QVBoxLayout()
+        self.ocr_enabled_checkbox = QCheckBox("OCRを使用する")
+        self.ocr_enabled_checkbox.setEnabled(self._ocr_available)
+        ocr_layout.addWidget(self.ocr_enabled_checkbox)
+
+        self.ocr_status_label = QLabel()
+        self.ocr_status_label.setWordWrap(True)
+        if self._ocr_available:
+            self.ocr_status_label.setText("NDLOCR-Liteが利用可能です。")
+        else:
+            self.ocr_status_label.setText(
+                "NDLOCR-Liteが未インストールのためOCRは無効です。"
+            )
+        ocr_layout.addWidget(self.ocr_status_label)
+
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("埋め込みテキスト色:"))
+        self.ocr_color_button = QPushButton("色を選択...")
+        self.ocr_color_button.clicked.connect(self._choose_ocr_color)
+        color_row.addWidget(self.ocr_color_button)
+        color_row.addStretch()
+        ocr_layout.addLayout(color_row)
+
+        opacity_row = QHBoxLayout()
+        opacity_row.addWidget(QLabel("透明度:"))
+        self.ocr_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.ocr_opacity_slider.setRange(0, 100)
+        self.ocr_opacity_spin = QSpinBox()
+        self.ocr_opacity_spin.setRange(0, 100)
+        self.ocr_opacity_spin.setSuffix("%")
+        self.ocr_opacity_slider.valueChanged.connect(self.ocr_opacity_spin.setValue)
+        self.ocr_opacity_spin.valueChanged.connect(self.ocr_opacity_slider.setValue)
+        opacity_row.addWidget(self.ocr_opacity_slider, 1)
+        opacity_row.addWidget(self.ocr_opacity_spin)
+        ocr_layout.addLayout(opacity_row)
+
+        self.ocr_before_detect_checkbox = QCheckBox("個人情報検出時にOCRを先行実行する")
+        self.ocr_before_detect_checkbox.setEnabled(self._ocr_available)
+        ocr_layout.addWidget(self.ocr_before_detect_checkbox)
+
+        if not self._ocr_available:
+            if self.ocr_color_button:
+                self.ocr_color_button.setEnabled(False)
+            if self.ocr_opacity_slider:
+                self.ocr_opacity_slider.setEnabled(False)
+            if self.ocr_opacity_spin:
+                self.ocr_opacity_spin.setEnabled(False)
+
+        ocr_group.setLayout(ocr_layout)
+        layout.addWidget(ocr_group)
 
         action_row = QHBoxLayout()
         self.open_json_button = QPushButton(self.DISPLAY_CONFIG_NAME)
@@ -186,9 +260,7 @@ class DetectConfigDialog(QDialog):
         action_row.addStretch()
         layout.addLayout(action_row)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Close
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -216,6 +288,12 @@ class DetectConfigDialog(QDialog):
             self.ignore_newlines_checkbox.toggled.connect(self._on_ui_value_changed)
         if self.ignore_whitespace_checkbox:
             self.ignore_whitespace_checkbox.toggled.connect(self._on_ui_value_changed)
+        if self.ocr_enabled_checkbox:
+            self.ocr_enabled_checkbox.toggled.connect(self._on_ui_value_changed)
+        if self.ocr_opacity_slider:
+            self.ocr_opacity_slider.valueChanged.connect(self._on_ui_value_changed)
+        if self.ocr_before_detect_checkbox:
+            self.ocr_before_detect_checkbox.toggled.connect(self._on_ui_value_changed)
 
     def _on_ui_value_changed(self, *_):
         if self._suspend_auto_save:
@@ -262,7 +340,10 @@ class DetectConfigDialog(QDialog):
 
     def get_duplicate_settings(self) -> Dict[str, str]:
         entity_overlap_mode = "any"
-        if self.entity_overlap_same_radio and self.entity_overlap_same_radio.isChecked():
+        if (
+            self.entity_overlap_same_radio
+            and self.entity_overlap_same_radio.isChecked()
+        ):
             entity_overlap_mode = "same"
 
         overlap_mode = "overlap"
@@ -349,6 +430,76 @@ class DetectConfigDialog(QDialog):
             "ignore_whitespace": ignore_whitespace,
         }
 
+    def _update_ocr_color_button(self):
+        if not self.ocr_color_button:
+            return
+        color = QColor(*self._ocr_color)
+        self.ocr_color_button.setStyleSheet(
+            f"background-color: {color.name()}; color: #ffffff;"
+        )
+        self.ocr_color_button.setText(
+            f"色を選択... ({self._ocr_color[0]}, {self._ocr_color[1]}, {self._ocr_color[2]})"
+        )
+
+    def _choose_ocr_color(self):
+        if not self.ocr_color_button:
+            return
+        current = QColor(*self._ocr_color)
+        selected = QColorDialog.getColor(current, self, "埋め込みテキスト色を選択")
+        if not selected.isValid():
+            return
+        self._ocr_color = [selected.red(), selected.green(), selected.blue()]
+        self._update_ocr_color_button()
+        self._on_ui_value_changed()
+
+    def set_ocr_settings(
+        self,
+        *,
+        enabled: bool,
+        font_color: List[int],
+        opacity: float,
+        ocr_before_detect: bool,
+    ):
+        previous = self._suspend_auto_save
+        self._suspend_auto_save = True
+        try:
+            self._ocr_color = DetectConfigService._coerce_rgb_color(
+                font_color,
+                DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
+            )
+            self._update_ocr_color_button()
+
+            if self.ocr_enabled_checkbox:
+                self.ocr_enabled_checkbox.setChecked(bool(enabled))
+            opacity_percent = int(round(max(0.0, min(1.0, float(opacity))) * 100))
+            if self.ocr_opacity_slider:
+                self.ocr_opacity_slider.setValue(opacity_percent)
+            if self.ocr_before_detect_checkbox:
+                self.ocr_before_detect_checkbox.setChecked(bool(ocr_before_detect))
+        finally:
+            self._suspend_auto_save = previous
+
+    def get_ocr_settings(self) -> Dict[str, Any]:
+        enabled = False
+        ocr_before_detect = False
+        opacity_percent = 0
+
+        if self.ocr_enabled_checkbox:
+            enabled = self.ocr_enabled_checkbox.isChecked() and self._ocr_available
+        if self.ocr_before_detect_checkbox:
+            ocr_before_detect = (
+                self.ocr_before_detect_checkbox.isChecked() and self._ocr_available
+            )
+        if self.ocr_opacity_slider:
+            opacity_percent = int(self.ocr_opacity_slider.value())
+
+        return {
+            "enabled": enabled,
+            "font_color": list(self._ocr_color),
+            "opacity": max(0.0, min(1.0, opacity_percent / 100.0)),
+            "ocr_before_detect": ocr_before_detect,
+        }
+
     def _on_select_all_clicked(self):
         checkboxes = list(self.checkboxes.values())
         if not checkboxes:
@@ -406,6 +557,14 @@ class DetectConfigDialog(QDialog):
                     preprocess.get("ignore_newlines", True),
                     preprocess.get("ignore_whitespace", False),
                 )
+            ocr_settings = data.get("ocr_settings", {})
+            if isinstance(ocr_settings, dict):
+                self.set_ocr_settings(
+                    enabled=ocr_settings.get("enabled", False),
+                    font_color=ocr_settings.get("font_color", [0, 0, 0]),
+                    opacity=ocr_settings.get("opacity", 0.0),
+                    ocr_before_detect=ocr_settings.get("ocr_before_detect", False),
+                )
         except Exception as exc:
             logger.warning(f"設定ファイルの変更反映に失敗: {exc}")
         finally:
@@ -428,7 +587,9 @@ class DetectConfigDialog(QDialog):
             model = self.get_spacy_model()
             if model:
                 data["spacy_model"] = model
+            data["chunk_settings"] = self.get_chunk_settings()
             data["text_preprocess_settings"] = self.get_text_preprocess_settings()
+            data["ocr_settings"] = self.get_ocr_settings()
             # 書き込み中は監視を一時停止して自己トリガーを防ぐ
             config_str = str(self.config_path)
             if self._file_watcher:

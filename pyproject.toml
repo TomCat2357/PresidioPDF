@@ -71,6 +71,11 @@ gui = [
     "PyQt6-Qt6>=6.6.0",
 ]
 
+# OCR拡張（NDLOCR-Lite）
+ocr = [
+    "ndlocr-lite @ git+https://github.com/ndl-lab/ndlocr-lite.git@master",
+]
+
 [project.scripts]
 # New split command entrypoints
 codex-read = "cli.read_main:main"

@@ -20,6 +20,7 @@ class AppState(QObject):
     read_result_changed = pyqtSignal(object)  # Optional[dict]
     detect_result_changed = pyqtSignal(object)  # Optional[dict]
     duplicate_result_changed = pyqtSignal(object)  # Optional[dict]
+    ocr_result_changed = pyqtSignal(object)  # Optional[dict]
     status_message_changed = pyqtSignal(str)  # ステータスメッセージ
 
     def __init__(self):
@@ -28,6 +29,7 @@ class AppState(QObject):
         self._read_result: Optional[dict] = None
         self._detect_result: Optional[dict] = None
         self._duplicate_result: Optional[dict] = None
+        self._ocr_result: Optional[dict] = None
         self._status_message: str = "準備完了"
 
     @property
@@ -89,6 +91,20 @@ class AppState(QObject):
                 self.status_message = "Duplicate処理が完了しました"
 
     @property
+    def ocr_result(self) -> Optional[dict]:
+        """OCR処理の結果（JSON）"""
+        return self._ocr_result
+
+    @ocr_result.setter
+    def ocr_result(self, value: Optional[dict]):
+        """OCR結果を設定"""
+        if self._ocr_result != value:
+            self._ocr_result = value
+            self.ocr_result_changed.emit(value)
+            if value:
+                self.status_message = "OCR処理が完了しました"
+
+    @property
     def status_message(self) -> str:
         """ステータスメッセージ"""
         return self._status_message
@@ -106,6 +122,7 @@ class AppState(QObject):
         self.read_result = None
         self.detect_result = None
         self.duplicate_result = None
+        self.ocr_result = None
         self.status_message = "準備完了"
 
     def has_pdf(self) -> bool:
@@ -123,3 +140,7 @@ class AppState(QObject):
     def has_duplicate_result(self) -> bool:
         """duplicate結果が存在するか"""
         return self._duplicate_result is not None
+
+    def has_ocr_result(self) -> bool:
+        """OCR結果が存在するか"""
+        return self._ocr_result is not None

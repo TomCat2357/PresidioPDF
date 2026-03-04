@@ -149,7 +149,9 @@ def test_build_detect_target_text_newline_ignored_is_backward_compatible():
     assert target == "ABCDEF"
     assert base_length == 6
     assert spans == [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)]
-    assert PipelineService._map_target_span_to_base_offsets(1, 4, spans, base_length) == (
+    assert PipelineService._map_target_span_to_base_offsets(
+        1, 4, spans, base_length
+    ) == (
         1,
         4,
     )
@@ -168,7 +170,9 @@ def test_build_detect_target_text_inserts_newline_when_disabled():
     assert base_length == 6
     assert spans[2] == (2, 2)  # block境界の挿入改行
     assert spans[5] == (4, 4)  # page境界の挿入改行
-    assert PipelineService._map_target_span_to_base_offsets(3, 5, spans, base_length) == (
+    assert PipelineService._map_target_span_to_base_offsets(
+        3, 5, spans, base_length
+    ) == (
         2,
         4,
     )
@@ -186,7 +190,9 @@ def test_build_detect_target_text_whitespace_ignored_uses_original_offsets():
     assert target == "ABCDE"
     assert base_length == 8
     assert spans == [(0, 1), (2, 3), (4, 5), (5, 6), (7, 8)]
-    assert PipelineService._map_target_span_to_base_offsets(1, 4, spans, base_length) == (
+    assert PipelineService._map_target_span_to_base_offsets(
+        1, 4, spans, base_length
+    ) == (
         2,
         6,
     )
@@ -279,6 +285,70 @@ def test_text_preprocess_settings_are_normalized_when_missing(tmp_path):
     assert normalized.get("text_preprocess_settings") == {
         "ignore_newlines": True,
         "ignore_whitespace": False,
+    }
+
+
+def test_ocr_settings_default_values(tmp_path):
+    service = DetectConfigService(tmp_path)
+    service.ensure_config_file()
+
+    settings = service.load_ocr_settings()
+    assert settings == {
+        "enabled": False,
+        "font_color": [0, 0, 0],
+        "opacity": 0.0,
+        "ocr_before_detect": False,
+    }
+
+    normalized = _read_config(service.config_path)
+    assert normalized.get("ocr_settings") == settings
+
+
+def test_ocr_settings_save_and_load(tmp_path):
+    service = DetectConfigService(tmp_path)
+    service.ensure_config_file()
+
+    saved = service.save_ocr_settings(
+        {
+            "enabled": True,
+            "font_color": [32, 64, 96],
+            "opacity": 0.35,
+            "ocr_before_detect": True,
+        }
+    )
+    loaded = service.load_ocr_settings()
+
+    assert saved == {
+        "enabled": True,
+        "font_color": [32, 64, 96],
+        "opacity": 0.35,
+        "ocr_before_detect": True,
+    }
+    assert loaded == saved
+
+
+def test_ocr_settings_are_normalized(tmp_path):
+    service = DetectConfigService(tmp_path)
+    _write_config(
+        service.config_path,
+        {
+            "enabled_entities": ["PERSON"],
+            "ocr_settings": {
+                "enabled": "yes",
+                "font_color": [999, -20, "10"],
+                "opacity": 5.5,
+                "ocr_before_detect": "on",
+            },
+        },
+    )
+
+    service.ensure_config_file()
+    normalized = _read_config(service.config_path)
+    assert normalized.get("ocr_settings") == {
+        "enabled": True,
+        "font_color": [255, 0, 10],
+        "opacity": 1.0,
+        "ocr_before_detect": True,
     }
 
 
@@ -587,7 +657,9 @@ def test_build_read_result_for_detect_uses_current_panel_entities():
 
     assert result["detect"] == panel_entities
     assert result["detect"] is not panel_entities
-    assert any("既存検出 2件を保持してDetectを実行します" in msg for msg in fake.messages)
+    assert any(
+        "既存検出 2件を保持してDetectを実行します" in msg for msg in fake.messages
+    )
 
 
 class _ResultPanelPreviewClickDouble:

@@ -239,7 +239,9 @@ class PipelineService:
         # 入力検証
         if not isinstance(pdf_path, Path):
             logger.error(f"無効なパス型: {type(pdf_path)}")
-            raise TypeError(f"pdf_pathはPathオブジェクトである必要があります: {type(pdf_path)}")
+            raise TypeError(
+                f"pdf_pathはPathオブジェクトである必要があります: {type(pdf_path)}"
+            )
 
         if not pdf_path.exists():
             logger.error(f"ファイルが見つかりません: {pdf_path}")
@@ -249,7 +251,7 @@ class PipelineService:
             logger.error(f"ディレクトリが指定されています: {pdf_path}")
             raise ValueError(f"PDFファイルではありません: {pdf_path}")
 
-        if pdf_path.suffix.lower() != '.pdf':
+        if pdf_path.suffix.lower() != ".pdf":
             logger.warning(f"PDF以外のファイル拡張子: {pdf_path.suffix}")
 
         pdf_str = str(pdf_path.resolve())
@@ -268,7 +270,9 @@ class PipelineService:
         coords2offset_map = {}
         if include_coordinate_map:
             try:
-                offset2coords_map, coords2offset_map = _generate_coordinate_maps(pdf_str)
+                offset2coords_map, coords2offset_map = _generate_coordinate_maps(
+                    pdf_str
+                )
                 logger.debug("座標マップの生成完了")
             except Exception as e:
                 logger.warning(f"座標マップの生成に失敗: {e}")
@@ -290,6 +294,267 @@ class PipelineService:
         page_count = metadata.get("pdf", {}).get("page_count", len(text_2d))
         logger.info(f"run_read完了: {page_count} ページ")
         return result
+
+    @staticmethod
+    def _resolve_target_pages(
+        page_count: int,
+        page_filter: Optional[List[int]],
+    ) -> List[int]:
+        if page_filter is None:
+            return list(range(page_count))
+
+        target_pages: List[int] = []
+        for raw_page_num in page_filter:
+            try:
+                page_num = int(raw_page_num)
+            except (TypeError, ValueError):
+                continue
+            if page_num < 0 or page_num >= page_count:
+                continue
+            if page_num not in target_pages:
+                target_pages.append(page_num)
+        return target_pages
+
+    @staticmethod
+    def _extract_existing_text_rects(
+        page: Any, dpi: int
+    ) -> List[Tuple[float, float, float, float]]:
+        text_dict = page.get_text("dict") or {}
+        blocks = text_dict.get("blocks", []) if isinstance(text_dict, dict) else []
+        scale = float(dpi) / 72.0
+        rects: List[Tuple[float, float, float, float]] = []
+        for block in blocks:
+            if not isinstance(block, dict) or int(block.get("type", -1)) != 0:
+                continue
+            for line in block.get("lines", []) or []:
+                if not isinstance(line, dict):
+                    continue
+                for span in line.get("spans", []) or []:
+                    if not isinstance(span, dict):
+                        continue
+                    bbox = span.get("bbox")
+                    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+                        continue
+                    try:
+                        x0 = float(bbox[0]) * scale
+                        y0 = float(bbox[1]) * scale
+                        x1 = float(bbox[2]) * scale
+                        y1 = float(bbox[3]) * scale
+                    except (TypeError, ValueError):
+                        continue
+                    if x1 <= x0 or y1 <= y0:
+                        continue
+                    rects.append((x0, y0, x1, y1))
+        return rects
+
+    @staticmethod
+    def _normalize_ocr_settings(
+        ocr_settings: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        from src.gui_pyqt.services.detect_config_service import DetectConfigService
+
+        normalized = dict(DetectConfigService.DEFAULT_OCR_SETTINGS)
+        if isinstance(ocr_settings, dict):
+            normalized.update(ocr_settings)
+
+        normalized["enabled"] = DetectConfigService._coerce_bool(
+            normalized.get("enabled"),
+            DetectConfigService.DEFAULT_OCR_SETTINGS["enabled"],
+        )
+        normalized["font_color"] = DetectConfigService._coerce_rgb_color(
+            normalized.get("font_color"),
+            DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
+        )
+        normalized["opacity"] = DetectConfigService._coerce_opacity(
+            normalized.get("opacity")
+        )
+        normalized["ocr_before_detect"] = DetectConfigService._coerce_bool(
+            normalized.get("ocr_before_detect"),
+            DetectConfigService.DEFAULT_OCR_SETTINGS["ocr_before_detect"],
+        )
+        return normalized
+
+    @staticmethod
+    def run_ocr(
+        pdf_path: Path,
+        page_filter: Optional[List[int]] = None,
+        ocr_settings: Optional[Dict[str, Any]] = None,
+        dpi: int = 300,
+    ) -> Dict[str, Any]:
+        """OCR実行とPDFへのテキスト埋め込みを行う。"""
+        logger.info("run_ocr開始")
+
+        import fitz
+        from src.ocr.ndlocr_service import NDLOCRService
+        from src.pdf.pdf_text_embedder import PDFTextEmbedder
+
+        if not isinstance(pdf_path, Path):
+            pdf_path = Path(pdf_path)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDFファイルが見つかりません: {pdf_path}")
+
+        try:
+            dpi_value = int(dpi)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("dpiは整数で指定してください") from exc
+        if dpi_value <= 0:
+            raise ValueError("dpiは1以上で指定してください")
+
+        settings = PipelineService._normalize_ocr_settings(ocr_settings)
+        if not settings.get("enabled", False):
+            raise ValueError("OCR設定が無効です。設定画面でOCRを有効化してください。")
+        if not NDLOCRService.is_available():
+            raise RuntimeError(
+                "NDLOCR-Liteが利用できません。`pip install ndlocr-lite` を実行してください。"
+            )
+
+        service = NDLOCRService()
+        ocr_results_by_page: Dict[int, List[Dict[str, Any]]] = {}
+        embedded_count = 0
+        target_pages: List[int] = []
+        temp_save_path = pdf_path.with_suffix(pdf_path.suffix + ".ocr.tmp")
+
+        try:
+            with fitz.open(str(pdf_path)) as doc:
+                target_pages = PipelineService._resolve_target_pages(
+                    len(doc), page_filter
+                )
+                scale = 72.0 / float(dpi_value)
+                for page_num in target_pages:
+                    page = doc[page_num]
+                    pixmap = page.get_pixmap(dpi=dpi_value, alpha=False)
+                    existing_text_rects = PipelineService._extract_existing_text_rects(
+                        page,
+                        dpi_value,
+                    )
+                    page_results = service.run_ocr_on_page(
+                        pixmap,
+                        existing_text_rects,
+                        page_num=page_num,
+                        scale_x=scale,
+                        scale_y=scale,
+                    )
+                    ocr_results_by_page[page_num] = [
+                        result.to_dict() for result in page_results
+                    ]
+
+                embedded_count = PDFTextEmbedder.embed_ocr_results(
+                    doc,
+                    ocr_results_by_page,
+                    font_color=settings.get("font_color", [0, 0, 0]),
+                    opacity=settings.get("opacity", 0.0),
+                )
+                if embedded_count > 0:
+                    doc.save(str(temp_save_path), garbage=4, deflate=True, clean=True)
+        except Exception:
+            if temp_save_path.exists():
+                temp_save_path.unlink(missing_ok=True)
+            raise
+
+        if temp_save_path.exists():
+            temp_save_path.replace(pdf_path)
+
+        read_result = PipelineService.run_read(pdf_path, include_coordinate_map=True)
+        ocr_item_count = sum(len(items) for items in ocr_results_by_page.values())
+
+        logger.info(
+            "run_ocr完了: pages=%s, ocr_items=%s, embedded=%s",
+            len(target_pages),
+            ocr_item_count,
+            embedded_count,
+        )
+        return {
+            "success": True,
+            "pdf_path": str(pdf_path),
+            "target_pages": target_pages,
+            "ocr_results": ocr_results_by_page,
+            "ocr_item_count": ocr_item_count,
+            "embedded_count": embedded_count,
+            "read_result": read_result,
+        }
+
+    @staticmethod
+    def run_clear_ocr_text(
+        pdf_path: Path,
+        page_filter: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """埋め込み済みOCRテキストを削除する。"""
+        logger.info("run_clear_ocr_text開始")
+
+        import fitz
+        from src.pdf.pdf_text_embedder import PDFTextEmbedder
+
+        if not isinstance(pdf_path, Path):
+            pdf_path = Path(pdf_path)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDFファイルが見つかりません: {pdf_path}")
+
+        removed_count = 0
+        temp_save_path = pdf_path.with_suffix(pdf_path.suffix + ".ocr_clear.tmp")
+        try:
+            with fitz.open(str(pdf_path)) as doc:
+                removed_count = PDFTextEmbedder.remove_ocr_text(
+                    doc,
+                    page_filter=page_filter,
+                )
+                if removed_count > 0:
+                    doc.save(str(temp_save_path), garbage=4, deflate=True, clean=True)
+        except Exception:
+            if temp_save_path.exists():
+                temp_save_path.unlink(missing_ok=True)
+            raise
+
+        if temp_save_path.exists():
+            temp_save_path.replace(pdf_path)
+
+        read_result = PipelineService.run_read(pdf_path, include_coordinate_map=True)
+
+        logger.info("run_clear_ocr_text完了: removed=%s", removed_count)
+        return {
+            "success": True,
+            "pdf_path": str(pdf_path),
+            "removed_count": removed_count,
+            "read_result": read_result,
+        }
+
+    @staticmethod
+    def run_ocr_then_detect(
+        pdf_path: Path,
+        read_result: Dict[str, Any],
+        ocr_settings: Optional[Dict[str, Any]],
+        detect_args: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """OCRを先行実行してからDetectを実行する。"""
+        logger.info("run_ocr_then_detect開始")
+
+        detect_kwargs = dict(detect_args or {})
+        page_filter = detect_kwargs.get("page_filter")
+        ocr_result = PipelineService.run_ocr(
+            pdf_path=pdf_path,
+            page_filter=page_filter if isinstance(page_filter, list) else None,
+            ocr_settings=ocr_settings,
+        )
+
+        latest_read_result = ocr_result.get("read_result")
+        if not isinstance(latest_read_result, dict):
+            latest_read_result = read_result if isinstance(read_result, dict) else {}
+        detect_result = PipelineService.run_detect(latest_read_result, **detect_kwargs)
+
+        logger.info(
+            "run_ocr_then_detect完了: ocr_items=%s detect=%s",
+            ocr_result.get("ocr_item_count", 0),
+            (
+                len(detect_result.get("detect", []))
+                if isinstance(detect_result, dict)
+                else 0
+            ),
+        )
+        return {
+            "success": True,
+            "ocr": ocr_result,
+            "read_result": latest_read_result,
+            "detect": detect_result,
+        }
 
     @staticmethod
     def run_detect(
@@ -386,10 +651,12 @@ class PipelineService:
             }
             target_pages = {page_num for page_num in target_pages if page_num >= 0}
 
-        plain_text, target_spans, base_text_length = PipelineService._build_detect_target_text(
-            text_2d=text_2d,
-            ignore_newlines=bool(ignore_newlines),
-            ignore_whitespace=bool(ignore_whitespace),
+        plain_text, target_spans, base_text_length = (
+            PipelineService._build_detect_target_text(
+                text_2d=text_2d,
+                ignore_newlines=bool(ignore_newlines),
+                ignore_whitespace=bool(ignore_whitespace),
+            )
         )
 
         # Analyzerでモデル検出
@@ -428,7 +695,9 @@ class PipelineService:
                     target_spans,
                     base_text_length,
                 )
-                start_pos, end_pos = _convert_offsets_to_position(base_s, base_e, text_2d)
+                start_pos, end_pos = _convert_offsets_to_position(
+                    base_s, base_e, text_2d
+                )
                 if (
                     target_pages is not None
                     and int(start_pos.get("page_num", -1)) not in target_pages
@@ -460,31 +729,38 @@ class PipelineService:
                             if s == e:
                                 continue
                             txt = target_text[s:e]
-                            base_s, base_e = PipelineService._map_target_span_to_base_offsets(
-                                s,
-                                e,
-                                target_spans,
-                                base_text_length,
+                            base_s, base_e = (
+                                PipelineService._map_target_span_to_base_offsets(
+                                    s,
+                                    e,
+                                    target_spans,
+                                    base_text_length,
+                                )
                             )
                             start_pos, end_pos = _convert_offsets_to_position(
                                 base_s, base_e, text_2d
                             )
                             if (
                                 target_pages is not None
-                                and int(start_pos.get("page_num", -1)) not in target_pages
+                                and int(start_pos.get("page_num", -1))
+                                not in target_pages
                             ):
                                 continue
-                            detections_plain.append({
-                                "start": start_pos,
-                                "end": end_pos,
-                                "entity": resolved_entity,
-                                "word": txt,
-                                "origin": "custom",
-                                "_span": (s, e),
-                            })
+                            detections_plain.append(
+                                {
+                                    "start": start_pos,
+                                    "end": end_pos,
+                                    "entity": resolved_entity,
+                                    "word": txt,
+                                    "origin": "custom",
+                                    "_span": (s, e),
+                                }
+                            )
                     except re.error as exc:
                         # 無効な正規表現はスキップ
-                        logger.warning(f"無効な追加正規表現をスキップ: {rx_str} ({exc})")
+                        logger.warning(
+                            f"無効な追加正規表現をスキップ: {rx_str} ({exc})"
+                        )
 
             # 除外パターンのマッチ範囲を収集
             if exclude_patterns:
@@ -495,7 +771,9 @@ class PipelineService:
                         for m in rx.finditer(target_text):
                             exclude_spans.append((m.start(), m.end()))
                     except re.error as exc:
-                        logger.warning(f"無効な除外正規表現をスキップ: {rx_str} ({exc})")
+                        logger.warning(
+                            f"無効な除外正規表現をスキップ: {rx_str} ({exc})"
+                        )
 
         # 既存検出情報の統合
         existing_detect = read_result.get("detect", [])
@@ -507,6 +785,7 @@ class PipelineService:
 
         # ommitはaddより優先: 最終検出結果に対して除外を適用
         if compiled_excludes:
+
             def overlaps(span_a: Tuple[int, int], span_b: Tuple[int, int]) -> bool:
                 return max(span_a[0], span_b[0]) < min(span_a[1], span_b[1])
 
@@ -526,7 +805,9 @@ class PipelineService:
                         current_span = (int(span[0]), int(span[1]))
                     except (TypeError, ValueError):
                         return False
-                    if any(overlaps(current_span, ex_span) for ex_span in exclude_spans):
+                    if any(
+                        overlaps(current_span, ex_span) for ex_span in exclude_spans
+                    ):
                         return True
 
                 return False
@@ -605,8 +886,16 @@ class PipelineService:
 
         # デフォルト値の設定
         if entity_priority is None:
-            entity_priority = ["PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER",
-                             "INDIVIDUAL_NUMBER", "YEAR", "PROPER_NOUN", "OTHER"]
+            entity_priority = [
+                "PERSON",
+                "LOCATION",
+                "DATE_TIME",
+                "PHONE_NUMBER",
+                "INDIVIDUAL_NUMBER",
+                "YEAR",
+                "PROPER_NOUN",
+                "OTHER",
+            ]
         if tie_break is None:
             tie_break = ["origin", "contain", "length", "position", "entity"]
         if origin_priority is None:
@@ -717,7 +1006,9 @@ class PipelineService:
                 return "LOCATION"
             return n.upper()
 
-        def _group_rects_by_line(rects: List[List[float]], y_threshold: float = 2.0) -> List[List[float]]:
+        def _group_rects_by_line(
+            rects: List[List[float]], y_threshold: float = 2.0
+        ) -> List[List[float]]:
             """同一行の矩形をy座標でグルーピングして各行の外接矩形を返す"""
             if not rects:
                 return []
@@ -736,7 +1027,9 @@ class PipelineService:
                     groups.append([rect])
                     continue
                 last_group = groups[-1]
-                gcy = sum(((rr[1] + rr[3]) / 2.0) for rr in last_group) / len(last_group)
+                gcy = sum(((rr[1] + rr[3]) / 2.0) for rr in last_group) / len(
+                    last_group
+                )
                 if abs(cy - gcy) <= y_threshold:
                     last_group.append(rect)
                 else:
@@ -762,7 +1055,9 @@ class PipelineService:
                 return None
             return [x0, y0, x1, y1]
 
-        def _normalize_circle(circle: Any, default_page_num: int) -> Optional[Dict[str, Any]]:
+        def _normalize_circle(
+            circle: Any, default_page_num: int
+        ) -> Optional[Dict[str, Any]]:
             """円入力を {page_num, center_x, center_y, radius, rect} へ正規化"""
             page_num = int(default_page_num)
             center_x = None
@@ -850,7 +1145,8 @@ class PipelineService:
                 if isinstance(start_pos, dict):
                     try:
                         default_page_num = int(
-                            start_pos.get("page_num", default_page_num) or default_page_num
+                            start_pos.get("page_num", default_page_num)
+                            or default_page_num
                         )
                     except Exception:
                         pass
@@ -859,7 +1155,9 @@ class PipelineService:
                 mask_circles_pdf = detect_item.get("mask_circles_pdf")
                 if isinstance(mask_circles_pdf, list) and mask_circles_pdf:
                     for raw_circle in mask_circles_pdf:
-                        normalized_circle = _normalize_circle(raw_circle, default_page_num)
+                        normalized_circle = _normalize_circle(
+                            raw_circle, default_page_num
+                        )
                         if not normalized_circle:
                             continue
                         has_circle_masks = True
@@ -876,7 +1174,9 @@ class PipelineService:
                             normalized_circle["page_num"], []
                         ).append(normalized_circle["rect"])
 
-                selection_mode = str(detect_item.get("selection_mode", "") or "").lower()
+                selection_mode = str(
+                    detect_item.get("selection_mode", "") or ""
+                ).lower()
                 mask_rects_pdf = detect_item.get("mask_rects_pdf")
                 if not isinstance(mask_rects_pdf, list) or not mask_rects_pdf:
                     continue
@@ -889,7 +1189,9 @@ class PipelineService:
                     rect_source = raw_rect
                     if isinstance(raw_rect, dict):
                         try:
-                            rect_page_num = int(raw_rect.get("page_num", rect_page_num) or rect_page_num)
+                            rect_page_num = int(
+                                raw_rect.get("page_num", rect_page_num) or rect_page_num
+                            )
                         except Exception:
                             rect_page_num = default_page_num
                         if "rect" in raw_rect:
@@ -913,15 +1215,21 @@ class PipelineService:
                             "entity_type": normalized_entity_type,
                         }
                     )
-                    mask_redactions_by_page.setdefault(rect_page_num, []).append(normalized_rect)
+                    mask_redactions_by_page.setdefault(rect_page_num, []).append(
+                        normalized_rect
+                    )
 
             # 2nd pass: 通常テキストマスク（画像マスク領域と重なるものは除外）
             for detect_item in detect_list:
                 if not isinstance(detect_item, dict):
                     continue
 
-                has_mask_rects = isinstance(detect_item.get("mask_rects_pdf"), list) and detect_item.get("mask_rects_pdf")
-                has_mask_circles = isinstance(detect_item.get("mask_circles_pdf"), list) and detect_item.get("mask_circles_pdf")
+                has_mask_rects = isinstance(
+                    detect_item.get("mask_rects_pdf"), list
+                ) and detect_item.get("mask_rects_pdf")
+                has_mask_circles = isinstance(
+                    detect_item.get("mask_circles_pdf"), list
+                ) and detect_item.get("mask_circles_pdf")
                 if has_mask_rects or has_mask_circles:
                     continue
 
@@ -943,11 +1251,18 @@ class PipelineService:
                 line_rects_items = []
                 try:
                     key_s = (page_num, block_num)
-                    key_e = (end_pos.get("page_num", page_num), end_pos.get("block_num", block_num))
+                    key_e = (
+                        end_pos.get("page_num", page_num),
+                        end_pos.get("block_num", block_num),
+                    )
                     if key_s in block_start_global and key_e in block_start_global:
                         start_global = block_start_global[key_s] + int(start_offset)
-                        end_global_excl = block_start_global[key_e] + int(end_offset) + 1
-                        line_rects_items = locator.get_pii_line_rects(start_global, end_global_excl)
+                        end_global_excl = (
+                            block_start_global[key_e] + int(end_offset) + 1
+                        )
+                        line_rects_items = locator.get_pii_line_rects(
+                            start_global, end_global_excl
+                        )
                 except Exception:
                     line_rects_items = []
 
@@ -966,7 +1281,9 @@ class PipelineService:
                             page_dict = offset2coords_map.get(str(p), {})
                             if not isinstance(page_dict, dict) or not page_dict:
                                 continue
-                            block_ids = sorted([int(k) for k in page_dict.keys() if str(k).isdigit()])
+                            block_ids = sorted(
+                                [int(k) for k in page_dict.keys() if str(k).isdigit()]
+                            )
                             if not block_ids:
                                 continue
                             b_start = bs if p == ps else block_ids[0]
@@ -978,11 +1295,19 @@ class PipelineService:
                                 if not isinstance(block_list, list) or not block_list:
                                     continue
                                 o_start = os if (p == ps and b == bs) else 0
-                                o_end = oe if (p == pe and b == be) else (len(block_list) - 1)
+                                o_end = (
+                                    oe
+                                    if (p == pe and b == be)
+                                    else (len(block_list) - 1)
+                                )
                                 if o_start > o_end:
                                     continue
                                 for off in range(o_start, o_end + 1):
-                                    bbox = block_list[off] if 0 <= off < len(block_list) else None
+                                    bbox = (
+                                        block_list[off]
+                                        if 0 <= off < len(block_list)
+                                        else None
+                                    )
                                     if isinstance(bbox, list) and len(bbox) >= 4:
                                         page_rects.setdefault(p, []).append(bbox[:4])
 
@@ -992,7 +1317,12 @@ class PipelineService:
                             for r in _group_rects_by_line(rects):
                                 line_rects_items.append(
                                     {
-                                        "rect": {"x0": r[0], "y0": r[1], "x1": r[2], "y1": r[3]},
+                                        "rect": {
+                                            "x0": r[0],
+                                            "y0": r[1],
+                                            "x1": r[2],
+                                            "y1": r[3],
+                                        },
                                         "page_num": p,
                                     }
                                 )
@@ -1047,7 +1377,11 @@ class PipelineService:
                 continue
             seen_redactions.add(key)
             unique_redactions.append(
-                {"page_num": page_num, "rect": [x0, y0, x1, y1], "entity_type": entity_type}
+                {
+                    "page_num": page_num,
+                    "rect": [x0, y0, x1, y1],
+                    "entity_type": entity_type,
+                }
             )
         redactions = unique_redactions
         unique_circles: List[Dict[str, Any]] = []
@@ -1097,7 +1431,9 @@ class PipelineService:
             for item in circle_masks:
                 circles_by_page.setdefault(int(item["page_num"]), []).append(item)
 
-            target_pages = sorted(set(redactions_by_page.keys()) | set(circles_by_page.keys()))
+            target_pages = sorted(
+                set(redactions_by_page.keys()) | set(circles_by_page.keys())
+            )
             for page_num in target_pages:
                 if page_num < 0 or page_num >= len(out_doc):
                     continue
@@ -1148,6 +1484,7 @@ class PipelineService:
         if embed_coordinates:
             try:
                 from src.pdf.pdf_coordinate_mapper import PDFCoordinateMapper
+
                 mapper = PDFCoordinateMapper()
                 if mapper.load_or_create_coordinate_map(str(pdf_path)):
                     temp_path = str(output_path) + ".temp"
@@ -1214,7 +1551,9 @@ class PipelineService:
                 return None
             return [x0, y0, x1, y1]
 
-        def _group_rects_by_line(rects: List[List[float]], y_threshold: float = 2.0) -> List[List[float]]:
+        def _group_rects_by_line(
+            rects: List[List[float]], y_threshold: float = 2.0
+        ) -> List[List[float]]:
             if not rects:
                 return []
             items = []
@@ -1263,7 +1602,9 @@ class PipelineService:
             except Exception:
                 return 0
 
-        def _dedupe_rect_items(items: List[Tuple[int, List[float]]]) -> List[Tuple[int, List[float]]]:
+        def _dedupe_rect_items(
+            items: List[Tuple[int, List[float]]],
+        ) -> List[Tuple[int, List[float]]]:
             unique_items: List[Tuple[int, List[float]]] = []
             seen = set()
             for page_num, rect in items:
@@ -1280,7 +1621,9 @@ class PipelineService:
                 unique_items.append((int(page_num), rect))
             return unique_items
 
-        def _resolve_shape_rects(entity: Dict[str, Any]) -> List[Tuple[int, List[float]]]:
+        def _resolve_shape_rects(
+            entity: Dict[str, Any],
+        ) -> List[Tuple[int, List[float]]]:
             rect_items: List[Tuple[int, List[float]]] = []
             default_page_num = _default_page_num(entity)
 
@@ -1291,7 +1634,9 @@ class PipelineService:
                     rect_source = raw_rect
                     if isinstance(raw_rect, dict):
                         try:
-                            rect_page_num = int(raw_rect.get("page_num", rect_page_num) or rect_page_num)
+                            rect_page_num = int(
+                                raw_rect.get("page_num", rect_page_num) or rect_page_num
+                            )
                         except Exception:
                             rect_page_num = default_page_num
                         if "rect" in raw_rect:
@@ -1319,7 +1664,8 @@ class PipelineService:
                     if isinstance(raw_circle, dict):
                         try:
                             circle_page_num = int(
-                                raw_circle.get("page_num", circle_page_num) or circle_page_num
+                                raw_circle.get("page_num", circle_page_num)
+                                or circle_page_num
                             )
                         except Exception:
                             circle_page_num = default_page_num
@@ -1352,7 +1698,12 @@ class PipelineService:
                             center_y = None
                             radius = None
 
-                    if center_x is None or center_y is None or radius is None or radius <= 0.0:
+                    if (
+                        center_x is None
+                        or center_y is None
+                        or radius is None
+                        or radius <= 0.0
+                    ):
                         continue
                     rect_items.append(
                         (
@@ -1382,7 +1733,9 @@ class PipelineService:
                     rect_source = raw_rect
                     if isinstance(raw_rect, dict):
                         try:
-                            rect_page_num = int(raw_rect.get("page_num", rect_page_num) or rect_page_num)
+                            rect_page_num = int(
+                                raw_rect.get("page_num", rect_page_num) or rect_page_num
+                            )
                         except Exception:
                             rect_page_num = default_page_num
                         if "rect" in raw_rect:
@@ -1420,7 +1773,9 @@ class PipelineService:
                 if key_s in block_start_global and key_e in block_start_global:
                     start_global = block_start_global[key_s] + start_offset
                     end_global_excl = block_start_global[key_e] + end_offset + 1
-                    line_rects_items = locator.get_pii_line_rects(start_global, end_global_excl)
+                    line_rects_items = locator.get_pii_line_rects(
+                        start_global, end_global_excl
+                    )
             except Exception:
                 line_rects_items = []
 
@@ -1450,7 +1805,9 @@ class PipelineService:
                     page_dict = offset2coords_map.get(str(p), {})
                     if not isinstance(page_dict, dict) or not page_dict:
                         continue
-                    block_ids = sorted([int(k) for k in page_dict.keys() if str(k).isdigit()])
+                    block_ids = sorted(
+                        [int(k) for k in page_dict.keys() if str(k).isdigit()]
+                    )
                     if not block_ids:
                         continue
                     b_start = block_num if p == page_num else block_ids[0]
@@ -1461,12 +1818,20 @@ class PipelineService:
                         block_list = page_dict.get(str(b), [])
                         if not isinstance(block_list, list) or not block_list:
                             continue
-                        o_start = start_offset if (p == page_num and b == block_num) else 0
-                        o_end = end_offset if (p == end_page_num and b == end_block_num) else (len(block_list) - 1)
+                        o_start = (
+                            start_offset if (p == page_num and b == block_num) else 0
+                        )
+                        o_end = (
+                            end_offset
+                            if (p == end_page_num and b == end_block_num)
+                            else (len(block_list) - 1)
+                        )
                         if o_start > o_end:
                             continue
                         for off in range(o_start, o_end + 1):
-                            bbox = block_list[off] if 0 <= off < len(block_list) else None
+                            bbox = (
+                                block_list[off] if 0 <= off < len(block_list) else None
+                            )
                             normalized_rect = _normalize_rect(bbox)
                             if not normalized_rect:
                                 continue
@@ -1510,7 +1875,11 @@ class PipelineService:
                             continue
                         page = doc[page_num]
                         fitz_rect = fitz.Rect(rect) & page.rect
-                        if (not fitz_rect) or fitz_rect.width <= 0 or fitz_rect.height <= 0:
+                        if (
+                            (not fitz_rect)
+                            or fitz_rect.width <= 0
+                            or fitz_rect.height <= 0
+                        ):
                             continue
                         annot = page.add_rect_annot(fitz_rect)
                         info = annot.info
@@ -1608,7 +1977,9 @@ class PipelineService:
                             height=page.rect.height,
                         )
                         image_page.insert_image(image_page.rect, pixmap=pix)
-                    image_pdf.save(str(output_path), garbage=4, deflate=True, clean=True)
+                    image_pdf.save(
+                        str(output_path), garbage=4, deflate=True, clean=True
+                    )
 
             entity_count = int(mask_result.get("entity_count", 0))
             logger.info(f"run_mask_as_image完了: {entity_count} 件を画像PDF化")
@@ -1633,7 +2004,9 @@ class PipelineService:
         mark_styles: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> Dict[str, Any]:
         """検出項目のマークを半透明で重ね、画像のみPDFとして保存する"""
-        logger.info(f"run_export_marked_as_image開始: {pdf_path} → {output_path}, dpi={dpi}")
+        logger.info(
+            f"run_export_marked_as_image開始: {pdf_path} → {output_path}, dpi={dpi}"
+        )
 
         import fitz
         from src.pdf.pdf_locator import PDFTextLocator
@@ -1688,7 +2061,9 @@ class PipelineService:
                 return None
             return [x0, y0, x1, y1]
 
-        def _group_rects_by_line(rects: List[List[float]], y_threshold: float = 2.0) -> List[List[float]]:
+        def _group_rects_by_line(
+            rects: List[List[float]], y_threshold: float = 2.0
+        ) -> List[List[float]]:
             if not rects:
                 return []
             items = []
@@ -1737,7 +2112,9 @@ class PipelineService:
             except Exception:
                 return 0
 
-        def _dedupe_rect_items(items: List[Tuple[int, List[float]]]) -> List[Tuple[int, List[float]]]:
+        def _dedupe_rect_items(
+            items: List[Tuple[int, List[float]]],
+        ) -> List[Tuple[int, List[float]]]:
             unique_items: List[Tuple[int, List[float]]] = []
             seen = set()
             for page_num, rect in items:
@@ -1754,7 +2131,9 @@ class PipelineService:
                 unique_items.append((int(page_num), rect))
             return unique_items
 
-        def _normalize_circle(circle: Any, default_page_num: int) -> Optional[Tuple[int, float, float, float]]:
+        def _normalize_circle(
+            circle: Any, default_page_num: int
+        ) -> Optional[Tuple[int, float, float, float]]:
             page_num = int(default_page_num)
             center_x = None
             center_y = None
@@ -1800,7 +2179,9 @@ class PipelineService:
 
         def _resolve_shape_geometries(
             entity: Dict[str, Any],
-        ) -> Tuple[List[Tuple[int, List[float]]], List[Tuple[int, float, float, float]]]:
+        ) -> Tuple[
+            List[Tuple[int, List[float]]], List[Tuple[int, float, float, float]]
+        ]:
             rect_items: List[Tuple[int, List[float]]] = []
             circle_items: List[Tuple[int, float, float, float]] = []
             default_page_num = _default_page_num(entity)
@@ -1825,7 +2206,8 @@ class PipelineService:
                         if isinstance(raw_rect, dict):
                             try:
                                 rect_page_num = int(
-                                    raw_rect.get("page_num", rect_page_num) or rect_page_num
+                                    raw_rect.get("page_num", rect_page_num)
+                                    or rect_page_num
                                 )
                             except Exception:
                                 rect_page_num = default_page_num
@@ -1876,7 +2258,9 @@ class PipelineService:
                     rect_source = raw_rect
                     if isinstance(raw_rect, dict):
                         try:
-                            rect_page_num = int(raw_rect.get("page_num", rect_page_num) or rect_page_num)
+                            rect_page_num = int(
+                                raw_rect.get("page_num", rect_page_num) or rect_page_num
+                            )
                         except Exception:
                             rect_page_num = default_page_num
                         if "rect" in raw_rect:
@@ -1914,7 +2298,9 @@ class PipelineService:
                 if key_s in block_start_global and key_e in block_start_global:
                     start_global = block_start_global[key_s] + start_offset
                     end_global_excl = block_start_global[key_e] + end_offset + 1
-                    line_rects_items = locator.get_pii_line_rects(start_global, end_global_excl)
+                    line_rects_items = locator.get_pii_line_rects(
+                        start_global, end_global_excl
+                    )
             except Exception:
                 line_rects_items = []
 
@@ -1944,7 +2330,9 @@ class PipelineService:
                     page_dict = offset2coords_map.get(str(p), {})
                     if not isinstance(page_dict, dict) or not page_dict:
                         continue
-                    block_ids = sorted([int(k) for k in page_dict.keys() if str(k).isdigit()])
+                    block_ids = sorted(
+                        [int(k) for k in page_dict.keys() if str(k).isdigit()]
+                    )
                     if not block_ids:
                         continue
                     b_start = block_num if p == page_num else block_ids[0]
@@ -1955,12 +2343,20 @@ class PipelineService:
                         block_list = page_dict.get(str(b), [])
                         if not isinstance(block_list, list) or not block_list:
                             continue
-                        o_start = start_offset if (p == page_num and b == block_num) else 0
-                        o_end = end_offset if (p == end_page_num and b == end_block_num) else (len(block_list) - 1)
+                        o_start = (
+                            start_offset if (p == page_num and b == block_num) else 0
+                        )
+                        o_end = (
+                            end_offset
+                            if (p == end_page_num and b == end_block_num)
+                            else (len(block_list) - 1)
+                        )
                         if o_start > o_end:
                             continue
                         for off in range(o_start, o_end + 1):
-                            bbox = block_list[off] if 0 <= off < len(block_list) else None
+                            bbox = (
+                                block_list[off] if 0 <= off < len(block_list) else None
+                            )
                             normalized_rect = _normalize_rect(bbox)
                             if not normalized_rect:
                                 continue
@@ -1985,7 +2381,9 @@ class PipelineService:
                 "PROPER_NOUN": {"r": 1.0, "g": 0.86, "b": 0.70, "a": 0.35},
                 "OTHER": {"r": 0.78, "g": 0.78, "b": 0.78, "a": 0.35},
             }
-            style = default_styles.get(normalized_entity, default_styles["OTHER"]).copy()
+            style = default_styles.get(
+                normalized_entity, default_styles["OTHER"]
+            ).copy()
             custom_style = (mark_styles or {}).get(normalized_entity)
             if isinstance(custom_style, dict):
                 for key in ["r", "g", "b", "a"]:
@@ -2021,7 +2419,11 @@ class PipelineService:
                             continue
                         page = doc[page_num]
                         fitz_rect = fitz.Rect(rect) & page.rect
-                        if (not fitz_rect) or fitz_rect.width <= 0 or fitz_rect.height <= 0:
+                        if (
+                            (not fitz_rect)
+                            or fitz_rect.width <= 0
+                            or fitz_rect.height <= 0
+                        ):
                             continue
                         r, g, b, a = _resolve_mark_style(entity_type)
                         shape = page.new_shape()
