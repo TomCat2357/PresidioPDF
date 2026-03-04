@@ -357,10 +357,6 @@ class PipelineService:
         if isinstance(ocr_settings, dict):
             normalized.update(ocr_settings)
 
-        normalized["enabled"] = DetectConfigService._coerce_bool(
-            normalized.get("enabled"),
-            DetectConfigService.DEFAULT_OCR_SETTINGS["enabled"],
-        )
         normalized["font_color"] = DetectConfigService._coerce_rgb_color(
             normalized.get("font_color"),
             DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
@@ -401,8 +397,6 @@ class PipelineService:
             raise ValueError("dpiは1以上で指定してください")
 
         settings = PipelineService._normalize_ocr_settings(ocr_settings)
-        if not settings.get("enabled", False):
-            raise ValueError("OCR設定が無効です。設定画面でOCRを有効化してください。")
         if not NDLOCRService.is_available():
             raise RuntimeError(
                 "NDLOCR-Liteが利用できません。`pip install ndlocr-lite` を実行してください。"

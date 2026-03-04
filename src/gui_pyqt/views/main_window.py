@@ -706,7 +706,6 @@ class MainWindow(QMainWindow):
                 ignore_whitespace=text_preprocess_settings.get(
                     "ignore_whitespace", False
                 ),
-                ocr_enabled=ocr_settings.get("enabled", False),
                 ocr_font_color=ocr_settings.get("font_color", [0, 0, 0]),
                 ocr_opacity=ocr_settings.get("opacity", 0.0),
                 ocr_before_detect=ocr_settings.get("ocr_before_detect", False),
@@ -752,7 +751,6 @@ class MainWindow(QMainWindow):
                 f"overlap:{self.duplicate_overlap_mode}, "
                 f"ignore_newlines={self.detect_text_preprocess_settings.get('ignore_newlines', True)}, "
                 f"ignore_whitespace={self.detect_text_preprocess_settings.get('ignore_whitespace', False)}, "
-                f"ocr_enabled={self.ocr_settings.get('enabled', False)}, "
                 f"ocr_before_detect={self.ocr_settings.get('ocr_before_detect', False)}"
             )
         except Exception as e:
@@ -824,7 +822,6 @@ class MainWindow(QMainWindow):
                 self.detect_text_preprocess_settings.get("ignore_whitespace", False),
             )
             dialog.set_ocr_settings(
-                enabled=self.ocr_settings.get("enabled", False),
                 font_color=self.ocr_settings.get("font_color", [0, 0, 0]),
                 opacity=self.ocr_settings.get("opacity", 0.0),
                 ocr_before_detect=self.ocr_settings.get("ocr_before_detect", False),
@@ -912,9 +909,6 @@ class MainWindow(QMainWindow):
             return
 
         self.ocr_settings = self.detect_config_service.load_ocr_settings()
-        if not self.ocr_settings.get("enabled", False):
-            QMessageBox.warning(self, "警告", "設定画面でOCRを有効化してください")
-            return
         if not NDLOCRService.is_available():
             QMessageBox.warning(
                 self,
@@ -1045,12 +1039,6 @@ class MainWindow(QMainWindow):
         self.ocr_settings = self.detect_config_service.load_ocr_settings()
         use_ocr_then_detect = bool(self.ocr_settings.get("ocr_before_detect", False))
         if use_ocr_then_detect:
-            if not self.ocr_settings.get("enabled", False):
-                QMessageBox.warning(
-                    self, "警告", "OCR先行が有効ですがOCR設定が無効です"
-                )
-                self._reset_detect_scope_context()
-                return
             if not NDLOCRService.is_available():
                 QMessageBox.warning(
                     self,
@@ -1285,9 +1273,9 @@ class MainWindow(QMainWindow):
 
     def on_export_mask_as_image(self):
         """検出結果をマスクし、画像のみPDFとして保存"""
-        detect_or_dup_result = self._get_export_source_result()
-        if not detect_or_dup_result:
-            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+        source_result = self._get_image_export_source_result()
+        if not source_result:
+            QMessageBox.warning(self, "警告", "Read処理が完了していません")
             return
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
@@ -1310,7 +1298,7 @@ class MainWindow(QMainWindow):
         self.current_task = "mask_as_image"
         self.task_runner.start_task(
             PipelineService.run_mask_as_image,
-            detect_or_dup_result,
+            source_result,
             self.app_state.pdf_path,
             output_pdf_path,
             None,
@@ -1319,9 +1307,9 @@ class MainWindow(QMainWindow):
 
     def on_export_marked_as_image(self):
         """検出結果のマークを半透明で重ね、画像のみPDFとして保存"""
-        detect_or_dup_result = self._get_export_source_result()
-        if not detect_or_dup_result:
-            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+        source_result = self._get_image_export_source_result()
+        if not source_result:
+            QMessageBox.warning(self, "警告", "Read処理が完了していません")
             return
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
@@ -1344,7 +1332,7 @@ class MainWindow(QMainWindow):
         self.current_task = "marked_as_image"
         self.task_runner.start_task(
             PipelineService.run_export_marked_as_image,
-            detect_or_dup_result,
+            source_result,
             self.app_state.pdf_path,
             output_pdf_path,
             dpi,
@@ -2239,6 +2227,15 @@ class MainWindow(QMainWindow):
             return self.app_state.detect_result
         return None
 
+    def _get_image_export_source_result(self) -> Optional[dict]:
+        """画像系エクスポート用に使用する結果（duplicate/detect/read優先）を返す"""
+        export_result = self._get_export_source_result()
+        if isinstance(export_result, dict):
+            return export_result
+        if isinstance(self.app_state.read_result, dict):
+            return self.app_state.read_result
+        return None
+
     def _sync_all_result_states_from_entities(
         self, entities: List[Dict[str, Any]]
     ) -> None:
@@ -2629,7 +2626,8 @@ class MainWindow(QMainWindow):
         has_pdf = self.app_state.has_pdf()
         has_read = self.app_state.has_read_result()
         has_detect = self.app_state.has_detect_result()
-        has_export_source = self._get_export_source_result() is not None
+        has_detect_export_source = self._get_export_source_result() is not None
+        has_image_export_source = self._get_image_export_source_result() is not None
         has_current_result = self._get_current_result() is not None
         is_running = self.task_runner.is_running()
 
@@ -2668,14 +2666,15 @@ class MainWindow(QMainWindow):
         self.duplicate_current_action.setEnabled(duplicate_enabled and has_pdf)
         self.duplicate_all_action.setEnabled(duplicate_enabled)
 
-        # Export: Detect/Duplicate結果があり、タスクが実行中でなければ有効
-        export_enabled = has_pdf and has_export_source and not is_running
-        self.export_button.setEnabled(export_enabled)
-        self.export_annotations_action.setEnabled(export_enabled)
-        self.export_mask_action.setEnabled(export_enabled)
-        self.export_mask_as_image_action.setEnabled(export_enabled)
-        self.export_marked_as_image_action.setEnabled(export_enabled)
-        self.export_detect_list_csv_action.setEnabled(export_enabled)
+        # Export: 機能ごとに必要な前提を分離する
+        export_detect_enabled = has_pdf and has_detect_export_source and not is_running
+        export_image_enabled = has_pdf and has_image_export_source and not is_running
+        self.export_annotations_action.setEnabled(export_detect_enabled)
+        self.export_mask_action.setEnabled(export_detect_enabled)
+        self.export_detect_list_csv_action.setEnabled(export_detect_enabled)
+        self.export_mask_as_image_action.setEnabled(export_image_enabled)
+        self.export_marked_as_image_action.setEnabled(export_image_enabled)
+        self.export_button.setEnabled(export_detect_enabled or export_image_enabled)
 
         # Save: PDF + Read結果があり、タスクが実行中でなければ有効
         self.save_action.setEnabled(has_pdf and has_read and not is_running)

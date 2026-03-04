@@ -62,7 +62,6 @@ class DetectConfigService:
         "ignore_whitespace": False,
     }
     DEFAULT_OCR_SETTINGS = {
-        "enabled": False,
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
@@ -628,10 +627,6 @@ class DetectConfigService:
             settings = {}
 
         return {
-            "enabled": self._coerce_bool(
-                settings.get("enabled", self.DEFAULT_OCR_SETTINGS["enabled"]),
-                self.DEFAULT_OCR_SETTINGS["enabled"],
-            ),
             "font_color": self._coerce_rgb_color(
                 settings.get("font_color", self.DEFAULT_OCR_SETTINGS["font_color"]),
                 self.DEFAULT_OCR_SETTINGS["font_color"],

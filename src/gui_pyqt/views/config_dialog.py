@@ -53,7 +53,6 @@ class DetectConfigDialog(QDialog):
         chunk_max_chars: int = 15000,
         ignore_newlines: bool = True,
         ignore_whitespace: bool = False,
-        ocr_enabled: bool = False,
         ocr_font_color: Optional[List[int]] = None,
         ocr_opacity: float = 0.0,
         ocr_before_detect: bool = False,
@@ -77,7 +76,6 @@ class DetectConfigDialog(QDialog):
         self.chunk_max_chars_spin: Optional[QSpinBox] = None
         self.ignore_newlines_checkbox: Optional[QCheckBox] = None
         self.ignore_whitespace_checkbox: Optional[QCheckBox] = None
-        self.ocr_enabled_checkbox: Optional[QCheckBox] = None
         self.ocr_status_label: Optional[QLabel] = None
         self.ocr_color_button: Optional[QPushButton] = None
         self.ocr_opacity_slider: Optional[QSlider] = None
@@ -99,7 +97,6 @@ class DetectConfigDialog(QDialog):
         self.set_chunk_settings(chunk_delimiter, chunk_max_chars)
         self.set_text_preprocess_settings(ignore_newlines, ignore_whitespace)
         self.set_ocr_settings(
-            enabled=ocr_enabled,
             font_color=ocr_font_color
             or DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
             opacity=ocr_opacity,
@@ -200,10 +197,6 @@ class DetectConfigDialog(QDialog):
 
         ocr_group = QGroupBox("OCR設定 (NDLOCR-Lite)")
         ocr_layout = QVBoxLayout()
-        self.ocr_enabled_checkbox = QCheckBox("OCRを使用する")
-        self.ocr_enabled_checkbox.setEnabled(self._ocr_available)
-        ocr_layout.addWidget(self.ocr_enabled_checkbox)
-
         self.ocr_status_label = QLabel()
         self.ocr_status_label.setWordWrap(True)
         if self._ocr_available:
@@ -288,8 +281,6 @@ class DetectConfigDialog(QDialog):
             self.ignore_newlines_checkbox.toggled.connect(self._on_ui_value_changed)
         if self.ignore_whitespace_checkbox:
             self.ignore_whitespace_checkbox.toggled.connect(self._on_ui_value_changed)
-        if self.ocr_enabled_checkbox:
-            self.ocr_enabled_checkbox.toggled.connect(self._on_ui_value_changed)
         if self.ocr_opacity_slider:
             self.ocr_opacity_slider.valueChanged.connect(self._on_ui_value_changed)
         if self.ocr_before_detect_checkbox:
@@ -455,7 +446,6 @@ class DetectConfigDialog(QDialog):
     def set_ocr_settings(
         self,
         *,
-        enabled: bool,
         font_color: List[int],
         opacity: float,
         ocr_before_detect: bool,
@@ -469,8 +459,6 @@ class DetectConfigDialog(QDialog):
             )
             self._update_ocr_color_button()
 
-            if self.ocr_enabled_checkbox:
-                self.ocr_enabled_checkbox.setChecked(bool(enabled))
             opacity_percent = int(round(max(0.0, min(1.0, float(opacity))) * 100))
             if self.ocr_opacity_slider:
                 self.ocr_opacity_slider.setValue(opacity_percent)
@@ -480,12 +468,9 @@ class DetectConfigDialog(QDialog):
             self._suspend_auto_save = previous
 
     def get_ocr_settings(self) -> Dict[str, Any]:
-        enabled = False
         ocr_before_detect = False
         opacity_percent = 0
 
-        if self.ocr_enabled_checkbox:
-            enabled = self.ocr_enabled_checkbox.isChecked() and self._ocr_available
         if self.ocr_before_detect_checkbox:
             ocr_before_detect = (
                 self.ocr_before_detect_checkbox.isChecked() and self._ocr_available
@@ -494,7 +479,6 @@ class DetectConfigDialog(QDialog):
             opacity_percent = int(self.ocr_opacity_slider.value())
 
         return {
-            "enabled": enabled,
             "font_color": list(self._ocr_color),
             "opacity": max(0.0, min(1.0, opacity_percent / 100.0)),
             "ocr_before_detect": ocr_before_detect,
@@ -560,7 +544,6 @@ class DetectConfigDialog(QDialog):
             ocr_settings = data.get("ocr_settings", {})
             if isinstance(ocr_settings, dict):
                 self.set_ocr_settings(
-                    enabled=ocr_settings.get("enabled", False),
                     font_color=ocr_settings.get("font_color", [0, 0, 0]),
                     opacity=ocr_settings.get("opacity", 0.0),
                     ocr_before_detect=ocr_settings.get("ocr_before_detect", False),

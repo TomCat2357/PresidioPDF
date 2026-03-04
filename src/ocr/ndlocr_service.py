@@ -7,6 +7,7 @@ import importlib.util
 import json
 import logging
 import tempfile
+from importlib import metadata as importlib_metadata
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,8 @@ class OCRResult:
 class NDLOCRService:
     """NDLOCR-Liteのラッパー。"""
 
+    _DISTRIBUTION_NAME = "ndlocr-lite"
+    _DISTRIBUTION_OCR_RELATIVE_PATH = Path("ocr.py")
     _MODULE_CANDIDATES: Tuple[Tuple[str, str, str], ...] = (
         ("ndlocr_lite.ocr", "process", "legacy"),
         ("ndlocr_lite", "process", "legacy"),
@@ -59,6 +62,10 @@ class NDLOCRService:
     @classmethod
     def is_available(cls) -> bool:
         """ndlocr-liteが利用可能か判定する。"""
+        dist_ocr_path = cls._get_distribution_ocr_path()
+        if dist_ocr_path and cls._looks_like_ndlocr_ocr_path(dist_ocr_path):
+            return True
+
         for module_name, attr_name, mode in cls._MODULE_CANDIDATES:
             try:
                 spec = importlib.util.find_spec(module_name)
@@ -190,17 +197,71 @@ class NDLOCRService:
                     self._process_callable = candidate
                 return self._process_callable
 
+        dist_ocr_path = self._get_distribution_ocr_path()
+        if dist_ocr_path and self._looks_like_ndlocr_ocr_path(dist_ocr_path):
+            module = self._load_module_from_path(
+                dist_ocr_path,
+                "_presidiopdf_ndlocr_distribution_ocr",
+            )
+            if module is not None:
+                candidate = getattr(module, "process", None)
+                if callable(candidate):
+                    self._process_callable = self._build_args_process_runner(
+                        module=module,
+                        process_callable=candidate,
+                    )
+                    return self._process_callable
+
         raise ImportError(
-            "NDLOCR-Liteのprocess()が見つかりません。`pip install ndlocr-lite` を確認してください。"
+            "NDLOCR-Liteのprocess()が見つかりません。"
+            "`pip install ndlocr-lite` の実行状態と、同名の `ocr.py` 競合を確認してください。"
         )
+
+    @classmethod
+    def _get_distribution_ocr_path(cls) -> Optional[Path]:
+        try:
+            distribution = importlib_metadata.distribution(cls._DISTRIBUTION_NAME)
+            ocr_path = Path(
+                distribution.locate_file(cls._DISTRIBUTION_OCR_RELATIVE_PATH)
+            ).resolve()
+        except Exception:
+            return None
+        if not ocr_path.exists() or not ocr_path.is_file():
+            return None
+        return ocr_path
+
+    @staticmethod
+    def _load_module_from_path(module_path: Path, module_name: str) -> Optional[Any]:
+        try:
+            spec = importlib.util.spec_from_file_location(
+                module_name,
+                str(module_path),
+            )
+            if spec is None or spec.loader is None:
+                return None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        except Exception:
+            return None
+
+    @staticmethod
+    def _looks_like_ndlocr_ocr_path(module_path: Path) -> bool:
+        if not module_path.exists():
+            return False
+        base_dir = module_path.resolve().parent
+        required_files = (
+            base_dir / "model" / "deim-s-1024x1024.onnx",
+            base_dir / "model" / "parseq-ndl-16x768-100-tiny-165epoch-tegaki2.onnx",
+            base_dir / "config" / "ndl.yaml",
+            base_dir / "config" / "NDLmoji.yaml",
+        )
+        return all(path.exists() for path in required_files)
 
     @staticmethod
     def _looks_like_ndlocr_ocr_module(module: Any) -> bool:
         module_path = Path(getattr(module, "__file__", "") or "")
-        if not module_path.exists():
-            return False
-        base_dir = module_path.resolve().parent
-        return (base_dir / "model" / "deim-s-1024x1024.onnx").exists()
+        return NDLOCRService._looks_like_ndlocr_ocr_path(module_path)
 
     @staticmethod
     def _build_args_process_runner(

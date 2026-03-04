@@ -294,7 +294,6 @@ def test_ocr_settings_default_values(tmp_path):
 
     settings = service.load_ocr_settings()
     assert settings == {
-        "enabled": False,
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
@@ -310,7 +309,6 @@ def test_ocr_settings_save_and_load(tmp_path):
 
     saved = service.save_ocr_settings(
         {
-            "enabled": True,
             "font_color": [32, 64, 96],
             "opacity": 0.35,
             "ocr_before_detect": True,
@@ -319,7 +317,6 @@ def test_ocr_settings_save_and_load(tmp_path):
     loaded = service.load_ocr_settings()
 
     assert saved == {
-        "enabled": True,
         "font_color": [32, 64, 96],
         "opacity": 0.35,
         "ocr_before_detect": True,
@@ -334,7 +331,6 @@ def test_ocr_settings_are_normalized(tmp_path):
         {
             "enabled_entities": ["PERSON"],
             "ocr_settings": {
-                "enabled": "yes",
                 "font_color": [999, -20, "10"],
                 "opacity": 5.5,
                 "ocr_before_detect": "on",
@@ -345,10 +341,36 @@ def test_ocr_settings_are_normalized(tmp_path):
     service.ensure_config_file()
     normalized = _read_config(service.config_path)
     assert normalized.get("ocr_settings") == {
-        "enabled": True,
         "font_color": [255, 0, 10],
         "opacity": 1.0,
         "ocr_before_detect": True,
+    }
+
+
+def test_ocr_settings_migrate_legacy_enabled_field(tmp_path):
+    service = DetectConfigService(tmp_path)
+    _write_config(
+        service.config_path,
+        {
+            "enabled_entities": ["PERSON"],
+            "ocr_settings": {
+                "enabled": True,
+                "font_color": [12, 34, 56],
+                "opacity": 0.2,
+                "ocr_before_detect": False,
+            },
+        },
+    )
+
+    service.ensure_config_file()
+    normalized = _read_config(service.config_path)
+    ocr_settings = normalized.get("ocr_settings", {})
+
+    assert "enabled" not in ocr_settings
+    assert ocr_settings == {
+        "font_color": [12, 34, 56],
+        "opacity": 0.2,
+        "ocr_before_detect": False,
     }
 
 
@@ -660,6 +682,48 @@ def test_build_read_result_for_detect_uses_current_panel_entities():
     assert any(
         "既存検出 2件を保持してDetectを実行します" in msg for msg in fake.messages
     )
+
+
+class _MainWindowExportSourceDouble:
+    def __init__(self, read_result=None, detect_result=None, duplicate_result=None):
+        self.app_state = SimpleNamespace(
+            read_result=read_result,
+            detect_result=detect_result,
+            duplicate_result=duplicate_result,
+        )
+
+    def _get_export_source_result(self):
+        return MainWindow._get_export_source_result(self)
+
+
+def test_get_image_export_source_result_prefers_duplicate_then_detect_then_read():
+    read_result = {"read": 1}
+    detect_result = {"detect": []}
+    duplicate_result = {"detect": [{"word": "A"}]}
+
+    fake = _MainWindowExportSourceDouble(
+        read_result=read_result,
+        detect_result=detect_result,
+        duplicate_result=duplicate_result,
+    )
+    assert MainWindow._get_image_export_source_result(fake) is duplicate_result
+
+    fake = _MainWindowExportSourceDouble(
+        read_result=read_result,
+        detect_result=detect_result,
+        duplicate_result=None,
+    )
+    assert MainWindow._get_image_export_source_result(fake) is detect_result
+
+    fake = _MainWindowExportSourceDouble(
+        read_result=read_result,
+        detect_result=None,
+        duplicate_result=None,
+    )
+    assert MainWindow._get_image_export_source_result(fake) is read_result
+
+    fake = _MainWindowExportSourceDouble()
+    assert MainWindow._get_image_export_source_result(fake) is None
 
 
 class _ResultPanelPreviewClickDouble:
