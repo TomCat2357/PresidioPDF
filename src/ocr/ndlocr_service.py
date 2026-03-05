@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import sys
 import tempfile
 from importlib import metadata as importlib_metadata
 from argparse import Namespace
@@ -55,6 +56,7 @@ class NDLOCRService:
         # ndlocr-lite>=1.0.0 はトップレベル `ocr.py` を提供する。
         ("ocr", "process", "args"),
     )
+    _AVAILABILITY_CACHE: Optional[bool] = None
 
     def __init__(self):
         self._process_callable: Optional[Callable[..., Any]] = None
@@ -62,38 +64,16 @@ class NDLOCRService:
     @classmethod
     def is_available(cls) -> bool:
         """ndlocr-liteが利用可能か判定する。"""
-        # 1. distribution path経由の確認（ファイル存在 + 実際のロード）
-        dist_ocr_path = cls._get_distribution_ocr_path()
-        if dist_ocr_path and cls._looks_like_ndlocr_ocr_path(dist_ocr_path):
-            module = cls._load_module_from_path(
-                dist_ocr_path,
-                "_presidiopdf_ndlocr_availability_check",
-            )
-            if module is not None and callable(getattr(module, "process", None)):
-                return True
+        if cls._AVAILABILITY_CACHE is not None:
+            return cls._AVAILABILITY_CACHE
 
-        for module_name, attr_name, mode in cls._MODULE_CANDIDATES:
-            try:
-                spec = importlib.util.find_spec(module_name)
-            except Exception:
-                spec = None
-            if spec is None:
-                continue
-            if mode == "args":
-                spec_origin = Path(spec.origin) if spec.origin else None
-                if spec_origin and spec_origin.exists():
-                    base_dir = spec_origin.resolve().parent
-                    if (base_dir / "model" / "deim-s-1024x1024.onnx").exists():
-                        return True
-                continue
-            try:
-                module = importlib.import_module(module_name)
-                candidate = getattr(module, attr_name, None)
-            except Exception:
-                continue
-            if callable(candidate):
-                return True
-        return False
+        service = cls()
+        try:
+            _ = service._get_process_callable()
+            cls._AVAILABILITY_CACHE = True
+        except Exception:
+            cls._AVAILABILITY_CACHE = False
+        return cls._AVAILABILITY_CACHE
 
     def run_ocr_on_page(
         self,
@@ -185,26 +165,35 @@ class NDLOCRService:
         if callable(self._process_callable):
             return self._process_callable
 
+        debug_errors: List[str] = []
+
         for module_name, attr_name, mode in self._MODULE_CANDIDATES:
             try:
                 module = importlib.import_module(module_name)
-            except Exception:
+            except Exception as exc:
+                debug_errors.append(
+                    f"{module_name}: {exc.__class__.__name__}: {exc}"
+                )
                 continue
             candidate = getattr(module, attr_name, None)
             if callable(candidate):
-                if mode == "args":
-                    if not self._looks_like_ndlocr_ocr_module(module):
-                        continue
-                    self._process_callable = self._build_args_process_runner(
-                        module=module,
-                        process_callable=candidate,
+                try:
+                    if mode == "args":
+                        self._process_callable = self._build_args_process_runner(
+                            module=module,
+                            process_callable=candidate,
+                        )
+                    else:
+                        self._process_callable = candidate
+                    return self._process_callable
+                except Exception as exc:
+                    debug_errors.append(
+                        f"{module_name}: {exc.__class__.__name__}: {exc}"
                     )
-                else:
-                    self._process_callable = candidate
-                return self._process_callable
+                    continue
 
         dist_ocr_path = self._get_distribution_ocr_path()
-        if dist_ocr_path and self._looks_like_ndlocr_ocr_path(dist_ocr_path):
+        if dist_ocr_path:
             module = self._load_module_from_path(
                 dist_ocr_path,
                 "_presidiopdf_ndlocr_distribution_ocr",
@@ -212,29 +201,69 @@ class NDLOCRService:
             if module is not None:
                 candidate = getattr(module, "process", None)
                 if callable(candidate):
-                    self._process_callable = self._build_args_process_runner(
-                        module=module,
-                        process_callable=candidate,
+                    try:
+                        self._process_callable = self._build_args_process_runner(
+                            module=module,
+                            process_callable=candidate,
+                        )
+                        return self._process_callable
+                    except Exception as exc:
+                        debug_errors.append(
+                            f"{dist_ocr_path}: {exc.__class__.__name__}: {exc}"
+                        )
+                else:
+                    debug_errors.append(
+                        f"{dist_ocr_path}: process属性が見つかりません"
                     )
-                    return self._process_callable
+            else:
+                debug_errors.append(
+                    f"{dist_ocr_path}: モジュールロードに失敗しました"
+                )
+
+        if debug_errors:
+            logger.debug(
+                "NDLOCR-Liteのロード失敗詳細: %s",
+                " | ".join(debug_errors),
+            )
+        detail_suffix = ""
+        if debug_errors:
+            detail_suffix = f" (詳細: {debug_errors[0]})"
 
         raise ImportError(
             "NDLOCR-Liteのprocess()が見つかりません。"
-            "`pip install ndlocr-lite` の実行状態と、同名の `ocr.py` 競合を確認してください。"
+            f"現在のPython実行ファイル: {sys.executable}. "
+            "`.venv` を有効化するか `uv run presidio-gui` で起動してください。"
+            f"{detail_suffix}"
         )
 
     @classmethod
     def _get_distribution_ocr_path(cls) -> Optional[Path]:
         try:
             distribution = importlib_metadata.distribution(cls._DISTRIBUTION_NAME)
-            ocr_path = Path(
-                distribution.locate_file(cls._DISTRIBUTION_OCR_RELATIVE_PATH)
-            ).resolve()
         except Exception:
             return None
-        if not ocr_path.exists() or not ocr_path.is_file():
-            return None
-        return ocr_path
+
+        candidates: List[Path] = [
+            Path(distribution.locate_file(cls._DISTRIBUTION_OCR_RELATIVE_PATH))
+        ]
+        files = getattr(distribution, "files", None) or []
+        for file_path in files:
+            try:
+                relative = Path(str(file_path))
+            except Exception:
+                continue
+            if relative.name != "ocr.py":
+                continue
+            candidates.append(Path(distribution.locate_file(relative)))
+
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                continue
+            if resolved.exists() and resolved.is_file():
+                return resolved
+        return None
 
     @staticmethod
     def _load_module_from_path(module_path: Path, module_name: str) -> Optional[Any]:
@@ -253,16 +282,19 @@ class NDLOCRService:
 
     @staticmethod
     def _looks_like_ndlocr_ocr_path(module_path: Path) -> bool:
-        if not module_path.exists():
+        if not module_path.exists() or not module_path.is_file():
             return False
         base_dir = module_path.resolve().parent
-        required_files = (
-            base_dir / "model" / "deim-s-1024x1024.onnx",
-            base_dir / "model" / "parseq-ndl-16x768-100-tiny-165epoch-tegaki2.onnx",
-            base_dir / "config" / "ndl.yaml",
-            base_dir / "config" / "NDLmoji.yaml",
-        )
-        return all(path.exists() for path in required_files)
+        model_dir = base_dir / "model"
+        config_dir = base_dir / "config"
+        if not model_dir.exists() or not config_dir.exists():
+            return False
+        det_weights = list(model_dir.glob("deim*.onnx"))
+        rec_weights = list(model_dir.glob("parseq*.onnx"))
+        if not rec_weights:
+            rec_weights = list(model_dir.glob("*.onnx"))
+        config_yamls = list(config_dir.glob("*.yaml"))
+        return bool(det_weights and rec_weights and config_yamls)
 
     @staticmethod
     def _looks_like_ndlocr_ocr_module(module: Any) -> bool:
@@ -277,6 +309,7 @@ class NDLOCRService:
     ) -> Callable[[str], Any]:
         module_path = Path(getattr(module, "__file__", "") or "")
         base_dir = module_path.resolve().parent
+        assets = NDLOCRService._resolve_args_assets(base_dir)
 
         def _runner(image_path: str) -> Any:
             source_image = Path(image_path)
@@ -286,22 +319,16 @@ class NDLOCRService:
                 sourceimg=str(source_image),
                 output=str(output_dir),
                 viz=False,
-                det_weights=str(base_dir / "model" / "deim-s-1024x1024.onnx"),
-                det_classes=str(base_dir / "config" / "ndl.yaml"),
+                det_weights=str(assets["det_weights"]),
+                det_classes=str(assets["det_classes"]),
                 det_score_threshold=0.2,
                 det_conf_threshold=0.25,
                 det_iou_threshold=0.2,
                 simple_mode=False,
-                rec_weights30=str(
-                    base_dir / "model" / "parseq-ndl-16x256-30-tiny-192epoch-tegaki3.onnx"
-                ),
-                rec_weights50=str(
-                    base_dir / "model" / "parseq-ndl-16x384-50-tiny-146epoch-tegaki2.onnx"
-                ),
-                rec_weights=str(
-                    base_dir / "model" / "parseq-ndl-16x768-100-tiny-165epoch-tegaki2.onnx"
-                ),
-                rec_classes=str(base_dir / "config" / "NDLmoji.yaml"),
+                rec_weights30=str(assets["rec_weights30"]),
+                rec_weights50=str(assets["rec_weights50"]),
+                rec_weights=str(assets["rec_weights"]),
+                rec_classes=str(assets["rec_classes"]),
                 device="cpu",
             )
             process_callable(args)
@@ -323,6 +350,93 @@ class NDLOCRService:
             return data
 
         return _runner
+
+    @staticmethod
+    def _resolve_args_assets(base_dir: Path) -> Dict[str, Path]:
+        model_dir = base_dir / "model"
+        config_dir = base_dir / "config"
+
+        def _first_existing(candidates: Sequence[Path]) -> Optional[Path]:
+            for path in candidates:
+                if path.exists() and path.is_file():
+                    return path
+            return None
+
+        def _first_glob(directory: Path, pattern: str) -> Optional[Path]:
+            matches = sorted(path for path in directory.glob(pattern) if path.is_file())
+            return matches[0] if matches else None
+
+        det_weights = _first_existing(
+            (
+                model_dir / "deim-s-1024x1024.onnx",
+                model_dir / "deim.onnx",
+            )
+        ) or _first_glob(model_dir, "deim*.onnx")
+        det_classes = _first_existing((config_dir / "ndl.yaml",)) or _first_glob(
+            config_dir, "ndl*.yaml"
+        )
+
+        parseq_models = sorted(path for path in model_dir.glob("parseq*.onnx"))
+        all_models = sorted(path for path in model_dir.glob("*.onnx"))
+
+        def _pick_model(
+            preferred_names: Sequence[str],
+            contains_any: Sequence[str],
+            fallback: Optional[Path] = None,
+        ) -> Optional[Path]:
+            preferred_paths = [model_dir / name for name in preferred_names]
+            picked = _first_existing(preferred_paths)
+            if picked is not None:
+                return picked
+
+            targets = parseq_models if parseq_models else all_models
+            for target in targets:
+                name = target.name.lower()
+                if any(marker in name for marker in contains_any):
+                    return target
+            return fallback
+
+        rec_weights = _pick_model(
+            ("parseq-ndl-16x768-100-tiny-165epoch-tegaki2.onnx",),
+            ("100", "768"),
+            fallback=(parseq_models[-1] if parseq_models else (all_models[-1] if all_models else None)),
+        )
+        rec_weights30 = _pick_model(
+            ("parseq-ndl-16x256-30-tiny-192epoch-tegaki3.onnx",),
+            ("30", "256"),
+            fallback=rec_weights,
+        )
+        rec_weights50 = _pick_model(
+            ("parseq-ndl-16x384-50-tiny-146epoch-tegaki2.onnx",),
+            ("50", "384"),
+            fallback=rec_weights,
+        )
+        rec_classes = _first_existing((config_dir / "NDLmoji.yaml",)) or _first_glob(
+            config_dir, "*moji*.yaml"
+        )
+        if rec_classes is None:
+            rec_classes = _first_glob(config_dir, "*.yaml")
+
+        missing: List[str] = []
+        required = {
+            "det_weights": det_weights,
+            "det_classes": det_classes,
+            "rec_weights": rec_weights,
+            "rec_weights30": rec_weights30,
+            "rec_weights50": rec_weights50,
+            "rec_classes": rec_classes,
+        }
+        for key, value in required.items():
+            if value is None:
+                missing.append(key)
+
+        if missing:
+            raise ImportError(
+                f"NDLOCR-Liteの必要ファイルが不足しています: {', '.join(missing)}"
+            )
+        return {
+            key: value for key, value in required.items() if value is not None
+        }
 
     @staticmethod
     def _resolve_target_pages(

@@ -12,6 +12,7 @@ Phase 5: エラーハンドリング強化
 """
 
 import json
+import shutil
 import sys
 import logging
 from pathlib import Path
@@ -446,7 +447,8 @@ class PipelineService:
             raise
 
         if temp_save_path.exists():
-            temp_save_path.replace(pdf_path)
+            shutil.copy2(str(temp_save_path), str(pdf_path))
+            temp_save_path.unlink()
 
         read_result = PipelineService.run_read(pdf_path, include_coordinate_map=True)
         ocr_item_count = sum(len(items) for items in ocr_results_by_page.values())
@@ -499,7 +501,8 @@ class PipelineService:
             raise
 
         if temp_save_path.exists():
-            temp_save_path.replace(pdf_path)
+            shutil.copy2(str(temp_save_path), str(pdf_path))
+            temp_save_path.unlink()
 
         read_result = PipelineService.run_read(pdf_path, include_coordinate_map=True)
 
@@ -1483,7 +1486,8 @@ class PipelineService:
                 if mapper.load_or_create_coordinate_map(str(pdf_path)):
                     temp_path = str(output_path) + ".temp"
                     if mapper.save_pdf_with_coordinate_map(str(output_path), temp_path):
-                        Path(temp_path).replace(output_path)
+                        shutil.copy2(temp_path, str(output_path))
+                        Path(temp_path).unlink(missing_ok=True)
             except Exception:
                 # 埋め込み失敗は無視
                 logger.warning(f"座標マップの埋め込みに失敗")
@@ -1906,7 +1910,8 @@ class PipelineService:
             doc.save(str(save_path), garbage=4, deflate=True, clean=True)
 
         if temp_save_path and temp_save_path.exists():
-            temp_save_path.replace(output_path)
+            shutil.copy2(str(temp_save_path), str(output_path))
+            temp_save_path.unlink()
 
         logger.info(f"run_export_annotations完了: {annotation_count} 件の注釈を追加")
         return {

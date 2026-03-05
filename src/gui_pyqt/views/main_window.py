@@ -2517,7 +2517,8 @@ class MainWindow(QMainWindow):
                 )
                 doc.save(str(temp_path), garbage=4, deflate=True, clean=True)
 
-            temp_path.replace(pdf_path)
+            shutil.copy2(str(temp_path), str(pdf_path))
+            temp_path.unlink()
             return True
         except Exception as e:
             self.log_message(f"マッピング埋め込みに失敗: {e}")
