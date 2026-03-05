@@ -2,14 +2,25 @@
 # -*- coding: utf-8 -*-
 import json
 import sys
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import click
 
+from src.cli.common import (
+    copy_pdf_to_output,
+    embed_coordinate_map,
+    load_json_file,
+    option_force,
+    option_json,
+    option_out,
+    option_pdf,
+    option_validate,
+    validate_input_file_exists,
+    validate_output_parent_exists,
+    verify_pdf_hash,
+)
 from src.core.config_manager import ConfigManager
 from src.core.entity_types import normalize_entity_key
-from src.cli.common import validate_input_file_exists, validate_output_parent_exists, embed_coordinate_map
 
 
 def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
@@ -35,33 +46,27 @@ def _validate_detect_json(obj: Dict[str, Any]) -> List[str]:
 
 
 @click.command(help="検出JSON（新仕様フラット形式）を使ってPDFにハイライト注釈を追加（入力はファイル必須）")
-@click.option("--force", is_flag=True, default=False, help="ハッシュ不一致でも続行")
-@click.option("-j", "--json", "json_file", type=str, required=True, help="入力detect JSONファイル（必須。標準入力は不可）")
-@click.option("--out", type=str, required=True, help="出力PDFパス（指定必須）")
-@click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
-@click.option("--validate", is_flag=True, default=False, help="検出JSONのスキーマ検証を実施")
+@option_force()
+@option_json("入力detect JSONファイル（必須。標準入力は不可）")
+@option_out("出力PDFパス（指定必須）")
+@option_pdf("入力PDFファイルのパス")
+@option_validate("検出JSONのスキーマ検証を実施")
 @click.option("--embed-coordinates/--no-embed-coordinates", default=False, help="座標マップをPDFに埋め込む")
 # 例: --mask PERSON=#FF0040@0.35 --mask ADDRESS=blue@0.2 （ADDRESSはLOCATIONのエイリアス）
 @click.option("--mask", "mask_specs", multiple=True, help="エンティティ別のハイライト色と透明度を指定（繰り返し可）。<ENTITY>=<color>[@alpha]")
-def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bool, embed_coordinates: bool, mask_specs: Optional[List[str]]):
-    # ファイル存在確認
+def main(force: bool, json_file: str, out: str, pdf: str, validate: bool, embed_coordinates: bool, mask_specs: Optional[List[str]]):
     validate_input_file_exists(pdf)
-    if json_file:
-        validate_input_file_exists(json_file)
+    validate_input_file_exists(json_file)
     validate_output_parent_exists(out)
-        
-    cfg = ConfigManager()
-    # 入力JSONはファイル必須
-    raw = Path(json_file).read_text(encoding="utf-8")
-    det = json.loads(raw)
-    
-    # PDF hash validation
-    from src.cli.common import sha256_file
 
-    pdf_sha = sha256_file(pdf)
-    ref_sha = ((det.get("metadata", {}) or {}).get("pdf", {}) or {}).get("sha256")
-    if ref_sha and ref_sha != pdf_sha and not force:
-        raise click.ClickException("PDFと検出JSONのsha256が一致しません (--force で無視)")
+    cfg = ConfigManager()
+    det = load_json_file(json_file, "入力JSON")
+    verify_pdf_hash(
+        pdf,
+        det.get("metadata", {}),
+        force,
+        "PDFと検出JSONのsha256が一致しません (--force で無視)",
+    )
 
     # 新仕様フラット形式のdetectからエンティティを構築
     entities: List[Dict[str, Any]] = []
@@ -344,10 +349,7 @@ def main(force: bool, json_file: Optional[str], out: str, pdf: str, validate: bo
     from src.pdf.pdf_masker import PDFMasker  # Lazy import
 
     masker = PDFMasker(cfg)
-    # --outは必須なので常にファイル出力
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    with open(pdf, "rb") as r, open(out, "wb") as w:
-        w.write(r.read())
+    copy_pdf_to_output(pdf, out)
     masker._apply_highlight_masking_with_mode(out, entities, cfg.get_operation_mode())
     
     # オプション指定時は座標マップを埋め込む

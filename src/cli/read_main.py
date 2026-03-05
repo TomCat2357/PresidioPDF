@@ -16,7 +16,15 @@ import click
 
 from src.core.config_manager import ConfigManager
 from src.core.entity_types import ENTITY_TYPES
-from src.cli.common import dump_json, sha256_file, validate_input_file_exists, validate_output_parent_exists
+from src.cli.common import (
+    dump_json,
+    option_out,
+    option_pdf,
+    option_pretty,
+    sha256_file,
+    validate_input_file_exists,
+    validate_output_parent_exists,
+)
 
 
 def _get_pdf_metadata(pdf_path: str) -> Dict[str, Any]:
@@ -334,9 +342,9 @@ def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, 
 
 
 @click.command(help="PDFを読み込み 統一スキーマのJSONをファイル出力（text.*, detect.*）")
-@click.option("--pdf", type=str, required=True, help="入力PDFファイルのパス")
-@click.option("--out", type=str, required=True, help="出力先（必ず指定。標準出力は不可）")
-@click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
+@option_pdf("入力PDFファイルのパス")
+@option_out("出力先（必ず指定。標準出力は不可）")
+@option_pretty()
 @click.option(
     "--with-map/--no-map",
     default=True,
@@ -350,7 +358,7 @@ def _generate_coordinate_maps(pdf_path: str) -> Tuple[Dict[str, Any], Dict[str, 
     show_default=True,
     help="ログレベル（進捗はDEBUGで表示）",
 )
-def main(pdf: str, out: Optional[str], pretty: bool, with_map: bool, with_highlights: bool, log_level: str = "WARNING"):
+def main(pdf: str, out: str, pretty: bool, with_map: bool, with_highlights: bool, log_level: str = "WARNING"):
     try:
         # ログ設定（stderrへ出力）
         logging.basicConfig(
@@ -359,8 +367,7 @@ def main(pdf: str, out: Optional[str], pretty: bool, with_map: bool, with_highli
         )
         # 入力確認
         validate_input_file_exists(pdf)
-        if out:
-            validate_output_parent_exists(out)
+        validate_output_parent_exists(out)
 
         cfg = ConfigManager()
 

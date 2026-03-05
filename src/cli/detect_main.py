@@ -12,7 +12,17 @@ import click
 from src.core.config_manager import ConfigManager
 from src.core.entity_types import ENTITY_ALIASES, ENTITY_TYPES, normalize_entity_key
 from src.core.regex_match_utils import resolve_mark_span
-from src.cli.common import dump_json, sha256_bytes, sha256_file, validate_input_file_exists, validate_output_parent_exists, validate_mutual_exclusion
+from src.cli.common import (
+    dump_json,
+    load_json_file,
+    option_json,
+    option_out,
+    option_pretty,
+    option_validate,
+    sha256_bytes,
+    validate_input_file_exists,
+    validate_output_parent_exists,
+)
 
 
 # entity_types.py の定義を使用
@@ -112,26 +122,18 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.command(help="read出力(JSON)からPIIを検出し統一スキーマでファイル出力")
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
-@click.option("-j", "--json", "json_file", type=str, required=True, help="入力read JSONファイル（必須。標準入力は不可）")
+@option_json("入力read JSONファイル（必須。標準入力は不可）")
 @click.option("--model", multiple=True, default=["ja_core_news_trf"], show_default=True, help="spaCyモデルID（複数可。高精度: ja_core_news_trf, ja_ginza, ja_ginza_electra）")
-@click.option("--out", type=str, required=True, help="出力先（必須。標準出力は不可）")
-@click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
-@click.option("--validate", is_flag=True, default=False, help="入力JSONのスキーマ検証を実施")
+@option_out("出力先（必須。標準出力は不可）")
+@option_pretty()
+@option_validate("入力JSONのスキーマ検証を実施")
 @click.option("--with-predetect/--no-predetect", default=True, help="入力のdetect情報を含める（旧--highlights-merge append相当）")
 @click.option("--entity", "entities_csv", type=str, help="検出するエンティティ（CSV例: 'PERSON,ADDRESS'。未指定=全エンティティ）")
-def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: Optional[str], model: Tuple[str, ...], out: Optional[str], pretty: bool, validate: bool, with_predetect: bool, entities_csv: Optional[str]):
-    # ファイル存在確認
-    if json_file:
-        validate_input_file_exists(json_file)
-    if out:
-        validate_output_parent_exists(out)
-    
-    # 入力JSONはファイル必須
-    data_txt = Path(json_file).read_text(encoding="utf-8")
-    try:
-        data = json.loads(data_txt)
-    except Exception as e:
-        raise click.ClickException(f"入力JSONの読み込みに失敗: {e}")
+def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: str, model: Tuple[str, ...], out: str, pretty: bool, validate: bool, with_predetect: bool, entities_csv: Optional[str]):
+    validate_input_file_exists(json_file)
+    validate_output_parent_exists(out)
+
+    data = load_json_file(json_file, "入力JSON")
 
     # 簡易検証（新スキーマ）
     meta = data.get("metadata", {}) or {}

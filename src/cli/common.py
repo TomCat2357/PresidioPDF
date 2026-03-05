@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import json
 import hashlib
+import json
 import logging
-import sys
+import shutil
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
 import click
 
 logger = logging.getLogger(__name__)
+ClickDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 
 
 def dump_json(obj: Any, out_path: Optional[str], pretty: bool):
@@ -67,6 +69,74 @@ def validate_mutual_exclusion(flag1: bool, flag2: bool, name1: str, name2: str) 
         raise click.ClickException(f"{name1}と{name2}は同時指定できません")
 
 
+def option_pdf(help_text: str) -> ClickDecorator:
+    return click.option("--pdf", type=str, required=True, help=help_text)
+
+
+def option_json(help_text: str) -> ClickDecorator:
+    return click.option(
+        "-j",
+        "--json",
+        "json_file",
+        type=str,
+        required=True,
+        help=help_text,
+    )
+
+
+def option_out(help_text: str) -> ClickDecorator:
+    return click.option("--out", type=str, required=True, help=help_text)
+
+
+def option_pretty(help_text: str = "JSON整形出力") -> ClickDecorator:
+    return click.option("--pretty", is_flag=True, default=False, help=help_text)
+
+
+def option_validate(help_text: str) -> ClickDecorator:
+    return click.option("--validate", is_flag=True, default=False, help=help_text)
+
+
+def option_force(help_text: str = "ハッシュ不一致でも続行") -> ClickDecorator:
+    return click.option("--force", is_flag=True, default=False, help=help_text)
+
+
+def load_json_file(path: str, label: str) -> Any:
+    validate_input_file_exists(path)
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as e:
+        raise click.ClickException(f"{label}の読み込みに失敗: {e}") from e
+
+
+def verify_pdf_hash(
+    pdf_path: str,
+    metadata: Optional[dict[str, Any]],
+    force: bool,
+    mismatch_message: str,
+) -> None:
+    ref_sha = ((metadata or {}).get("pdf", {}) or {}).get("sha256")
+    if ref_sha and ref_sha != sha256_file(pdf_path) and not force:
+        raise click.ClickException(mismatch_message)
+
+
+def copy_pdf_to_output(src: str, dst: str) -> None:
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+
+
+def require_coordinate_maps(
+    data: dict[str, Any],
+    json_path: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    offset2coords_map = data.get("offset2coordsMap", {})
+    coords2offset_map = data.get("coords2offsetMap", {})
+    if not offset2coords_map and not coords2offset_map:
+        raise click.ClickException(
+            f"JSONファイルに座標マップが含まれていません: {json_path}"
+        )
+    return offset2coords_map, coords2offset_map
+
+
 def embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
     """座標マップを出力PDFに埋め込む
 
@@ -93,4 +163,3 @@ def embed_coordinate_map(original_pdf_path: str, output_pdf_path: str) -> bool:
     except Exception as e:
         logger.error(f"座標マップ埋め込みエラー: {e}")
         return False
-

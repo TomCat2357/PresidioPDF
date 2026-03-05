@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
-from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
 import click
 
-from src.cli.common import dump_json, validate_input_file_exists, validate_output_parent_exists
+from src.cli.common import (
+    dump_json,
+    load_json_file,
+    option_json,
+    option_out,
+    option_pretty,
+    option_validate,
+    validate_input_file_exists,
+    validate_output_parent_exists,
+)
 from src.core.entity_types import ENTITY_TYPES, normalize_entity_key
 
 
@@ -303,22 +311,22 @@ def _select_best_item(
 
 @click.command(help="検出結果の重複を処理して正規化し統一スキーマでファイル出力")
 @click.option("--entity-order", type=str, default="PERSON,LOCATION,DATE_TIME,PHONE_NUMBER,INDIVIDUAL_NUMBER,YEAR,PROPER_NOUN,OTHER", show_default=True, help="エンティティ優先順（カンマ区切り）")
-@click.option("-j", "--json", "json_file", type=str, required=True, help="入力detect JSONファイル（必須。標準入力は不可）")
+@option_json("入力detect JSONファイル（必須。標準入力は不可）")
 @click.option("--length-pref", type=click.Choice(["long", "short"]), default="long", show_default=True, help="長短の優先: long/short")
 @click.option("--origin-priority", type=str, default="manual,custom,auto", show_default=True, help="検出由来の優先順（カンマ区切り）")
-@click.option("--out", type=str, required=True, help="出力先（必須。標準出力は不可）")
+@option_out("出力先（必須。標準出力は不可）")
 @click.option("--overlap", type=click.Choice(["exact", "contain", "overlap"]), default="overlap", show_default=True, help="重複の定義: exact/contain/overlap")
 @click.option("--entity-overlap-mode", type=click.Choice(["same", "any"]), default="same", show_default=True, help="エンティティ種類を考慮した重複処理: same(同じエンティティのみ), any(異なるエンティティでも重複処理)")
 @click.option("--position-pref", type=click.Choice(["first", "last"]), default="first", show_default=True, help="位置の優先: first/last（入力順ベース）")
-@click.option("--pretty", is_flag=True, default=False, help="JSON整形出力")
+@option_pretty()
 @click.option("--tie-break", "tie_break", type=str, default="origin,contain,length,position,entity", show_default=True, help="タイブレーク順（カンマ区切り）: origin,contain,length,position,entity の並びで指定")
-@click.option("--validate", is_flag=True, default=False, help="入力JSONの検証を実施")
+@option_validate("入力JSONの検証を実施")
 def main(
     entity_order: Optional[str],
-    json_file: Optional[str],
+    json_file: str,
     length_pref: Optional[str],
     origin_priority: Optional[str],
-    out: Optional[str],
+    out: str,
     overlap: str,
     entity_overlap_mode: str,
     position_pref: Optional[str],
@@ -326,15 +334,10 @@ def main(
     tie_break: Optional[str],
     validate: bool,
 ):
-    # ファイル存在確認
-    if json_file:
-        validate_input_file_exists(json_file)
-    if out:
-        validate_output_parent_exists(out)
-        
-    # 入力JSONはファイル必須
-    raw = Path(json_file).read_text(encoding="utf-8")
-    data = json.loads(raw)
+    validate_input_file_exists(json_file)
+    validate_output_parent_exists(out)
+
+    data = load_json_file(json_file, "入力JSON")
 
     # CLI引数をそのまま使用
     tb = [s.strip() for s in (tie_break or "").split(",") if s.strip()]
