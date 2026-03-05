@@ -369,6 +369,10 @@ class PipelineService:
             normalized.get("ocr_before_detect"),
             DetectConfigService.DEFAULT_OCR_SETTINGS["ocr_before_detect"],
         )
+        normalized["auto_color"] = DetectConfigService._coerce_bool(
+            normalized.get("auto_color"),
+            DetectConfigService.DEFAULT_OCR_SETTINGS["auto_color"],
+        )
         return normalized
 
     @staticmethod
@@ -428,6 +432,7 @@ class PipelineService:
                         page_num=page_num,
                         scale_x=scale,
                         scale_y=scale,
+                        auto_color=settings.get("auto_color", False),
                     )
                     ocr_results_by_page[page_num] = [
                         result.to_dict() for result in page_results
@@ -438,6 +443,7 @@ class PipelineService:
                     ocr_results_by_page,
                     font_color=settings.get("font_color", [0, 0, 0]),
                     opacity=settings.get("opacity", 0.0),
+                    auto_color=settings.get("auto_color", False),
                 )
                 if embedded_count > 0:
                     doc.save(str(temp_save_path), garbage=4, deflate=True, clean=True)

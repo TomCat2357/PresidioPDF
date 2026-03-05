@@ -56,6 +56,7 @@ class DetectConfigDialog(QDialog):
         ocr_font_color: Optional[List[int]] = None,
         ocr_opacity: float = 0.0,
         ocr_before_detect: bool = False,
+        ocr_auto_color: bool = False,
         ocr_available: bool = False,
         parent=None,
     ):
@@ -81,6 +82,7 @@ class DetectConfigDialog(QDialog):
         self.ocr_opacity_slider: Optional[QSlider] = None
         self.ocr_opacity_spin: Optional[QSpinBox] = None
         self.ocr_before_detect_checkbox: Optional[QCheckBox] = None
+        self.ocr_auto_color_checkbox: Optional[QCheckBox] = None
         self._ocr_color: List[int] = [0, 0, 0]
         self._ocr_available = bool(ocr_available)
         self._installed_models: List[str] = list(installed_models or [])
@@ -101,6 +103,7 @@ class DetectConfigDialog(QDialog):
             or DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
             opacity=ocr_opacity,
             ocr_before_detect=ocr_before_detect,
+            auto_color=ocr_auto_color,
         )
         self._start_watching()
 
@@ -232,6 +235,10 @@ class DetectConfigDialog(QDialog):
         self.ocr_before_detect_checkbox.setEnabled(self._ocr_available)
         ocr_layout.addWidget(self.ocr_before_detect_checkbox)
 
+        self.ocr_auto_color_checkbox = QCheckBox("テキスト色を画像から自動検出")
+        self.ocr_auto_color_checkbox.setEnabled(self._ocr_available)
+        ocr_layout.addWidget(self.ocr_auto_color_checkbox)
+
         if not self._ocr_available:
             if self.ocr_color_button:
                 self.ocr_color_button.setEnabled(False)
@@ -285,6 +292,8 @@ class DetectConfigDialog(QDialog):
             self.ocr_opacity_slider.valueChanged.connect(self._on_ui_value_changed)
         if self.ocr_before_detect_checkbox:
             self.ocr_before_detect_checkbox.toggled.connect(self._on_ui_value_changed)
+        if self.ocr_auto_color_checkbox:
+            self.ocr_auto_color_checkbox.toggled.connect(self._on_ui_value_changed)
 
     def _on_ui_value_changed(self, *_):
         if self._suspend_auto_save:
@@ -449,6 +458,7 @@ class DetectConfigDialog(QDialog):
         font_color: List[int],
         opacity: float,
         ocr_before_detect: bool,
+        auto_color: bool = False,
     ):
         previous = self._suspend_auto_save
         self._suspend_auto_save = True
@@ -464,6 +474,8 @@ class DetectConfigDialog(QDialog):
                 self.ocr_opacity_slider.setValue(opacity_percent)
             if self.ocr_before_detect_checkbox:
                 self.ocr_before_detect_checkbox.setChecked(bool(ocr_before_detect))
+            if self.ocr_auto_color_checkbox:
+                self.ocr_auto_color_checkbox.setChecked(bool(auto_color))
         finally:
             self._suspend_auto_save = previous
 
@@ -478,10 +490,15 @@ class DetectConfigDialog(QDialog):
         if self.ocr_opacity_slider:
             opacity_percent = int(self.ocr_opacity_slider.value())
 
+        auto_color = False
+        if self.ocr_auto_color_checkbox:
+            auto_color = self.ocr_auto_color_checkbox.isChecked() and self._ocr_available
+
         return {
             "font_color": list(self._ocr_color),
             "opacity": max(0.0, min(1.0, opacity_percent / 100.0)),
             "ocr_before_detect": ocr_before_detect,
+            "auto_color": auto_color,
         }
 
     def _on_select_all_clicked(self):
@@ -547,6 +564,7 @@ class DetectConfigDialog(QDialog):
                     font_color=ocr_settings.get("font_color", [0, 0, 0]),
                     opacity=ocr_settings.get("opacity", 0.0),
                     ocr_before_detect=ocr_settings.get("ocr_before_detect", False),
+                    auto_color=ocr_settings.get("auto_color", False),
                 )
         except Exception as exc:
             logger.warning(f"設定ファイルの変更反映に失敗: {exc}")

@@ -65,6 +65,7 @@ class DetectConfigService:
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
+        "auto_color": False,
     }
     CHUNK_MAX_CHARS_MIN = 100
     CHUNK_MAX_CHARS_MAX = 100000
@@ -640,6 +641,10 @@ class DetectConfigService:
                     self.DEFAULT_OCR_SETTINGS["ocr_before_detect"],
                 ),
                 self.DEFAULT_OCR_SETTINGS["ocr_before_detect"],
+            ),
+            "auto_color": self._coerce_bool(
+                settings.get("auto_color", self.DEFAULT_OCR_SETTINGS["auto_color"]),
+                self.DEFAULT_OCR_SETTINGS["auto_color"],
             ),
         }
 

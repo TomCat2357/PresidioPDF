@@ -30,9 +30,11 @@ class OCRResult:
     height: float
     page_num: int
     confidence: float
+    text_color: Optional[List[int]] = None   # [R, G, B] 0-255, Noneなら未検出
+    text_opacity: Optional[float] = None     # 0.0-1.0, Noneなら設定値使用
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "text": self.text,
             "x": self.x,
             "y": self.y,
@@ -41,6 +43,11 @@ class OCRResult:
             "page_num": self.page_num,
             "confidence": self.confidence,
         }
+        if self.text_color is not None:
+            d["text_color"] = list(self.text_color)
+        if self.text_opacity is not None:
+            d["text_opacity"] = self.text_opacity
+        return d
 
 
 class NDLOCRService:
@@ -83,6 +90,7 @@ class NDLOCRService:
         page_num: int = 0,
         scale_x: float = 1.0,
         scale_y: float = 1.0,
+        auto_color: bool = False,
     ) -> List[OCRResult]:
         """1ページ分のOCRを実行して座標付き結果を返す。"""
         if not isinstance(page_pixmap, fitz.Pixmap):
@@ -103,6 +111,9 @@ class NDLOCRService:
             image.save(image_path, format="PNG")
             raw_result = process_callable(str(image_path))
 
+        if auto_color:
+            from src.ocr.text_color_detector import detect_text_color
+
         results: List[OCRResult] = []
         for item in self._iter_result_items(raw_result):
             parsed = self._parse_raw_result_item(item)
@@ -111,6 +122,15 @@ class NDLOCRService:
             text, (x, y, w, h), confidence = parsed
             if not text or w <= 0.0 or h <= 0.0:
                 continue
+            detected_color: Optional[List[int]] = None
+            detected_opacity: Optional[float] = None
+            if auto_color:
+                try:
+                    rgb = detect_text_color(image, (x, y, w, h))
+                    detected_color = list(rgb)
+                    detected_opacity = 1.0
+                except Exception:
+                    pass
             results.append(
                 OCRResult(
                     text=text,
@@ -120,6 +140,8 @@ class NDLOCRService:
                     height=float(h) * float(scale_y),
                     page_num=int(page_num),
                     confidence=float(confidence),
+                    text_color=detected_color,
+                    text_opacity=detected_opacity,
                 )
             )
 

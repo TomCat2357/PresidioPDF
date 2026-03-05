@@ -26,13 +26,14 @@ class PDFTextEmbedder:
         ocr_results: Any,
         font_color: Sequence[float],
         opacity: float,
+        auto_color: bool = False,
     ) -> int:
         """OCR結果をFreeText注釈として埋め込む。"""
         if not isinstance(doc, fitz.Document):
             raise TypeError("docはfitz.Documentである必要があります")
 
-        text_color = cls._normalize_rgb_color(font_color)
-        alpha = cls._clamp_opacity(opacity)
+        global_text_color = cls._normalize_rgb_color(font_color)
+        global_alpha = cls._clamp_opacity(opacity)
         inserted = 0
         for result in cls._iter_ocr_results(ocr_results):
             page_num = int(result.page_num)
@@ -52,6 +53,15 @@ class PDFTextEmbedder:
             text = str(result.text or "").strip()
             if not text:
                 continue
+
+            if auto_color and result.text_color is not None:
+                text_color = cls._normalize_rgb_color(result.text_color)
+                alpha = cls._clamp_opacity(
+                    result.text_opacity if result.text_opacity is not None else 1.0
+                )
+            else:
+                text_color = global_text_color
+                alpha = global_alpha
 
             fontsize = max(4.0, min(72.0, rect.height * 0.9))
             try:
@@ -181,6 +191,20 @@ class PDFTextEmbedder:
             confidence = float(item.get("confidence", 0.0))
         except (TypeError, ValueError):
             return None
+        raw_color = item.get("text_color")
+        text_color: Optional[List[float]] = None
+        if isinstance(raw_color, (list, tuple)) and len(raw_color) >= 3:
+            try:
+                text_color = [float(raw_color[0]), float(raw_color[1]), float(raw_color[2])]
+            except (TypeError, ValueError):
+                text_color = None
+        raw_opacity = item.get("text_opacity")
+        text_opacity: Optional[float] = None
+        if raw_opacity is not None:
+            try:
+                text_opacity = float(raw_opacity)
+            except (TypeError, ValueError):
+                text_opacity = None
         return OCRResult(
             text=str(item.get("text", "") or ""),
             x=x,
@@ -189,6 +213,8 @@ class PDFTextEmbedder:
             height=height,
             page_num=result_page,
             confidence=confidence,
+            text_color=text_color,
+            text_opacity=text_opacity,
         )
 
     @staticmethod

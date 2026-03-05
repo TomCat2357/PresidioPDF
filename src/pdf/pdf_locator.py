@@ -162,6 +162,7 @@ class PDFTextLocator:
                                 "font": span.get("font"),
                                 "size": span.get("size"),
                                 "flags": span.get("flags"),
+                                "color": span.get("color"),
                             }
 
                             page_char_data.append(char_data_entry)
