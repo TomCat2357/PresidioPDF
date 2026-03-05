@@ -202,13 +202,11 @@ class DetectConfigDialog(QDialog):
         ocr_layout = QVBoxLayout()
         self.ocr_status_label = QLabel()
         self.ocr_status_label.setWordWrap(True)
-        if self._ocr_available:
-            self.ocr_status_label.setText("NDLOCR-Liteが利用可能です。")
-        else:
+        if not self._ocr_available:
             self.ocr_status_label.setText(
                 "NDLOCR-Liteが未インストールのためOCRは無効です。"
             )
-        ocr_layout.addWidget(self.ocr_status_label)
+            ocr_layout.addWidget(self.ocr_status_label)
 
         color_row = QHBoxLayout()
         color_row.addWidget(QLabel("埋め込みテキスト色:"))
@@ -231,13 +229,15 @@ class DetectConfigDialog(QDialog):
         opacity_row.addWidget(self.ocr_opacity_spin)
         ocr_layout.addLayout(opacity_row)
 
+        ocr_checkbox_row = QHBoxLayout()
         self.ocr_before_detect_checkbox = QCheckBox("個人情報検出時にOCRを先行実行する")
         self.ocr_before_detect_checkbox.setEnabled(self._ocr_available)
-        ocr_layout.addWidget(self.ocr_before_detect_checkbox)
-
+        ocr_checkbox_row.addWidget(self.ocr_before_detect_checkbox)
         self.ocr_auto_color_checkbox = QCheckBox("テキスト色を画像から自動検出")
         self.ocr_auto_color_checkbox.setEnabled(self._ocr_available)
-        ocr_layout.addWidget(self.ocr_auto_color_checkbox)
+        ocr_checkbox_row.addWidget(self.ocr_auto_color_checkbox)
+        ocr_checkbox_row.addStretch()
+        ocr_layout.addLayout(ocr_checkbox_row)
 
         if not self._ocr_available:
             if self.ocr_color_button:
@@ -469,7 +469,7 @@ class DetectConfigDialog(QDialog):
             )
             self._update_ocr_color_button()
 
-            opacity_percent = int(round(max(0.0, min(1.0, float(opacity))) * 100))
+            opacity_percent = int(round((1.0 - max(0.0, min(1.0, float(opacity)))) * 100))
             if self.ocr_opacity_slider:
                 self.ocr_opacity_slider.setValue(opacity_percent)
             if self.ocr_before_detect_checkbox:
@@ -496,7 +496,7 @@ class DetectConfigDialog(QDialog):
 
         return {
             "font_color": list(self._ocr_color),
-            "opacity": max(0.0, min(1.0, opacity_percent / 100.0)),
+            "opacity": max(0.0, min(1.0, 1.0 - opacity_percent / 100.0)),
             "ocr_before_detect": ocr_before_detect,
             "auto_color": auto_color,
         }
