@@ -62,9 +62,15 @@ class NDLOCRService:
     @classmethod
     def is_available(cls) -> bool:
         """ndlocr-liteが利用可能か判定する。"""
+        # 1. distribution path経由の確認（ファイル存在 + 実際のロード）
         dist_ocr_path = cls._get_distribution_ocr_path()
         if dist_ocr_path and cls._looks_like_ndlocr_ocr_path(dist_ocr_path):
-            return True
+            module = cls._load_module_from_path(
+                dist_ocr_path,
+                "_presidiopdf_ndlocr_availability_check",
+            )
+            if module is not None and callable(getattr(module, "process", None)):
+                return True
 
         for module_name, attr_name, mode in cls._MODULE_CANDIDATES:
             try:

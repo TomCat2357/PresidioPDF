@@ -105,6 +105,12 @@ class GenericWorker(QObject):
             logger.error(f"タスクエラー ({self.task_name}): {error_msg}\n{self.error_traceback}")
             self.error.emit(error_msg)
 
+        except ImportError as e:
+            self.error_traceback = traceback.format_exc()
+            error_msg = f"ライブラリが見つかりません ({type(e).__name__}): {str(e)}"
+            logger.error(f"タスクエラー ({self.task_name}): {error_msg}\n{self.error_traceback}")
+            self.error.emit(error_msg)
+
         except Exception as e:
             # その他のエラー
             self.error_traceback = traceback.format_exc()
