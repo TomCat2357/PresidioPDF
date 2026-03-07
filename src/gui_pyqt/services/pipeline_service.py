@@ -89,6 +89,7 @@ class PipelineService:
         text_2d: Any,
         ignore_newlines: bool,
         ignore_whitespace: bool,
+        target_pages: Optional[set[int]] = None,
     ) -> Tuple[Optional[str], List[Tuple[int, int]], int]:
         """Detectで使う対象テキストと、元オフセットへの逆引き情報を構築する。
 
@@ -105,31 +106,49 @@ class PipelineService:
         target_chars: List[str] = []
         target_spans: List[Tuple[int, int]] = []
         base_offset = 0
-        total_pages = len(text_2d)
+        selected_page_indices = {
+            page_idx
+            for page_idx, page_blocks in enumerate(text_2d)
+            if isinstance(page_blocks, list)
+            and (target_pages is None or page_idx in target_pages)
+        }
+        last_selected_page_idx = (
+            max(selected_page_indices) if selected_page_indices else None
+        )
 
         for page_idx, page_blocks in enumerate(text_2d):
             if not isinstance(page_blocks, list):
                 continue
 
+            include_page = page_idx in selected_page_indices
             block_count = len(page_blocks)
             for block_idx, block in enumerate(page_blocks):
                 block_text = str(block)
                 for ch in block_text:
                     start_offset = base_offset
                     end_offset = base_offset + 1
-                    if not (ignore_whitespace and ch.isspace()):
+                    if include_page and not (ignore_whitespace and ch.isspace()):
                         target_chars.append(ch)
                         target_spans.append((start_offset, end_offset))
                     base_offset = end_offset
 
-                if not ignore_newlines and block_idx < block_count - 1:
+                if (
+                    include_page
+                    and not ignore_newlines
+                    and block_idx < block_count - 1
+                ):
                     newline_char = "\n"
                     if not (ignore_whitespace and newline_char.isspace()):
                         target_chars.append(newline_char)
                         # 挿入文字は元文字列上の境界位置を指す
                         target_spans.append((base_offset, base_offset))
 
-            if not ignore_newlines and page_idx < total_pages - 1:
+            if (
+                include_page
+                and not ignore_newlines
+                and last_selected_page_idx is not None
+                and page_idx < last_selected_page_idx
+            ):
                 newline_char = "\n"
                 if not (ignore_whitespace and newline_char.isspace()):
                     target_chars.append(newline_char)
@@ -659,6 +678,7 @@ class PipelineService:
                 text_2d=text_2d,
                 ignore_newlines=bool(ignore_newlines),
                 ignore_whitespace=bool(ignore_whitespace),
+                target_pages=target_pages,
             )
         )
 

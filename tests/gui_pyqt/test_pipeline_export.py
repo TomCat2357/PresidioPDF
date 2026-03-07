@@ -84,6 +84,53 @@ def test_run_detect_skips_whitespace_only_model_result(monkeypatch, tmp_path):
     assert detect_result["detect"] == []
 
 
+def test_run_detect_current_page_builds_text_only_for_target_page(
+    monkeypatch, tmp_path
+):
+    pdf_path = tmp_path / "current_page_detect.pdf"
+    with fitz.open() as doc:
+        first_page = doc.new_page(width=595, height=842)
+        first_page.insert_text((72, 120), "FIRST_PAGE_SECRET", fontsize=14)
+        second_page = doc.new_page(width=595, height=842)
+        second_page.insert_text((72, 120), "SECOND_PAGE_TARGET", fontsize=14)
+        doc.save(str(pdf_path))
+
+    read_result = PipelineService.run_read(pdf_path, include_coordinate_map=False)
+    observed = {"text": None}
+
+    class _FakeAnalyzer:
+        def __init__(self, _cfg):
+            pass
+
+        def analyze_text(self, text, _entities):
+            observed["text"] = text
+            start = text.index("SECOND_PAGE_TARGET")
+            end = start + len("SECOND_PAGE_TARGET")
+            return [
+                {
+                    "start": start,
+                    "end": end,
+                    "entity_type": "PERSON",
+                    "text": "SECOND_PAGE_TARGET",
+                }
+            ]
+
+    monkeypatch.setattr("src.analysis.analyzer.Analyzer", _FakeAnalyzer)
+
+    detect_result = PipelineService.run_detect(
+        read_result,
+        entities=["PERSON"],
+        page_filter=[1],
+        ignore_newlines=True,
+        ignore_whitespace=False,
+    )
+
+    assert observed["text"] == "SECOND_PAGE_TARGET"
+    assert len(detect_result["detect"]) == 1
+    assert detect_result["detect"][0]["start"]["page_num"] == 1
+    assert detect_result["detect"][0]["word"] == "SECOND_PAGE_TARGET"
+
+
 def test_run_export_annotations_creates_pdf_annotations(tmp_path):
     pdf_path = tmp_path / "input.pdf"
     output_path = tmp_path / "annotated.pdf"
