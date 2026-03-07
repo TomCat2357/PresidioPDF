@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
 
         # 設定（検出/重複設定）
         config_action = QAction("設定", self)
+        config_action.setShortcut(QKeySequence("Ctrl+,"))
         config_action.setStatusTip(
             f"検出対象と重複削除設定（{DetectConfigService.DISPLAY_FILE_NAME}）"
         )
