@@ -25,6 +25,7 @@ from src.cli.common import (
     validate_input_file_exists,
     validate_output_parent_exists,
 )
+from src.pdf.text_visibility import build_invisible_char_keys, is_invisible_char
 
 
 def _get_pdf_metadata(pdf_path: str) -> Dict[str, Any]:
@@ -58,6 +59,7 @@ def _structured_from_pdf(pdf_path: str) -> Dict[str, Any]:
         with fitz.open(pdf_path) as doc:
             for i, page in enumerate(doc):
                 raw = page.get_text("rawdict")
+                invisible_char_keys = build_invisible_char_keys(page)
                 out_blocks: List[Dict[str, Any]] = []
                 for block in raw.get("blocks", []) or []:
                     if "lines" not in block:
@@ -66,7 +68,26 @@ def _structured_from_pdf(pdf_path: str) -> Dict[str, Any]:
                     for line in block.get("lines", []) or []:
                         spans_out: List[Dict[str, Any]] = []
                         for span in line.get("spans", []) or []:
-                            spans_out.append({"text": span.get("text", ""), "bbox": span.get("bbox", None)})
+                            chars = [
+                                char
+                                for char in (span.get("chars", []) or [])
+                                if not is_invisible_char(char, invisible_char_keys)
+                            ]
+                            if not chars:
+                                continue
+                            xs0 = [float(char["bbox"][0]) for char in chars if char.get("bbox")]
+                            ys0 = [float(char["bbox"][1]) for char in chars if char.get("bbox")]
+                            xs1 = [float(char["bbox"][2]) for char in chars if char.get("bbox")]
+                            ys1 = [float(char["bbox"][3]) for char in chars if char.get("bbox")]
+                            bbox = None
+                            if xs0 and ys0 and xs1 and ys1:
+                                bbox = [min(xs0), min(ys0), max(xs1), max(ys1)]
+                            spans_out.append(
+                                {
+                                    "text": "".join(str(char.get("c", "")) for char in chars),
+                                    "bbox": bbox,
+                                }
+                            )
                         if spans_out:
                             lines_out.append({"spans": spans_out})
                     if lines_out:

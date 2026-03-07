@@ -9,6 +9,8 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple, NamedTuple
 import fitz
 
+from src.pdf.text_visibility import build_invisible_char_keys, is_invisible_char
+
 logger = logging.getLogger(__name__)
 
 
@@ -153,17 +155,13 @@ class PDFBlockTextMapper:
         
         try:
             rawdict = page.get_text("rawdict")
+            invisible_char_keys = build_invisible_char_keys(page)
             page_block_id = 0  # ページ内ブロックID（0から開始）
             char_index = start_char_index
             
             for block_data in rawdict.get("blocks", []):
                 if "lines" not in block_data:
                     continue  # 画像ブロックなどをスキップ
-                
-                # ブロック境界矩形を計算
-                block_bbox = block_data.get("bbox")
-                if not block_bbox:
-                    continue
                 
                 # ブロック内のテキストと文字位置を抽出
                 block_text_chars = []
@@ -175,6 +173,8 @@ class PDFBlockTextMapper:
                         chars = span.get("chars", [])
                         
                         for char_info in chars:
+                            if is_invisible_char(char_info, invisible_char_keys):
+                                continue
                             char = char_info.get("c", "")
                             bbox = char_info.get("bbox")
                             
@@ -193,12 +193,26 @@ class PDFBlockTextMapper:
                             block_offset += 1
                             char_index += 1
                 
-                if block_text_chars:
+                block_text = "".join(block_text_chars)
+                if block_text and block_text.strip():
+                    visible_bboxes = [
+                        char_pos.bbox for char_pos in block_char_positions if char_pos.bbox
+                    ]
+                    if visible_bboxes:
+                        x0 = min(bbox[0] for bbox in visible_bboxes)
+                        y0 = min(bbox[1] for bbox in visible_bboxes)
+                        x1 = max(bbox[2] for bbox in visible_bboxes)
+                        y1 = max(bbox[3] for bbox in visible_bboxes)
+                        block_bbox = (x0, y0, x1, y1)
+                    else:
+                        block_bbox = block_data.get("bbox")
+                    if not block_bbox:
+                        continue
                     # ブロック情報を作成
                     block_info = BlockInfo(
                         page_block_id=page_block_id,
                         page_num=page_num,
-                        text="".join(block_text_chars),
+                        text=block_text,
                         bbox=tuple(block_bbox),
                         char_count=len(block_text_chars)
                     )

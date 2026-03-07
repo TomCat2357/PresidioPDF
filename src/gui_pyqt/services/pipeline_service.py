@@ -689,7 +689,9 @@ class PipelineService:
                 ent = r.get("entity_type") or r.get("entity")
                 s = int(r["start"])
                 e = int(r["end"])
-                txt = target_text[s:e]
+                txt = str(r.get("text") or target_text[s:e])
+                if not txt or txt.isspace():
+                    continue
 
                 # 位置情報を変換
                 base_s, base_e = PipelineService._map_target_span_to_base_offsets(
@@ -732,6 +734,8 @@ class PipelineService:
                             if s == e:
                                 continue
                             txt = target_text[s:e]
+                            if not txt or txt.isspace():
+                                continue
                             base_s, base_e = (
                                 PipelineService._map_target_span_to_base_offsets(
                                     s,

@@ -3,6 +3,7 @@ import copy
 import re
 from types import SimpleNamespace
 
+from src.analysis.analyzer import Analyzer
 from src.gui_pyqt.services.detect_config_service import DetectConfigService
 from src.gui_pyqt.services.pipeline_service import PipelineService
 from src.gui_pyqt.views.main_window import MainWindow
@@ -135,6 +136,24 @@ def test_add_pattern_unknown_entity_always_enabled():
         ["PERSON"],
     )
     assert resolved == "MUHO"
+
+
+def test_phone_number_validation_accepts_valid_japanese_number():
+    assert Analyzer._is_valid_phone_number("03-5214-8000")
+
+
+def test_phone_number_validation_rejects_repeated_zero_noise():
+    assert not Analyzer._is_valid_phone_number("0000000000000")
+    assert not Analyzer._is_valid_phone_number("000000000")
+
+
+def test_individual_number_validation_accepts_valid_check_digit():
+    assert Analyzer._is_valid_individual_number("1234-5678-9018")
+
+
+def test_individual_number_validation_rejects_invalid_noise():
+    assert not Analyzer._is_valid_individual_number("000000000000")
+    assert not Analyzer._is_valid_individual_number("123456789012")
 
 
 def test_build_detect_target_text_newline_ignored_is_backward_compatible():

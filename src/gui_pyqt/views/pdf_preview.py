@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QDragEnterEvent, QDropEvent
 
+from src.pdf.text_visibility import build_invisible_char_keys, is_invisible_char
+
 
 class PDFPreviewWidget(QWidget):
     """PDFプレビュー表示ウィジェット"""
@@ -477,6 +479,7 @@ class PDFPreviewWidget(QWidget):
 
         page = self.pdf_document[page_num]
         rawdict = page.get_text("rawdict")
+        invisible_char_keys = build_invisible_char_keys(page)
 
         chars: List[Dict] = []
         text_block_id = 0
@@ -488,6 +491,8 @@ class PDFPreviewWidget(QWidget):
             for line_idx, line in enumerate(block.get("lines", [])):
                 for span in line.get("spans", []):
                     for char_info in span.get("chars", []):
+                        if is_invisible_char(char_info, invisible_char_keys):
+                            continue
                         ch = char_info.get("c", "")
                         bbox = char_info.get("bbox")
                         if not ch or not bbox or len(bbox) < 4:

@@ -99,7 +99,13 @@ class Analyzer:
         individual_number_recognizer = PatternRecognizer(
             supported_entity="INDIVIDUAL_NUMBER",
             supported_language="ja",
-            patterns=[Pattern(name="マイナンバー", score=0.9, regex="[0-9]{11,13}")],
+            patterns=[
+                Pattern(
+                    name="マイナンバー",
+                    score=0.9,
+                    regex=r"(?<!\d)(?:\d{4}-?\d{4}-?\d{4})(?!\d)",
+                )
+            ],
         )
         analyzer.registry.add_recognizer(individual_number_recognizer)
 
@@ -137,7 +143,9 @@ class Analyzer:
             supported_language="ja",
             patterns=[
                 Pattern(
-                    name="電話番号", regex=r"0\d{1,4}[-]?\d{1,4}[-]?\d{4}", score=0.8
+                    name="電話番号",
+                    regex=r"(?<!\d)(?:0\d{1,4}[-]?\d{1,4}[-]?\d{4})(?!\d)",
+                    score=0.8,
                 )
             ],
         )
@@ -222,9 +230,16 @@ class Analyzer:
             s, e = r.start, r.end
             ent_text = text[s:e]
             refined_text = self._refine_entity_text(ent_text, r.entity_type, text, s, e)
+            if not refined_text or refined_text.isspace():
+                continue
             rs, re_ = self._calculate_refined_positions(text, s, e, refined_text)
             # 追加と重なればスキップ（追加優先）
             if overlaps_any((rs, re_)):
+                continue
+            if not self._is_valid_entity_candidate(r.entity_type, refined_text):
+                logger.debug(
+                    f"エンティティ候補を妥当性検証で除外: '{refined_text}' ({r.entity_type})"
+                )
                 continue
             # 除外はモデル結果のみに適用
             if self.config_manager.is_entity_excluded(r.entity_type, refined_text):
@@ -242,6 +257,64 @@ class Analyzer:
         results = add_selected + model_filtered
         # Analyzer系の重複除去は廃止（Web/CLIで実施）
         return sorted(results, key=lambda x: x["start"]) 
+
+    @staticmethod
+    def _digits_only(text: str) -> str:
+        """数字以外を除去した文字列を返す。"""
+        return "".join(ch for ch in str(text or "") if ch.isdigit())
+
+    @classmethod
+    def _is_valid_entity_candidate(cls, entity_type: str, text: str) -> bool:
+        """既知エンティティ候補に追加の妥当性検証を適用する。"""
+        if entity_type == "PHONE_NUMBER":
+            return cls._is_valid_phone_number(text)
+        if entity_type == "INDIVIDUAL_NUMBER":
+            return cls._is_valid_individual_number(text)
+        return True
+
+    @classmethod
+    def _is_valid_phone_number(cls, text: str) -> bool:
+        """日本国内の電話番号として妥当な候補のみを許可する。"""
+        digits = cls._digits_only(text)
+        if len(digits) not in {10, 11}:
+            return False
+        if len(set(digits)) == 1:
+            return False
+
+        try:
+            import phonenumbers
+
+            parsed = phonenumbers.parse(str(text), "JP")
+        except Exception:
+            return False
+
+        return (
+            phonenumbers.is_possible_number(parsed)
+            and phonenumbers.is_valid_number_for_region(parsed, "JP")
+        )
+
+    @classmethod
+    def _is_valid_individual_number(cls, text: str) -> bool:
+        """マイナンバー（個人番号）の書式と検査用数字を検証する。"""
+        digits = cls._digits_only(text)
+        if len(digits) != 12:
+            return False
+        if len(set(digits)) == 1:
+            return False
+
+        return cls._calculate_individual_number_check_digit(digits[:-1]) == int(
+            digits[-1]
+        )
+
+    @staticmethod
+    def _calculate_individual_number_check_digit(body: str) -> int:
+        """11桁本体から個人番号の検査用数字を算出する。"""
+        weights = [2, 3, 4, 5, 6, 7, 2, 3, 4, 5, 6]
+        total = sum(int(digit) * weight for digit, weight in zip(reversed(body), weights))
+        remainder = total % 11
+        if remainder <= 1:
+            return 0
+        return 11 - remainder
 
     def _analyze_text_chunked(self, text: str, entities: List[str]) -> List[Dict]:
         """チャンク分割による大容量テキスト解析"""

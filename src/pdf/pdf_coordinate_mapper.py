@@ -8,6 +8,8 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from pathlib import Path
 from dataclasses import dataclass, asdict
 
+from src.pdf.text_visibility import build_invisible_char_keys, is_invisible_char
+
 
 @dataclass
 class CoordinateMapping:
@@ -103,17 +105,38 @@ class PDFCoordinateMapper:
             # 各ページからテキストと座標情報を抽出
             for page_num in range(doc.page_count):
                 page = doc[page_num]
-                blocks = page.get_text("dict")["blocks"]
+                rawdict = page.get_text("rawdict")
+                invisible_char_keys = build_invisible_char_keys(page)
                 
-                for block_idx, block in enumerate(blocks):
+                for block_idx, block in enumerate(rawdict.get("blocks", [])):
                     if "lines" not in block:
                         continue
                     
                     for line_idx, line in enumerate(block["lines"]):
                         for span_idx, span in enumerate(line["spans"]):
+                            visible_chars = [
+                                char
+                                for char in (span.get("chars", []) or [])
+                                if not is_invisible_char(char, invisible_char_keys)
+                            ]
+                            if not visible_chars:
+                                continue
+
                             # スパン内の文字情報を取得
-                            span_text = span["text"]
-                            span_bbox = span["bbox"]
+                            span_text = "".join(str(char.get("c", "")) for char in visible_chars)
+                            if not span_text.strip():
+                                continue
+
+                            visible_bboxes = [
+                                char.get("bbox") for char in visible_chars if char.get("bbox")
+                            ]
+                            if not visible_bboxes:
+                                continue
+                            x0 = min(float(bbox[0]) for bbox in visible_bboxes)
+                            y0 = min(float(bbox[1]) for bbox in visible_bboxes)
+                            x1 = max(float(bbox[2]) for bbox in visible_bboxes)
+                            y1 = max(float(bbox[3]) for bbox in visible_bboxes)
+                            span_bbox = [x0, y0, x1, y1]
                             span_font = span.get("font", "")
                             span_size = span.get("size", 0.0)
                             
@@ -121,20 +144,19 @@ class PDFCoordinateMapper:
                             char_start = 0
                             char_end = len(span_text)
                             
-                            if span_text.strip():  # 空白のみでない場合
-                                mapping = CoordinateMapping(
-                                    page=page_num,
-                                    block_idx=block_idx,
-                                    line_idx=line_idx,
-                                    span_idx=span_idx,
-                                    char_start=char_start,
-                                    char_end=char_end,
-                                    bbox=list(span_bbox),
-                                    text=span_text,
-                                    font=span_font,
-                                    size=span_size
-                                )
-                                self.coordinate_mappings.append(mapping)
+                            mapping = CoordinateMapping(
+                                page=page_num,
+                                block_idx=block_idx,
+                                line_idx=line_idx,
+                                span_idx=span_idx,
+                                char_start=char_start,
+                                char_end=char_end,
+                                bbox=list(span_bbox),
+                                text=span_text,
+                                font=span_font,
+                                size=span_size
+                            )
+                            self.coordinate_mappings.append(mapping)
             
             # メタデータを更新
             self.metadata.total_mappings = len(self.coordinate_mappings)

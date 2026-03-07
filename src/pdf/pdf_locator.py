@@ -9,6 +9,8 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple, Union
 import fitz
 
+from src.pdf.text_visibility import build_invisible_char_keys, is_invisible_char
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +124,7 @@ class PDFTextLocator:
         """
         try:
             rawdict = page.get_text("rawdict")
+            invisible_char_keys = build_invisible_char_keys(page)
 
             page_char_data = []
             full_text_chars = []
@@ -138,6 +141,8 @@ class PDFTextLocator:
                         chars = span.get("chars", [])
 
                         for char_idx_in_span, char_info in enumerate(chars):
+                            if is_invisible_char(char_info, invisible_char_keys):
+                                continue
                             char = char_info.get("c", "")
                             bbox = char_info.get("bbox")
                             origin = char_info.get("origin")

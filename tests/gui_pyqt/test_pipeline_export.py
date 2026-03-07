@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.gui_pyqt.services.pipeline_service import PipelineService
 from src.ocr.ndlocr_service import NDLOCRService, OCRResult
+from src.pdf.pdf_locator import PDFTextLocator
 from src.pdf.pdf_text_embedder import PDFTextEmbedder
 
 
@@ -15,6 +16,14 @@ def _create_sample_pdf(pdf_path):
         doc.save(str(pdf_path))
 
 
+def _create_pdf_with_invisible_text(pdf_path):
+    with fitz.open() as doc:
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 120), "VISIBLE", fontsize=14)
+        page.insert_text((72, 180), "0000000000000", fontsize=72, fill_opacity=0)
+        doc.save(str(pdf_path))
+
+
 def _get_first_image_size(pdf_path):
     with fitz.open(str(pdf_path)) as doc:
         page = doc[0]
@@ -23,6 +32,56 @@ def _get_first_image_size(pdf_path):
         xref = images[0][0]
         extracted = doc.extract_image(xref)
         return extracted.get("width", 0), extracted.get("height", 0)
+
+
+def test_run_read_ignores_invisible_text_blocks(tmp_path):
+    pdf_path = tmp_path / "hidden_text.pdf"
+    _create_pdf_with_invisible_text(pdf_path)
+
+    result = PipelineService.run_read(pdf_path, include_coordinate_map=False)
+
+    assert result["text"] == [["VISIBLE"]]
+
+
+def test_pdf_text_locator_ignores_invisible_text(tmp_path):
+    pdf_path = tmp_path / "hidden_text_locator.pdf"
+    _create_pdf_with_invisible_text(pdf_path)
+
+    with fitz.open(str(pdf_path)) as doc:
+        locator = PDFTextLocator(doc)
+
+    assert locator.full_text_no_newlines == "VISIBLE"
+
+
+def test_run_detect_skips_whitespace_only_model_result(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "whitespace_detect.pdf"
+    _create_sample_pdf(pdf_path)
+    read_result = PipelineService.run_read(pdf_path, include_coordinate_map=False)
+
+    class _FakeAnalyzer:
+        def __init__(self, _cfg):
+            pass
+
+        def analyze_text(self, _text, _entities):
+            return [
+                {
+                    "start": 0,
+                    "end": 1,
+                    "entity_type": "PERSON",
+                    "text": " ",
+                }
+            ]
+
+    monkeypatch.setattr("src.analysis.analyzer.Analyzer", _FakeAnalyzer)
+
+    detect_result = PipelineService.run_detect(
+        read_result,
+        entities=["PERSON"],
+        ignore_newlines=True,
+        ignore_whitespace=False,
+    )
+
+    assert detect_result["detect"] == []
 
 
 def test_run_export_annotations_creates_pdf_annotations(tmp_path):
