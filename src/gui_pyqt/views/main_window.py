@@ -181,8 +181,12 @@ class MainWindow(QMainWindow):
         # 開く
         open_action = QAction("開く", self)
         open_action.setStatusTip("PDFファイルを開く（マッピングがあれば自動読込）")
+        open_action.setShortcut(QKeySequence("Ctrl+O"))
+        open_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         open_action.triggered.connect(self.on_open_pdf)
+        self.addAction(open_action)
         toolbar.addAction(open_action)
+        self.open_action = open_action
 
         # ファイルを閉じる
         close_pdf_action = QAction("閉じる", self)
@@ -210,7 +214,10 @@ class MainWindow(QMainWindow):
         self.detect_current_action.triggered.connect(self.on_detect_current_page)
 
         self.detect_all_action = QAction("全ページ", self)
+        self.detect_all_action.setShortcut(QKeySequence("F5"))
+        self.detect_all_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.detect_all_action.triggered.connect(self.on_detect_all_pages)
+        self.addAction(self.detect_all_action)
 
         detect_menu = QMenu(self)
         detect_menu.addAction(self.detect_current_action)
@@ -295,7 +302,10 @@ class MainWindow(QMainWindow):
         # 保存（PDF + JSONマッピング）
         save_action = QAction("保存", self)
         save_action.setStatusTip("PDFとサイドカーJSONマッピングを保存")
+        save_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         save_action.triggered.connect(self.on_save)
+        self.addAction(save_action)
         toolbar.addAction(save_action)
         self.save_action = save_action
 
