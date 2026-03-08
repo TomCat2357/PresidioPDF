@@ -476,3 +476,30 @@ def test_ndlocr_get_process_callable_falls_back_to_distribution_path(
     first = result[0]
     assert isinstance(first, dict)
     assert first.get("text") == "FAKE"
+
+
+def test_calculate_fitting_fontsize_shrinks_for_long_text():
+    rect = fitz.Rect(0, 0, 40, 20)
+
+    short_size = PDFTextEmbedder._calculate_fitting_fontsize("短文", rect)
+    long_size = PDFTextEmbedder._calculate_fitting_fontsize(
+        "これは幅に収めるために縮小される非常に長い文字列です", rect
+    )
+
+    assert long_size < short_size
+    assert 1.0 <= long_size <= 72.0
+
+
+def test_calculate_fitting_fontsize_never_exceeds_bbox():
+    text = "これは幅に収めるために縮小される非常に長い文字列です"
+    rect = fitz.Rect(0, 0, 60, 16)
+
+    fontsize = PDFTextEmbedder._calculate_fitting_fontsize(text, rect)
+    rendered_width = fitz.get_text_length(
+        text,
+        fontname=PDFTextEmbedder.FONTNAME,
+        fontsize=fontsize,
+    )
+
+    assert rendered_width <= rect.width
+    assert fontsize <= rect.height
