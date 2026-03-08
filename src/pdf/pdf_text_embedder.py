@@ -18,6 +18,7 @@ class PDFTextEmbedder:
     OCR_SUBJECT = "PresidioPDF_OCR"
     OCR_TITLE = "PresidioPDF OCR"
     OCR_SOURCE = "ndlocr-lite"
+    FONTNAME = "helv"
 
     @classmethod
     def embed_ocr_results(
@@ -63,13 +64,13 @@ class PDFTextEmbedder:
                 text_color = global_text_color
                 alpha = global_alpha
 
-            fontsize = max(4.0, min(72.0, rect.height * 0.9))
+            fontsize = cls._calculate_fitting_fontsize(text=text, rect=rect)
             try:
                 annot = page.add_freetext_annot(
                     rect,
                     text,
                     fontsize=fontsize,
-                    fontname="helv",
+                    fontname=cls.FONTNAME,
                     text_color=text_color,
                     fill_color=None,
                     border_width=0,
@@ -127,6 +128,24 @@ class PDFTextEmbedder:
                     removed += 1
                 annot = next_annot
         return removed
+
+    @classmethod
+    def _calculate_fitting_fontsize(cls, text: str, rect: fitz.Rect) -> float:
+        """テキストがバウンディングボックスに収まるようなフォントサイズを求める。"""
+        if not text:
+            return max(1.0, min(72.0, rect.height))
+
+        # 高さ上限（わずかな余白を残す）
+        height_based = rect.height * 0.98
+
+        # 幅ベース（fontsize=1.0 時の文字幅から比例計算）
+        width_at_unit = fitz.get_text_length(text, fontname=cls.FONTNAME, fontsize=1.0)
+        if width_at_unit <= 0.0:
+            width_based = height_based
+        else:
+            width_based = (rect.width * 0.98) / width_at_unit
+
+        return max(1.0, min(72.0, height_based, width_based))
 
     @staticmethod
     def _clamp_opacity(value: Any) -> float:
