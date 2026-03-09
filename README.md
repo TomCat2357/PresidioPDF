@@ -216,3 +216,33 @@ uv run pytest
 - 依存管理は `uv` を使用してください。
 - CUIコマンドの詳細は `--help` で確認できます。
   - 例: `uv run python -m src.cli.detect_main --help`
+
+## ライセンス・出典
+
+このプロジェクトは、PII検出・GUI・OCRのために以下の第三者コンポーネントを利用しています。特に `gui` / `ocr` extra を含めて再配布する場合は、各上流プロジェクトのライセンス本文と同梱条件を必ず確認してください。
+
+| コンポーネント | このリポジトリでの用途 | ライセンス | 出典・実務上の注意 |
+|---|---|---|---|
+| [Microsoft Presidio](https://github.com/microsoft/presidio) (`presidio-analyzer`) | 日本語PII検出の基盤 | MIT License | Microsoft Presidio は MIT ライセンスです。再配布時は著作権表示と許諾表示を保持してください。 |
+| [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) | `gui` extra の GUI バインディング | GPL v3 または商用ライセンス | PyQt6 は Riverbank Computing によるデュアルライセンスです。GUI 配布物を GPL 非互換ライセンスで公開する場合は、商用 PyQt ライセンスが必要です。 |
+| [PyQt6-Qt6](https://pypi.org/project/PyQt6-Qt6/) / [Qt 6](https://doc.qt.io/qt-6/licensing.html) | PyQt6 wheel に同梱される Qt ランタイム | Qt 各モジュールの定めによる（主に LGPL v3 / GPL） | Qt のオープンソース利用では LGPL/GPL の条件が適用されます。バイナリ再配布時は、Qt のライセンス文書同梱や LGPL 条件の確認が必要です。 |
+| [NDLOCR-Lite](https://github.com/ndl-lab/ndlocr-lite) (`ndlocr-lite`) | `ocr` extra の OCR 処理 | CC BY 4.0 | NDLOCR-Lite は国立国会図書館が CC BY 4.0 で公開しています。再配布・改変物の公開時は、出典表示、ライセンス表示、変更有無の明示を行ってください。 |
+
+### 再配布時の注意
+
+- CUIのみを利用する場合でも、配布物に同梱する第三者ライブラリの `LICENSE` / `NOTICE` を確認してください。
+- `gui` extra を含む配布では、**このリポジトリ自体のライセンスと PyQt6 の GPL v3 条件が整合していること**、または **商用 PyQt ライセンスを別途手当てしていること** が必要です。
+- `ocr` extra を含む配布では、NDLOCR-Lite の著作権者（国立国会図書館）と CC BY 4.0 を明記してください。
+- 実行ファイル化やインストーラ配布を行う場合は、アプリ本体とは別に第三者ライセンス一覧を添付する運用を推奨します。
+
+### 出典リンク
+
+- Microsoft Presidio: <https://github.com/microsoft/presidio>, <https://microsoft.github.io/presidio/>
+- PyQt6 / Riverbank Computing: <https://www.riverbankcomputing.com/software/pyqt>, <https://www.riverbankcomputing.com/commercial/license-faq>
+- Qt 6 licensing: <https://doc.qt.io/qt-6/licensing.html>, <https://www.qt.io/development/open-source-lgpl-obligations>
+- NDLOCR-Lite: <https://github.com/ndl-lab/ndlocr-lite>, <https://lab.ndl.go.jp/news/2025/2026-02-24/>, <https://lab.ndl.go.jp/data_set/ndlocrlite-usage/>
+
+### 補足
+
+- この節は第三者コンポーネントのライセンス整理です。本リポジトリ自体のライセンスを定めるものではありません。
+- 公開リポジトリとして配布する場合は、別途 `LICENSE` ファイルを追加し、特に GUI 配布の有無に応じて PyQt6 と整合する条件を選定してください。
