@@ -78,32 +78,33 @@ class PDFPreviewWidget(QWidget):
 
         # ズームコントロール
         zoom_layout = QHBoxLayout()
-        zoom_out_btn = QPushButton("−")
-        zoom_out_btn.setFixedWidth(30)
-        zoom_out_btn.clicked.connect(self.zoom_out)
-        zoom_layout.addWidget(zoom_out_btn)
+        self.zoom_out_button = QPushButton("−")
+        self.zoom_out_button.setFixedWidth(30)
+        self.zoom_out_button.clicked.connect(self.zoom_out)
+        zoom_layout.addWidget(self.zoom_out_button)
 
         self.zoom_label = QLabel("75%")
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.zoom_label.setFixedWidth(50)
         zoom_layout.addWidget(self.zoom_label)
 
-        zoom_in_btn = QPushButton("+")
-        zoom_in_btn.setFixedWidth(30)
-        zoom_in_btn.clicked.connect(self.zoom_in)
-        zoom_layout.addWidget(zoom_in_btn)
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setFixedWidth(30)
+        self.zoom_in_button.clicked.connect(self.zoom_in)
+        zoom_layout.addWidget(self.zoom_in_button)
 
-        fit_btn = QPushButton("Fit")
-        fit_btn.setFixedWidth(40)
-        fit_btn.clicked.connect(self.zoom_fit)
-        zoom_layout.addWidget(fit_btn)
+        self.zoom_fit_button = QPushButton("Fit")
+        self.zoom_fit_button.setFixedWidth(40)
+        self.zoom_fit_button.clicked.connect(self.zoom_fit)
+        zoom_layout.addWidget(self.zoom_fit_button)
 
         zoom_layout.addStretch()
         layout.addLayout(zoom_layout)
 
         # 選択モード
         mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("選択モード:"))
+        self.selection_mode_label = QLabel("選択モード:")
+        mode_layout.addWidget(self.selection_mode_label)
         self.selection_mode_group = QButtonGroup(self)
         self.selection_mode_buttons: Dict[str, QRadioButton] = {}
         mode_items = [
@@ -147,6 +148,39 @@ class PDFPreviewWidget(QWidget):
         layout.addWidget(self.scroll_area)
 
         self.setLayout(layout)
+
+    def help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
+        """対象ウィジェットに対応するヘルプトピックを返す"""
+        if widget is None:
+            return None
+
+        targets = [
+            self.prev_button,
+            self.page_label,
+            self.next_button,
+            self.zoom_out_button,
+            self.zoom_label,
+            self.zoom_in_button,
+            self.zoom_fit_button,
+            self.selection_mode_label,
+            self.scroll_area,
+            self.preview_label,
+            *self.selection_mode_buttons.values(),
+        ]
+        for target in targets:
+            if self._widget_matches_target(widget, target):
+                return "preview"
+        return None
+
+    @staticmethod
+    def _widget_matches_target(widget: QWidget, target: QWidget) -> bool:
+        """widget が target 自身またはその子孫かを判定する"""
+        current = widget
+        while current is not None:
+            if current is target:
+                return True
+            current = current.parentWidget()
+        return False
 
     def load_pdf(self, pdf_path: str):
         """PDFファイルを読み込む"""

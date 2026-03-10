@@ -21,8 +21,9 @@ import re
 import shutil
 import fitz
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from PyQt6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -39,7 +40,14 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QUrl, QEvent, QObject
-from PyQt6.QtGui import QAction, QDesktopServices, QCloseEvent, QShortcut, QKeySequence
+from PyQt6.QtGui import (
+    QAction,
+    QDesktopServices,
+    QCloseEvent,
+    QShortcut,
+    QKeySequence,
+    QCursor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +60,7 @@ from src.ocr.ndlocr_service import NDLOCRService
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
 from .config_dialog import DetectConfigDialog
+from .help_dialog import HelpDialog
 
 
 class MainWindow(QMainWindow):
@@ -110,6 +119,8 @@ class MainWindow(QMainWindow):
         self._duplicate_target_pages: Optional[List[int]] = None
         self._duplicate_base_result: Optional[Dict[str, Any]] = None
         self._is_dirty = False
+        self.help_dialog: Optional[HelpDialog] = None
+        self._toolbar_help_targets: List[Tuple[QWidget, str]] = []
 
         self.init_ui()
         self.connect_signals()
@@ -175,6 +186,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("メインツールバー")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+        self.main_toolbar = toolbar
 
         # アクションの定義
 
@@ -198,10 +210,12 @@ class MainWindow(QMainWindow):
         # 設定（検出/重複設定）
         config_action = QAction("設定", self)
         config_action.setShortcut(QKeySequence("Ctrl+,"))
+        config_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         config_action.setStatusTip(
             f"検出対象と重複削除設定（{DetectConfigService.DISPLAY_FILE_NAME}）"
         )
         config_action.triggered.connect(self.on_open_config_dialog)
+        self.addAction(config_action)
         toolbar.addAction(config_action)
         self.config_action = config_action
 
@@ -345,18 +359,32 @@ class MainWindow(QMainWindow):
         self.export_button = export_button
 
         # ヘルプ（ぶら下がりメニュー）
+        self.help_context_action = QAction("現在の操作を説明 (F1)", self)
+        self.help_context_action.setShortcut(QKeySequence("F1"))
+        self.help_context_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.help_context_action.triggered.connect(self._show_context_help)
+        self.addAction(self.help_context_action)
+
+        self.general_help_action = QAction("使い方ガイド", self)
+        self.general_help_action.triggered.connect(self._show_general_help)
+
         dedupe_priority_action = QAction("重複削除優先順位", self)
         dedupe_priority_action.triggered.connect(self._show_dedupe_priority_help)
+        self.dedupe_priority_action = dedupe_priority_action
 
         help_menu = QMenu(self)
+        help_menu.addAction(self.help_context_action)
+        help_menu.addAction(self.general_help_action)
         help_menu.addAction(dedupe_priority_action)
 
         help_button = QToolButton(self)
         help_button.setText("ヘルプ")
+        help_button.setToolTip("F1で現在の操作を説明")
         help_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         help_button.setMenu(help_menu)
         toolbar.addWidget(help_button)
         self.help_button = help_button
+        self._rebuild_toolbar_help_targets()
 
         # 初期状態では一部のアクションを無効化
         self.update_action_states()
@@ -410,23 +438,103 @@ class MainWindow(QMainWindow):
         """ステータスバーの作成"""
         self.statusBar().showMessage("準備完了")
 
+    def _rebuild_toolbar_help_targets(self):
+        """ツールバー上のヘルプ対象を再構築する"""
+        self._toolbar_help_targets = []
+
+        action_targets = [
+            (self.open_action, "file"),
+            (self.close_pdf_action, "file"),
+            (self.config_action, "settings"),
+            (self.save_action, "save"),
+        ]
+        for action, topic_id in action_targets:
+            widget = self.main_toolbar.widgetForAction(action)
+            if widget is not None:
+                self._toolbar_help_targets.append((widget, topic_id))
+
+        self._toolbar_help_targets.extend(
+            [
+                (self.detect_button, "detect"),
+                (self.ocr_button, "ocr"),
+                (self.target_delete_button, "target_delete"),
+                (self.duplicate_button, "duplicate"),
+                (self.export_button, "export"),
+                (self.help_button, "help"),
+            ]
+        )
+
+    def _show_help_topic(self, topic_id: str):
+        """指定トピックのヘルプダイアログを開く"""
+        if self.help_dialog is None:
+            self.help_dialog = HelpDialog(self)
+        self.help_dialog.show_topic(topic_id)
+        self.help_dialog.exec()
+
+    def _show_context_help(self):
+        """現在の文脈に応じたヘルプを開く"""
+        self._show_help_topic(self._resolve_help_topic())
+
+    def _show_general_help(self):
+        """総合ガイドを開く"""
+        self._show_help_topic("general")
+
+    def _resolve_help_topic(self) -> str:
+        """現在のフォーカスとカーソル位置からヘルプトピックを決める"""
+        focus_widget = QApplication.focusWidget()
+        cursor_widget = QApplication.widgetAt(QCursor.pos())
+        candidates = [focus_widget]
+        if cursor_widget is not focus_widget:
+            candidates.append(cursor_widget)
+        return self._resolve_help_topic_from_widgets(candidates)
+
+    def _resolve_help_topic_from_widgets(self, widgets: List[Optional[QWidget]]) -> str:
+        """候補ウィジェット群から最初に一致したヘルプトピックを返す"""
+        for widget in widgets:
+            topic_id = self._resolve_help_topic_for_widget(widget)
+            if topic_id is not None:
+                return topic_id
+        return "general"
+
+    def _resolve_help_topic_for_widget(
+        self, widget: Optional[QWidget]
+    ) -> Optional[str]:
+        """単一ウィジェットに対するヘルプトピックを返す"""
+        if widget is None:
+            return None
+
+        for resolver in (
+            self.result_panel.help_topic_for_widget,
+            self.pdf_preview.help_topic_for_widget,
+            self._toolbar_help_topic_for_widget,
+        ):
+            topic_id = resolver(widget)
+            if topic_id is not None:
+                return topic_id
+        return None
+
+    def _toolbar_help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
+        """ツールバー配下ウィジェットのトピックを返す"""
+        if widget is None:
+            return None
+        for target, topic_id in self._toolbar_help_targets:
+            if self._widget_matches_target(widget, target):
+                return topic_id
+        return None
+
+    @staticmethod
+    def _widget_matches_target(widget: QWidget, target: QWidget) -> bool:
+        """widget が target 自身またはその子孫かを判定する"""
+        current = widget
+        while current is not None:
+            if current is target:
+                return True
+            current = current.parentWidget()
+        return False
+
     def _show_dedupe_priority_help(self):
         """重複削除優先順位の説明ダイアログを表示"""
-        msg = (
-            "<b>重複削除 優先順位</b><br><br>"
-            "重複するエンティティが存在する場合、以下の順位で残すものを決定します：<br><br>"
-            "<b>検出元 (origin)</b> &gt; <b>包含 (contain)</b> &gt; <b>長さ (length)</b> "
-            "&gt; <b>エンティティ種別 (entity)</b> &gt; <b>位置 (position)</b><br><br>"
-            "<u>検出元の優先順位：</u><br>"
-            "　手動（ダイアログで追加）&gt; 追加（検出対象に登録）= 自動（自動検出）<br><br>"
-            "<u>各基準の説明：</u><br>"
-            "　<b>検出元</b>：手動 &gt; 追加 = 自動<br>"
-            "　<b>包含</b>：検出範囲が広い方を優先<br>"
-            "　<b>長さ</b>：テキストが長い方を優先<br>"
-            "　<b>エンティティ種別</b>：設定された種別の順位で優先<br>"
-            "　<b>位置</b>：入力順が先のものを優先"
-        )
-        QMessageBox.information(self, "重複削除 優先順位", msg)
+        self._show_help_topic("duplicate")
 
     def connect_signals(self):
         """AppStateとTaskRunnerのシグナルと接続"""

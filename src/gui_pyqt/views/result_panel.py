@@ -306,6 +306,33 @@ class ResultPanel(QWidget):
         )
         self.register_add_shortcut.activated.connect(self.register_selected_to_add)
 
+    def help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
+        """対象ウィジェットに対応するヘルプトピックを返す"""
+        if widget is None:
+            return None
+
+        targets = [
+            self.results_table,
+            self.delete_button,
+            self.omit_register_button,
+            self.add_register_button,
+            *self._filter_inputs,
+        ]
+        for target in targets:
+            if self._widget_matches_target(widget, target):
+                return "result_table"
+        return None
+
+    @staticmethod
+    def _widget_matches_target(widget: QWidget, target: QWidget) -> bool:
+        """widget が target 自身またはその子孫かを判定する"""
+        current = widget
+        while current is not None:
+            if current is target:
+                return True
+            current = current.parentWidget()
+        return False
+
     def load_entities(self, result: Optional[dict]):
         """検出結果を読み込んでテーブルに表示"""
         if not result:
