@@ -720,6 +720,9 @@ class MainWindow(QMainWindow):
                 ocr_font_color=ocr_settings.get("font_color", [0, 0, 0]),
                 ocr_opacity=ocr_settings.get("opacity", 0.0),
                 ocr_before_detect=ocr_settings.get("ocr_before_detect", False),
+                ocr_auto_color=ocr_settings.get("auto_color", False),
+                ocr_offset_x=ocr_settings.get("offset_x", 0.0),
+                ocr_offset_y=ocr_settings.get("offset_y", 0.0),
                 ocr_available=ocr_available,
                 parent=self,
             )
@@ -762,7 +765,9 @@ class MainWindow(QMainWindow):
                 f"overlap:{self.duplicate_overlap_mode}, "
                 f"ignore_newlines={self.detect_text_preprocess_settings.get('ignore_newlines', True)}, "
                 f"ignore_whitespace={self.detect_text_preprocess_settings.get('ignore_whitespace', False)}, "
-                f"ocr_before_detect={self.ocr_settings.get('ocr_before_detect', False)}"
+                f"ocr_before_detect={self.ocr_settings.get('ocr_before_detect', False)}, "
+                f"offset_x={self.ocr_settings.get('offset_x', 0.0)}, "
+                f"offset_y={self.ocr_settings.get('offset_y', 0.0)}"
             )
         except Exception as e:
             logger.exception("検出設定ダイアログの表示/保存に失敗")
@@ -836,6 +841,9 @@ class MainWindow(QMainWindow):
                 font_color=self.ocr_settings.get("font_color", [0, 0, 0]),
                 opacity=self.ocr_settings.get("opacity", 0.0),
                 ocr_before_detect=self.ocr_settings.get("ocr_before_detect", False),
+                auto_color=self.ocr_settings.get("auto_color", False),
+                offset_x=self.ocr_settings.get("offset_x", 0.0),
+                offset_y=self.ocr_settings.get("offset_y", 0.0),
             )
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"

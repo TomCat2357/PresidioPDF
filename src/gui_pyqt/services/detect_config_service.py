@@ -66,6 +66,8 @@ class DetectConfigService:
         "opacity": 0.0,
         "ocr_before_detect": False,
         "auto_color": False,
+        "offset_x": 0.0,
+        "offset_y": 0.0,
     }
     CHUNK_MAX_CHARS_MIN = 100
     CHUNK_MAX_CHARS_MAX = 100000
@@ -646,6 +648,12 @@ class DetectConfigService:
                 settings.get("auto_color", self.DEFAULT_OCR_SETTINGS["auto_color"]),
                 self.DEFAULT_OCR_SETTINGS["auto_color"],
             ),
+            "offset_x": self._coerce_float(
+                settings.get("offset_x", self.DEFAULT_OCR_SETTINGS["offset_x"])
+            ),
+            "offset_y": self._coerce_float(
+                settings.get("offset_y", self.DEFAULT_OCR_SETTINGS["offset_y"])
+            ),
         }
 
     def _coerce_chunk_max_chars(self, value: Any) -> int:
@@ -692,6 +700,13 @@ class DetectConfigService:
         except (TypeError, ValueError):
             opacity = 0.0
         return min(1.0, max(0.0, opacity))
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _extract_duplicate_settings(self, data: Any) -> Dict[str, str]:
         if not isinstance(data, dict):

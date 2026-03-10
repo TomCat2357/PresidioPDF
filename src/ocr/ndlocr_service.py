@@ -90,6 +90,8 @@ class NDLOCRService:
         page_num: int = 0,
         scale_x: float = 1.0,
         scale_y: float = 1.0,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
         auto_color: bool = False,
     ) -> List[OCRResult]:
         """1ページ分のOCRを実行して座標付き結果を返す。"""
@@ -134,8 +136,8 @@ class NDLOCRService:
             results.append(
                 OCRResult(
                     text=text,
-                    x=float(x) * float(scale_x),
-                    y=float(y) * float(scale_y),
+                    x=(float(x) * float(scale_x)) + float(offset_x),
+                    y=(float(y) * float(scale_y)) + float(offset_y),
                     width=float(w) * float(scale_x),
                     height=float(h) * float(scale_y),
                     page_num=int(page_num),
@@ -152,6 +154,8 @@ class NDLOCRService:
         pdf_path: Path,
         page_filter: Optional[Sequence[int]] = None,
         dpi: int = 300,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
     ) -> Dict[int, List[OCRResult]]:
         """PDF全体または指定ページでOCRを実行する。"""
         if not isinstance(pdf_path, Path):
@@ -180,6 +184,8 @@ class NDLOCRService:
                     page_num=page_num,
                     scale_x=scale,
                     scale_y=scale,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
                 )
         return result
 
@@ -618,6 +624,8 @@ class NDLOCRService:
             raw_box = item.get("bbox")
             if raw_box is None:
                 raw_box = item.get("box")
+            if raw_box is None:
+                raw_box = item.get("bounds")
             if raw_box is None:
                 raw_box = item.get("points")
             if raw_box is None:

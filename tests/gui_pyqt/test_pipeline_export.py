@@ -339,10 +339,12 @@ def test_pdf_text_embedder_embed_and_remove(tmp_path):
 def test_run_ocr_and_clear_pipeline(monkeypatch, tmp_path):
     pdf_path = tmp_path / "ocr_pipeline.pdf"
     _create_sample_pdf(pdf_path)
+    captured_kwargs = {}
 
     def _fake_run_ocr_on_page(self, page_pixmap, existing_text_rects, **kwargs):
         _ = page_pixmap
         _ = existing_text_rects
+        captured_kwargs.update(kwargs)
         page_num = int(kwargs.get("page_num", 0))
         return [
             OCRResult(
@@ -363,6 +365,9 @@ def test_run_ocr_and_clear_pipeline(monkeypatch, tmp_path):
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
+        "auto_color": False,
+        "offset_x": 2.5,
+        "offset_y": -3.5,
     }
     ocr_result = PipelineService.run_ocr(
         pdf_path=pdf_path,
@@ -372,6 +377,8 @@ def test_run_ocr_and_clear_pipeline(monkeypatch, tmp_path):
     )
     assert ocr_result["success"] is True
     assert ocr_result["embedded_count"] == 1
+    assert captured_kwargs["offset_x"] == 2.5
+    assert captured_kwargs["offset_y"] == -3.5
     with fitz.open(str(pdf_path)) as doc:
         assert "OCR_WORD" in doc[0].get_text("text")
 
@@ -476,6 +483,18 @@ def test_ndlocr_get_process_callable_falls_back_to_distribution_path(
     first = result[0]
     assert isinstance(first, dict)
     assert first.get("text") == "FAKE"
+
+
+def test_ndlocr_parse_raw_result_item_accepts_bounds():
+    parsed = NDLOCRService._parse_raw_result_item(
+        {
+            "text": "BOUND",
+            "bounds": [10, 20, 30, 45],
+            "confidence": 0.8,
+        }
+    )
+
+    assert parsed == ("BOUND", (10.0, 20.0, 20.0, 25.0), 0.8)
 
 
 def test_calculate_fitting_fontsize_shrinks_for_long_text():

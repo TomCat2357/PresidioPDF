@@ -392,6 +392,12 @@ class PipelineService:
             normalized.get("auto_color"),
             DetectConfigService.DEFAULT_OCR_SETTINGS["auto_color"],
         )
+        normalized["offset_x"] = DetectConfigService._coerce_float(
+            normalized.get("offset_x")
+        )
+        normalized["offset_y"] = DetectConfigService._coerce_float(
+            normalized.get("offset_y")
+        )
         return normalized
 
     @staticmethod
@@ -451,6 +457,8 @@ class PipelineService:
                         page_num=page_num,
                         scale_x=scale,
                         scale_y=scale,
+                        offset_x=settings.get("offset_x", 0.0),
+                        offset_y=settings.get("offset_y", 0.0),
                         auto_color=settings.get("auto_color", False),
                     )
                     ocr_results_by_page[page_num] = [

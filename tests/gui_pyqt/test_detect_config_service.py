@@ -316,6 +316,9 @@ def test_ocr_settings_default_values(tmp_path):
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
+        "auto_color": False,
+        "offset_x": 0.0,
+        "offset_y": 0.0,
     }
 
     normalized = _read_config(service.config_path)
@@ -331,6 +334,8 @@ def test_ocr_settings_save_and_load(tmp_path):
             "font_color": [32, 64, 96],
             "opacity": 0.35,
             "ocr_before_detect": True,
+            "offset_x": "1.25",
+            "offset_y": -2,
         }
     )
     loaded = service.load_ocr_settings()
@@ -339,6 +344,9 @@ def test_ocr_settings_save_and_load(tmp_path):
         "font_color": [32, 64, 96],
         "opacity": 0.35,
         "ocr_before_detect": True,
+        "auto_color": False,
+        "offset_x": 1.25,
+        "offset_y": -2.0,
     }
     assert loaded == saved
 
@@ -353,6 +361,9 @@ def test_ocr_settings_are_normalized(tmp_path):
                 "font_color": [999, -20, "10"],
                 "opacity": 5.5,
                 "ocr_before_detect": "on",
+                "auto_color": "yes",
+                "offset_x": "3.75",
+                "offset_y": "invalid",
             },
         },
     )
@@ -363,6 +374,9 @@ def test_ocr_settings_are_normalized(tmp_path):
         "font_color": [255, 0, 10],
         "opacity": 1.0,
         "ocr_before_detect": True,
+        "auto_color": True,
+        "offset_x": 3.75,
+        "offset_y": 0.0,
     }
 
 
@@ -377,6 +391,8 @@ def test_ocr_settings_migrate_legacy_enabled_field(tmp_path):
                 "font_color": [12, 34, 56],
                 "opacity": 0.2,
                 "ocr_before_detect": False,
+                "offset_x": 4.5,
+                "offset_y": -1.5,
             },
         },
     )
@@ -390,6 +406,9 @@ def test_ocr_settings_migrate_legacy_enabled_field(tmp_path):
         "font_color": [12, 34, 56],
         "opacity": 0.2,
         "ocr_before_detect": False,
+        "auto_color": False,
+        "offset_x": 4.5,
+        "offset_y": -1.5,
     }
 
 

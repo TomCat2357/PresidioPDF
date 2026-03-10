@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QDialog,
     QDialogButtonBox,
     QGridLayout,
@@ -57,6 +58,8 @@ class DetectConfigDialog(QDialog):
         ocr_opacity: float = 0.0,
         ocr_before_detect: bool = False,
         ocr_auto_color: bool = False,
+        ocr_offset_x: float = 0.0,
+        ocr_offset_y: float = 0.0,
         ocr_available: bool = False,
         parent=None,
     ):
@@ -83,6 +86,8 @@ class DetectConfigDialog(QDialog):
         self.ocr_opacity_spin: Optional[QSpinBox] = None
         self.ocr_before_detect_checkbox: Optional[QCheckBox] = None
         self.ocr_auto_color_checkbox: Optional[QCheckBox] = None
+        self.ocr_offset_x_spin: Optional[QDoubleSpinBox] = None
+        self.ocr_offset_y_spin: Optional[QDoubleSpinBox] = None
         self._ocr_color: List[int] = [0, 0, 0]
         self._ocr_available = bool(ocr_available)
         self._installed_models: List[str] = list(installed_models or [])
@@ -104,6 +109,8 @@ class DetectConfigDialog(QDialog):
             opacity=ocr_opacity,
             ocr_before_detect=ocr_before_detect,
             auto_color=ocr_auto_color,
+            offset_x=ocr_offset_x,
+            offset_y=ocr_offset_y,
         )
         self._start_watching()
 
@@ -229,6 +236,22 @@ class DetectConfigDialog(QDialog):
         opacity_row.addWidget(self.ocr_opacity_spin)
         ocr_layout.addLayout(opacity_row)
 
+        offset_row = QHBoxLayout()
+        offset_row.addWidget(QLabel("Xオフセット (pt):"))
+        self.ocr_offset_x_spin = QDoubleSpinBox()
+        self.ocr_offset_x_spin.setRange(-1000.0, 1000.0)
+        self.ocr_offset_x_spin.setDecimals(2)
+        self.ocr_offset_x_spin.setSingleStep(0.1)
+        offset_row.addWidget(self.ocr_offset_x_spin)
+        offset_row.addWidget(QLabel("Yオフセット (pt):"))
+        self.ocr_offset_y_spin = QDoubleSpinBox()
+        self.ocr_offset_y_spin.setRange(-1000.0, 1000.0)
+        self.ocr_offset_y_spin.setDecimals(2)
+        self.ocr_offset_y_spin.setSingleStep(0.1)
+        offset_row.addWidget(self.ocr_offset_y_spin)
+        offset_row.addStretch()
+        ocr_layout.addLayout(offset_row)
+
         ocr_checkbox_row = QHBoxLayout()
         self.ocr_before_detect_checkbox = QCheckBox("個人情報検出時にOCRを先行実行する")
         self.ocr_before_detect_checkbox.setEnabled(self._ocr_available)
@@ -246,6 +269,10 @@ class DetectConfigDialog(QDialog):
                 self.ocr_opacity_slider.setEnabled(False)
             if self.ocr_opacity_spin:
                 self.ocr_opacity_spin.setEnabled(False)
+            if self.ocr_offset_x_spin:
+                self.ocr_offset_x_spin.setEnabled(False)
+            if self.ocr_offset_y_spin:
+                self.ocr_offset_y_spin.setEnabled(False)
 
         ocr_group.setLayout(ocr_layout)
         layout.addWidget(ocr_group)
@@ -294,6 +321,10 @@ class DetectConfigDialog(QDialog):
             self.ocr_before_detect_checkbox.toggled.connect(self._on_ui_value_changed)
         if self.ocr_auto_color_checkbox:
             self.ocr_auto_color_checkbox.toggled.connect(self._on_ui_value_changed)
+        if self.ocr_offset_x_spin:
+            self.ocr_offset_x_spin.valueChanged.connect(self._on_ui_value_changed)
+        if self.ocr_offset_y_spin:
+            self.ocr_offset_y_spin.valueChanged.connect(self._on_ui_value_changed)
 
     def _on_ui_value_changed(self, *_):
         if self._suspend_auto_save:
@@ -459,6 +490,8 @@ class DetectConfigDialog(QDialog):
         opacity: float,
         ocr_before_detect: bool,
         auto_color: bool = False,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
     ):
         previous = self._suspend_auto_save
         self._suspend_auto_save = True
@@ -476,6 +509,14 @@ class DetectConfigDialog(QDialog):
                 self.ocr_before_detect_checkbox.setChecked(bool(ocr_before_detect))
             if self.ocr_auto_color_checkbox:
                 self.ocr_auto_color_checkbox.setChecked(bool(auto_color))
+            if self.ocr_offset_x_spin:
+                self.ocr_offset_x_spin.setValue(
+                    DetectConfigService._coerce_float(offset_x)
+                )
+            if self.ocr_offset_y_spin:
+                self.ocr_offset_y_spin.setValue(
+                    DetectConfigService._coerce_float(offset_y)
+                )
         finally:
             self._suspend_auto_save = previous
 
@@ -494,11 +535,21 @@ class DetectConfigDialog(QDialog):
         if self.ocr_auto_color_checkbox:
             auto_color = self.ocr_auto_color_checkbox.isChecked() and self._ocr_available
 
+        offset_x = 0.0
+        if self.ocr_offset_x_spin:
+            offset_x = float(self.ocr_offset_x_spin.value())
+
+        offset_y = 0.0
+        if self.ocr_offset_y_spin:
+            offset_y = float(self.ocr_offset_y_spin.value())
+
         return {
             "font_color": list(self._ocr_color),
             "opacity": max(0.0, min(1.0, 1.0 - opacity_percent / 100.0)),
             "ocr_before_detect": ocr_before_detect,
             "auto_color": auto_color,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
         }
 
     def _on_select_all_clicked(self):
@@ -565,6 +616,8 @@ class DetectConfigDialog(QDialog):
                     opacity=ocr_settings.get("opacity", 0.0),
                     ocr_before_detect=ocr_settings.get("ocr_before_detect", False),
                     auto_color=ocr_settings.get("auto_color", False),
+                    offset_x=ocr_settings.get("offset_x", 0.0),
+                    offset_y=ocr_settings.get("offset_y", 0.0),
                 )
         except Exception as exc:
             logger.warning(f"設定ファイルの変更反映に失敗: {exc}")
