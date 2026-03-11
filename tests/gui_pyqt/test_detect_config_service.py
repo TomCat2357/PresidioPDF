@@ -807,3 +807,43 @@ def test_on_preview_entity_clicked_moves_focus_to_result_table():
 
     assert fake.result_panel.selected_rows == [0]
     assert fake.result_panel.focused is True
+
+
+class _MainWindowHelpPickDouble:
+    def __init__(self, resolved_topic):
+        self._help_pick_mode = True
+        self.resolved_topic = resolved_topic
+        self.stopped = False
+        self.shown_topics = []
+
+    def _stop_help_pick_mode(self):
+        self._help_pick_mode = False
+        self.stopped = True
+
+    def _resolve_help_topic_for_widget(self, widget):
+        return self.resolved_topic
+
+    def _show_help_topic(self, topic_id):
+        self.shown_topics.append(topic_id)
+
+
+def test_handle_help_pick_click_shows_resolved_topic():
+    fake = _MainWindowHelpPickDouble("detect")
+
+    consumed = MainWindow._handle_help_pick_click(fake, object())
+
+    assert consumed is True
+    assert fake.stopped is True
+    assert fake.shown_topics == ["detect"]
+    assert fake._help_pick_mode is False
+
+
+def test_handle_help_pick_click_on_unmapped_target_shows_nothing():
+    fake = _MainWindowHelpPickDouble(None)
+
+    consumed = MainWindow._handle_help_pick_click(fake, object())
+
+    assert consumed is True
+    assert fake.stopped is True
+    assert fake.shown_topics == []
+    assert fake._help_pick_mode is False

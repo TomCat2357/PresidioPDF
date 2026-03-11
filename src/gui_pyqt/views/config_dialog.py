@@ -9,9 +9,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from PyQt6.QtCore import QFileSystemWatcher, Qt
+from PyQt6.QtCore import QFileSystemWatcher, Qt, QEvent, QObject
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QColorDialog,
@@ -29,16 +30,19 @@ from PyQt6.QtWidgets import (
     QSlider,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from src.core.entity_types import get_entity_type_name_ja
 from src.gui_pyqt.services.detect_config_service import DetectConfigService
+from .help_dialog import HelpDialog
 
 
 class DetectConfigDialog(QDialog):
     """検出エンティティ設定ダイアログ"""
 
     DISPLAY_CONFIG_NAME = "config.json"
+    HELP_PICK_TITLE_SUFFIX = " [ヘルプ対象をクリック]"
 
     def __init__(
         self,
@@ -94,6 +98,17 @@ class DetectConfigDialog(QDialog):
         self._all_models: List[str] = list(all_models or [])
         self._file_watcher: Optional[QFileSystemWatcher] = None
         self._suspend_auto_save = False
+        self.help_dialog: Optional[HelpDialog] = None
+        self._help_pick_mode = False
+        self._help_pick_previous_title = ""
+        self.info_label: Optional[QLabel] = None
+        self.entity_group: Optional[QGroupBox] = None
+        self.model_group: Optional[QGroupBox] = None
+        self.duplicate_group: Optional[QGroupBox] = None
+        self.preprocess_group: Optional[QGroupBox] = None
+        self.ocr_group: Optional[QGroupBox] = None
+        self.close_button_box: Optional[QDialogButtonBox] = None
+        self.close_button: Optional[QPushButton] = None
         self._init_ui()
         self.set_enabled_entities(enabled_entities)
         self.set_duplicate_settings(
@@ -123,6 +138,7 @@ class DetectConfigDialog(QDialog):
         info = QLabel("チェックした対象のみ検出します。")
         info.setWordWrap(True)
         layout.addWidget(info)
+        self.info_label = info
 
         entity_group = QGroupBox("検出対象")
         entity_layout = QGridLayout()
@@ -137,6 +153,7 @@ class DetectConfigDialog(QDialog):
         entity_layout.setColumnStretch(1, 1)
         entity_group.setLayout(entity_layout)
         layout.addWidget(entity_group)
+        self.entity_group = entity_group
 
         select_row = QHBoxLayout()
         self.select_all_button = QPushButton("全選択")
@@ -161,6 +178,7 @@ class DetectConfigDialog(QDialog):
         model_layout.addStretch()
         model_group.setLayout(model_layout)
         layout.addWidget(model_group)
+        self.model_group = model_group
 
         duplicate_group = QGroupBox("重複削除設定")
         duplicate_layout = QVBoxLayout()
@@ -193,6 +211,7 @@ class DetectConfigDialog(QDialog):
 
         duplicate_group.setLayout(duplicate_layout)
         layout.addWidget(duplicate_group)
+        self.duplicate_group = duplicate_group
 
         preprocess_group = QGroupBox("テキスト前処理設定")
         preprocess_layout = QVBoxLayout()
@@ -204,6 +223,7 @@ class DetectConfigDialog(QDialog):
         preprocess_layout.addWidget(self.ignore_whitespace_checkbox)
         preprocess_group.setLayout(preprocess_layout)
         layout.addWidget(preprocess_group)
+        self.preprocess_group = preprocess_group
 
         ocr_group = QGroupBox("OCR設定 (NDLOCR-Lite)")
         ocr_layout = QVBoxLayout()
@@ -276,6 +296,7 @@ class DetectConfigDialog(QDialog):
 
         ocr_group.setLayout(ocr_layout)
         layout.addWidget(ocr_group)
+        self.ocr_group = ocr_group
 
         action_row = QHBoxLayout()
         self.open_json_button = QPushButton(self.DISPLAY_CONFIG_NAME)
@@ -290,9 +311,12 @@ class DetectConfigDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.close_button_box = buttons
+        self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
 
         self.setLayout(layout)
         self._connect_auto_save_signals()
+        self._install_help_event_filters()
 
     def _connect_auto_save_signals(self):
         for checkbox in self.checkboxes.values():
@@ -330,6 +354,170 @@ class DetectConfigDialog(QDialog):
         if self._suspend_auto_save:
             return
         self.save_current_to_file()
+
+    def _install_help_event_filters(self):
+        """ダイアログ内ヘルプ用に全ウィジェットへイベントフィルタを設定する"""
+        self.installEventFilter(self)
+        for widget in self.findChildren(QWidget):
+            widget.installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """F1/Esc とヘルプ対象クリックを横取りする"""
+        event_type = event.type()
+        if event_type == QEvent.Type.KeyPress:
+            key_getter = getattr(event, "key", None)
+            if callable(key_getter):
+                key = key_getter()
+                if key == Qt.Key.Key_F1:
+                    self._start_help_pick_mode()
+                    return True
+                if key == Qt.Key.Key_Escape and self._help_pick_mode:
+                    self._stop_help_pick_mode()
+                    return True
+
+        if (
+            self._help_pick_mode
+            and event_type == QEvent.Type.MouseButtonPress
+            and self._is_left_mouse_press(event)
+        ):
+            clicked_widget = self._resolve_help_click_widget(watched, event)
+            return self._handle_help_pick_click(clicked_widget)
+
+        return super().eventFilter(watched, event)
+
+    @staticmethod
+    def _is_left_mouse_press(event: QEvent) -> bool:
+        """左クリック押下イベントだけを判定する"""
+        button_getter = getattr(event, "button", None)
+        if not callable(button_getter):
+            return False
+        return button_getter() == Qt.MouseButton.LeftButton
+
+    @staticmethod
+    def _resolve_help_click_widget(
+        watched: QObject, event: QEvent
+    ) -> Optional[QWidget]:
+        """ヘルプ対象判定に使うクリック先ウィジェットを返す"""
+        global_position_getter = getattr(event, "globalPosition", None)
+        if callable(global_position_getter):
+            widget = QApplication.widgetAt(global_position_getter().toPoint())
+            if widget is not None:
+                return widget
+        if isinstance(watched, QWidget):
+            return watched
+        return None
+
+    def _show_help_topic(self, topic_id: str):
+        """指定トピックのヘルプダイアログを開く"""
+        if self.help_dialog is None:
+            self.help_dialog = HelpDialog(self)
+        self.help_dialog.show_topic(topic_id)
+        self.help_dialog.exec()
+
+    def _start_help_pick_mode(self):
+        """設定ダイアログ内のF1ヘルプ待機モードを開始する"""
+        if self._help_pick_mode:
+            return
+        self._help_pick_previous_title = self.windowTitle()
+        self._help_pick_mode = True
+        self.setWindowTitle(
+            f"{self._help_pick_previous_title}{self.HELP_PICK_TITLE_SUFFIX}"
+        )
+        QApplication.setOverrideCursor(Qt.CursorShape.WhatsThisCursor)
+
+    def _stop_help_pick_mode(self):
+        """設定ダイアログ内のヘルプ待機モードを終了する"""
+        if not self._help_pick_mode:
+            return
+        self._help_pick_mode = False
+        self.setWindowTitle(self._help_pick_previous_title or "設定")
+        if QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+
+    def _handle_help_pick_click(self, widget: Optional[QWidget]) -> bool:
+        """ヘルプ待機中の左クリックを処理する"""
+        if not self._help_pick_mode:
+            return False
+
+        self._stop_help_pick_mode()
+        topic_id = self.help_topic_for_widget(widget)
+        if topic_id is None:
+            return True
+
+        self._show_help_topic(topic_id)
+        return True
+
+    def help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
+        """対象ウィジェットに対応するヘルプトピックを返す"""
+        if widget is None:
+            return None
+
+        topic_targets = [
+            (
+                "settings_entities",
+                [
+                    self.info_label,
+                    self.entity_group,
+                    self.select_all_button,
+                    *self.checkboxes.values(),
+                ],
+            ),
+            ("settings_model", [self.model_group, self.model_combo]),
+            (
+                "settings_duplicate_entity_overlap",
+                [
+                    self.entity_overlap_any_radio,
+                    self.entity_overlap_same_radio,
+                ],
+            ),
+            (
+                "settings_duplicate_overlap",
+                [
+                    self.overlap_contain_radio,
+                    self.overlap_overlap_radio,
+                ],
+            ),
+            (
+                "settings_text_preprocess",
+                [
+                    self.preprocess_group,
+                    self.ignore_newlines_checkbox,
+                    self.ignore_whitespace_checkbox,
+                ],
+            ),
+            (
+                "settings_ocr",
+                [
+                    self.ocr_group,
+                    self.ocr_status_label,
+                    self.ocr_color_button,
+                    self.ocr_opacity_slider,
+                    self.ocr_opacity_spin,
+                    self.ocr_before_detect_checkbox,
+                    self.ocr_auto_color_checkbox,
+                    self.ocr_offset_x_spin,
+                    self.ocr_offset_y_spin,
+                ],
+            ),
+            ("settings_config_file", [self.open_json_button]),
+            ("settings_import_export", [self.import_button, self.export_button]),
+            ("settings_close", [self.close_button_box, self.close_button]),
+        ]
+        for topic_id, targets in topic_targets:
+            for target in targets:
+                if target is not None and self._widget_matches_target(widget, target):
+                    return topic_id
+        return None
+
+    @staticmethod
+    def _widget_matches_target(widget: QWidget, target: QWidget) -> bool:
+        """widget が target 自身またはその子孫かを判定する"""
+        current = widget
+        while current is not None:
+            if current is target:
+                return True
+            current = current.parentWidget()
+        return False
 
     def set_enabled_entities(self, enabled_entities: List[str]):
         enabled = {str(name).strip().upper() for name in (enabled_entities or [])}
@@ -667,3 +855,8 @@ class DetectConfigDialog(QDialog):
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    def done(self, result: int):
+        """終了前にヘルプ待機状態を必ず解除する"""
+        self._stop_help_pick_mode()
+        super().done(result)

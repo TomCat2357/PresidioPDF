@@ -46,7 +46,6 @@ from PyQt6.QtGui import (
     QCloseEvent,
     QShortcut,
     QKeySequence,
-    QCursor,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +67,7 @@ class MainWindow(QMainWindow):
 
     EMBEDDED_MAPPING_FILENAME = "presidiopdf_mapping.json"
     SIDECAR_SUFFIX = ".presidiopdf.json"
+    HELP_PICK_STATUS_MESSAGE = "ヘルプ: 説明したい部品を左クリックしてください"
 
     @staticmethod
     def _sidecar_path_for(pdf_path: Path) -> Path:
@@ -121,6 +121,8 @@ class MainWindow(QMainWindow):
         self._is_dirty = False
         self.help_dialog: Optional[HelpDialog] = None
         self._toolbar_help_targets: List[Tuple[QWidget, str]] = []
+        self._help_pick_mode = False
+        self._help_pick_previous_status_message = ""
 
         self.init_ui()
         self.connect_signals()
@@ -168,6 +170,13 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         """アプリ内のどこにドロップしてもPDF読込へ接続する"""
         event_type = event.type()
+        if (
+            self._help_pick_mode
+            and event_type == QEvent.Type.MouseButtonPress
+            and self._is_left_mouse_press(event)
+        ):
+            clicked_widget = self._resolve_help_click_widget(watched, event)
+            return self._handle_help_pick_click(clicked_widget)
         if event_type in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
             file_path = self._extract_dropped_pdf_path(event)
             if file_path is not None:
@@ -180,6 +189,28 @@ class MainWindow(QMainWindow):
                 self.on_pdf_dropped(file_path)
                 return True
         return super().eventFilter(watched, event)
+
+    @staticmethod
+    def _is_left_mouse_press(event: QEvent) -> bool:
+        """左クリック押下イベントだけを判定する"""
+        button_getter = getattr(event, "button", None)
+        if not callable(button_getter):
+            return False
+        return button_getter() == Qt.MouseButton.LeftButton
+
+    @staticmethod
+    def _resolve_help_click_widget(
+        watched: QObject, event: QEvent
+    ) -> Optional[QWidget]:
+        """ヘルプ対象判定に使うクリック先ウィジェットを返す"""
+        global_position_getter = getattr(event, "globalPosition", None)
+        if callable(global_position_getter):
+            widget = QApplication.widgetAt(global_position_getter().toPoint())
+            if widget is not None:
+                return widget
+        if isinstance(watched, QWidget):
+            return watched
+        return None
 
     def create_toolbar(self):
         """ツールバーの作成"""
@@ -359,14 +390,11 @@ class MainWindow(QMainWindow):
         self.export_button = export_button
 
         # ヘルプ（ぶら下がりメニュー）
-        self.help_context_action = QAction("現在の操作を説明 (F1)", self)
+        self.help_context_action = QAction("部品をクリックして説明 (F1)", self)
         self.help_context_action.setShortcut(QKeySequence("F1"))
         self.help_context_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        self.help_context_action.triggered.connect(self._show_context_help)
+        self.help_context_action.triggered.connect(self._start_help_pick_mode)
         self.addAction(self.help_context_action)
-
-        self.general_help_action = QAction("使い方ガイド", self)
-        self.general_help_action.triggered.connect(self._show_general_help)
 
         dedupe_priority_action = QAction("重複削除優先順位", self)
         dedupe_priority_action.triggered.connect(self._show_dedupe_priority_help)
@@ -374,12 +402,11 @@ class MainWindow(QMainWindow):
 
         help_menu = QMenu(self)
         help_menu.addAction(self.help_context_action)
-        help_menu.addAction(self.general_help_action)
         help_menu.addAction(dedupe_priority_action)
 
         help_button = QToolButton(self)
         help_button.setText("ヘルプ")
-        help_button.setToolTip("F1で現在の操作を説明")
+        help_button.setToolTip("F1のあと左クリックした部品を説明")
         help_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         help_button.setMenu(help_menu)
         toolbar.addWidget(help_button)
@@ -432,6 +459,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.log_text)
 
         panel.setLayout(layout)
+        self.log_panel = panel
+        self.log_label = log_label
         return panel
 
     def create_statusbar(self):
@@ -471,30 +500,36 @@ class MainWindow(QMainWindow):
         self.help_dialog.show_topic(topic_id)
         self.help_dialog.exec()
 
-    def _show_context_help(self):
-        """現在の文脈に応じたヘルプを開く"""
-        self._show_help_topic(self._resolve_help_topic())
+    def _start_help_pick_mode(self):
+        """F1後の左クリック対象ヘルプモードを開始する"""
+        if self._help_pick_mode:
+            return
+        self._help_pick_previous_status_message = self.statusBar().currentMessage()
+        self._help_pick_mode = True
+        self.statusBar().showMessage(self.HELP_PICK_STATUS_MESSAGE)
+        QApplication.setOverrideCursor(Qt.CursorShape.WhatsThisCursor)
 
-    def _show_general_help(self):
-        """総合ガイドを開く"""
-        self._show_help_topic("general")
+    def _stop_help_pick_mode(self):
+        """左クリック対象ヘルプモードを終了する"""
+        if not self._help_pick_mode:
+            return
+        self._help_pick_mode = False
+        self.statusBar().showMessage(self._help_pick_previous_status_message)
+        if QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
 
-    def _resolve_help_topic(self) -> str:
-        """現在のフォーカスとカーソル位置からヘルプトピックを決める"""
-        focus_widget = QApplication.focusWidget()
-        cursor_widget = QApplication.widgetAt(QCursor.pos())
-        candidates = [focus_widget]
-        if cursor_widget is not focus_widget:
-            candidates.append(cursor_widget)
-        return self._resolve_help_topic_from_widgets(candidates)
+    def _handle_help_pick_click(self, widget: Optional[QWidget]) -> bool:
+        """ヘルプ待機中の左クリックを処理する"""
+        if not self._help_pick_mode:
+            return False
 
-    def _resolve_help_topic_from_widgets(self, widgets: List[Optional[QWidget]]) -> str:
-        """候補ウィジェット群から最初に一致したヘルプトピックを返す"""
-        for widget in widgets:
-            topic_id = self._resolve_help_topic_for_widget(widget)
-            if topic_id is not None:
-                return topic_id
-        return "general"
+        self._stop_help_pick_mode()
+        topic_id = self._resolve_help_topic_for_widget(widget)
+        if topic_id is None:
+            return True
+
+        self._show_help_topic(topic_id)
+        return True
 
     def _resolve_help_topic_for_widget(
         self, widget: Optional[QWidget]
@@ -507,11 +542,21 @@ class MainWindow(QMainWindow):
             self.result_panel.help_topic_for_widget,
             self.pdf_preview.help_topic_for_widget,
             self._toolbar_help_topic_for_widget,
+            self._log_panel_help_topic_for_widget,
+            self._status_bar_help_topic_for_widget,
         ):
             topic_id = resolver(widget)
             if topic_id is not None:
                 return topic_id
         return None
+
+    def _resolve_help_topic_from_widgets(self, widgets: List[Optional[QWidget]]) -> str:
+        """複数候補から最初に解決できたヘルプトピックを返す"""
+        for widget in widgets:
+            topic_id = self._resolve_help_topic_for_widget(widget)
+            if topic_id is not None:
+                return topic_id
+        return "general"
 
     def _toolbar_help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
         """ツールバー配下ウィジェットのトピックを返す"""
@@ -520,6 +565,31 @@ class MainWindow(QMainWindow):
         for target, topic_id in self._toolbar_help_targets:
             if self._widget_matches_target(widget, target):
                 return topic_id
+        return None
+
+    def _log_panel_help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
+        """ログパネル配下ウィジェットのトピックを返す"""
+        if widget is None:
+            return None
+
+        for target in (
+            getattr(self, "log_panel", None),
+            getattr(self, "log_label", None),
+            getattr(self, "log_text", None),
+        ):
+            if target is not None and self._widget_matches_target(widget, target):
+                return "log_panel"
+        return None
+
+    def _status_bar_help_topic_for_widget(
+        self, widget: Optional[QWidget]
+    ) -> Optional[str]:
+        """ステータスバー配下ウィジェットのトピックを返す"""
+        if widget is None:
+            return None
+        status_bar = self.statusBar()
+        if status_bar is not None and self._widget_matches_target(widget, status_bar):
+            return "status_bar"
         return None
 
     @staticmethod
@@ -594,6 +664,15 @@ class MainWindow(QMainWindow):
         self.last_page_shortcut = QShortcut(QKeySequence("End"), self)
         self.last_page_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self.last_page_shortcut.activated.connect(self._go_to_last_page)
+
+        self.help_cancel_shortcut = QShortcut(QKeySequence("Esc"), self)
+        self.help_cancel_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.help_cancel_shortcut.activated.connect(self._cancel_help_pick_mode)
+
+    def _cancel_help_pick_mode(self):
+        """ヘルプ待機中ならEscで終了する"""
+        if self._help_pick_mode:
+            self._stop_help_pick_mode()
 
     def _go_to_first_page(self):
         """先頭ページへ移動"""
