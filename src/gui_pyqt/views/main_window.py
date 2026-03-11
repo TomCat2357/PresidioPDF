@@ -271,10 +271,13 @@ class MainWindow(QMainWindow):
 
         # 対象検出（ぶら下がりメニュー）
         self.detect_current_action = QAction("表示ページ", self)
+        self.detect_current_action.setShortcut(QKeySequence("F5"))
+        self.detect_current_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.detect_current_action.triggered.connect(self.on_detect_current_page)
+        self.addAction(self.detect_current_action)
 
         self.detect_all_action = QAction("全ページ", self)
-        self.detect_all_action.setShortcut(QKeySequence("F5"))
+        self.detect_all_action.setShortcut(QKeySequence("Shift+F5"))
         self.detect_all_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.detect_all_action.triggered.connect(self.on_detect_all_pages)
         self.addAction(self.detect_all_action)
@@ -446,6 +449,7 @@ class MainWindow(QMainWindow):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("検索ワード")
+        self.search_input.setClearButtonEnabled(True)
         self.search_input.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.search_input.returnPressed.connect(self.on_search_requested)
         self.search_input.textChanged.connect(self.on_search_text_changed)

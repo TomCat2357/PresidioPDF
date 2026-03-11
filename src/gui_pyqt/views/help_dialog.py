@@ -28,7 +28,8 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
   <tr><th align="left">キー</th><th align="left">動作</th></tr>
   <tr><td><code>F1</code></td><td>現在の操作に応じたヘルプを開く</td></tr>
   <tr><td><code>Esc</code></td><td>F1 の説明待ちを解除し、? カーソルを消す</td></tr>
-  <tr><td><code>F5</code></td><td>全ページの対象検出を実行</td></tr>
+  <tr><td><code>F5</code></td><td>表示ページの対象検出を実行</td></tr>
+  <tr><td><code>Shift+F5</code></td><td>全ページの対象検出を実行</td></tr>
   <tr><td><code>PgDown</code> / <code>PgUp</code></td><td>ページ移動</td></tr>
   <tr><td><code>Home</code> / <code>End</code></td><td>先頭 / 最後のページへ移動</td></tr>
   <tr><td><code>Delete</code></td><td>選択エンティティを削除</td></tr>
