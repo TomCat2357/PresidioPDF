@@ -671,7 +671,15 @@ class ResultPanel(QWidget):
 
     def focus_results_table(self):
         """結果テーブルにフォーカスを移す"""
-        if self.results_table.rowCount() > 1:
+        selection_model = self.results_table.selectionModel()
+        has_selected_rows = bool(
+            selection_model is not None and selection_model.selectedRows()
+        )
+        if (
+            not has_selected_rows
+            and self.results_table.currentRow() < 1
+            and self.results_table.rowCount() > 1
+        ):
             self.results_table.setCurrentCell(1, 0)
         self.results_table.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.results_table.viewport().setFocus(Qt.FocusReason.ShortcutFocusReason)
