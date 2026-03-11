@@ -37,6 +37,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QInputDialog,
+    QLineEdit,
+    QPushButton,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtCore import QUrl, QEvent, QObject
@@ -121,8 +123,11 @@ class MainWindow(QMainWindow):
         self._is_dirty = False
         self.help_dialog: Optional[HelpDialog] = None
         self._toolbar_help_targets: List[Tuple[QWidget, str]] = []
+        self._search_help_targets: List[QWidget] = []
         self._help_pick_mode = False
         self._help_pick_previous_status_message = ""
+        self._search_matches: List[Dict[str, Any]] = []
+        self._current_search_match_index: int = -1
 
         self.init_ui()
         self.connect_signals()
@@ -249,6 +254,15 @@ class MainWindow(QMainWindow):
         self.addAction(config_action)
         toolbar.addAction(config_action)
         self.config_action = config_action
+
+        search_action = QAction("検索", self)
+        search_action.setShortcut(QKeySequence("Ctrl+F"))
+        search_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        search_action.setStatusTip("検索バーを表示して文書内検索")
+        search_action.triggered.connect(self.show_search_bar)
+        self.addAction(search_action)
+        toolbar.addAction(search_action)
+        self.search_action = search_action
 
         # Read（内部的に保持、ツールバーには非表示）
         read_action = QAction("📖 Read", self)
@@ -418,6 +432,59 @@ class MainWindow(QMainWindow):
 
     def create_central_widget(self):
         """中央ウィジェットの作成（Phase 4: 2分割レイアウト）"""
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(6)
+
+        self.search_panel = QWidget()
+        search_layout = QHBoxLayout()
+        search_layout.setContentsMargins(8, 6, 8, 6)
+        search_layout.setSpacing(6)
+        self.search_label = QLabel("検索:")
+        search_layout.addWidget(self.search_label)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("検索ワード")
+        self.search_input.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.search_input.returnPressed.connect(self.on_search_requested)
+        self.search_input.textChanged.connect(self.on_search_text_changed)
+        search_layout.addWidget(self.search_input, 1)
+
+        self.search_execute_button = QPushButton("検索")
+        self.search_execute_button.clicked.connect(self.on_search_requested)
+        search_layout.addWidget(self.search_execute_button)
+
+        self.search_prev_button = QPushButton("前候補")
+        self.search_prev_button.clicked.connect(self.on_search_previous)
+        search_layout.addWidget(self.search_prev_button)
+
+        self.search_next_button = QPushButton("次候補")
+        self.search_next_button.clicked.connect(self.on_search_next)
+        search_layout.addWidget(self.search_next_button)
+
+        self.search_add_button = QPushButton("追加")
+        self.search_add_button.clicked.connect(self.on_add_current_search_match)
+        search_layout.addWidget(self.search_add_button)
+
+        self.search_add_all_button = QPushButton("全件追加")
+        self.search_add_all_button.clicked.connect(self.on_add_all_search_matches)
+        search_layout.addWidget(self.search_add_all_button)
+
+        self.search_panel.setLayout(search_layout)
+        self.search_panel.setVisible(False)
+        self._search_help_targets = [
+            self.search_panel,
+            self.search_label,
+            self.search_input,
+            self.search_execute_button,
+            self.search_prev_button,
+            self.search_next_button,
+            self.search_add_button,
+            self.search_add_all_button,
+        ]
+        container_layout.addWidget(self.search_panel)
+
         # メイン水平スプリッター（2分割: プレビュー、検出結果）
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -443,7 +510,11 @@ class MainWindow(QMainWindow):
         # 分割比率（メイン:ログ = 5:1）
         vertical_splitter.setSizes([750, 150])
 
-        self.setCentralWidget(vertical_splitter)
+        container_layout.addWidget(vertical_splitter, 1)
+        container.setLayout(container_layout)
+        self.setCentralWidget(container)
+        self._update_search_ui_state()
+        self.update_action_states()
 
     def create_log_panel(self) -> QWidget:
         """ログ/メッセージ表示パネル"""
@@ -475,6 +546,7 @@ class MainWindow(QMainWindow):
             (self.open_action, "file"),
             (self.close_pdf_action, "file"),
             (self.config_action, "settings"),
+            (self.search_action, "search"),
             (self.save_action, "save"),
         ]
         for action, topic_id in action_targets:
@@ -541,6 +613,7 @@ class MainWindow(QMainWindow):
         for resolver in (
             self.result_panel.help_topic_for_widget,
             self.pdf_preview.help_topic_for_widget,
+            self._search_help_topic_for_widget,
             self._toolbar_help_topic_for_widget,
             self._log_panel_help_topic_for_widget,
             self._status_bar_help_topic_for_widget,
@@ -565,6 +638,15 @@ class MainWindow(QMainWindow):
         for target, topic_id in self._toolbar_help_targets:
             if self._widget_matches_target(widget, target):
                 return topic_id
+        return None
+
+    def _search_help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
+        """検索バー配下ウィジェットのトピックを返す"""
+        if widget is None:
+            return None
+        for target in self._search_help_targets:
+            if self._widget_matches_target(widget, target):
+                return "search"
         return None
 
     def _log_panel_help_topic_for_widget(self, widget: Optional[QWidget]) -> Optional[str]:
@@ -632,6 +714,7 @@ class MainWindow(QMainWindow):
         self.result_panel.entity_deleted.connect(self.on_entity_deleted)
         self.result_panel.entity_updated.connect(self.on_entity_updated)
         self.result_panel.entity_added.connect(self.on_entity_added)
+        self.result_panel.entities_added.connect(self.on_entities_added)
         self.result_panel.register_selected_to_omit_requested.connect(
             self.on_register_selected_to_omit_requested
         )
@@ -646,6 +729,7 @@ class MainWindow(QMainWindow):
         self.pdf_preview.entity_clicked.connect(self.on_preview_entity_clicked)
         self.pdf_preview.text_selected.connect(self.on_text_selected)
         self.pdf_preview.pdf_file_dropped.connect(self.on_pdf_dropped)
+        self.pdf_preview.preview_activated.connect(self.on_preview_activated)
 
     def _setup_keyboard_shortcuts(self):
         """全体ショートカットを設定"""
@@ -668,6 +752,10 @@ class MainWindow(QMainWindow):
         self.help_cancel_shortcut = QShortcut(QKeySequence("Esc"), self)
         self.help_cancel_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self.help_cancel_shortcut.activated.connect(self._cancel_help_pick_mode)
+
+        self.select_all_shortcut = QShortcut(QKeySequence("Ctrl+A"), self)
+        self.select_all_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.select_all_shortcut.activated.connect(self.on_select_all_shortcut)
 
     def _cancel_help_pick_mode(self):
         """ヘルプ待機中ならEscで終了する"""
@@ -1758,6 +1846,7 @@ class MainWindow(QMainWindow):
 
     def on_pdf_path_changed(self, pdf_path: Optional[Path]):
         """PDFパスが変更された"""
+        self._clear_search_matches()
         if pdf_path:
             self.statusBar().showMessage(f"PDFファイル: {pdf_path.name}")
             # Phase 4: PDFプレビューに読み込み
@@ -1775,6 +1864,7 @@ class MainWindow(QMainWindow):
             page_count = pdf_info.get("page_count", 0)
             self.statusBar().showMessage(f"ページ数: {page_count}")
 
+        self._refresh_search_matches_from_query()
         self.update_action_states()
 
     def on_detect_result_changed(self, result: Optional[dict]):
@@ -1805,6 +1895,7 @@ class MainWindow(QMainWindow):
         else:
             self._all_preview_entities = []
             self.pdf_preview.set_highlighted_entities([])
+        self._refresh_search_matches_from_query()
         self.update_action_states()
 
     # =========================================================================
@@ -1902,6 +1993,25 @@ class MainWindow(QMainWindow):
         self._update_app_state_from_result_panel()
 
         # プレビューを再描画
+        current_result = (
+            self.app_state.duplicate_result
+            or self.app_state.detect_result
+            or self.app_state.read_result
+        )
+        if current_result:
+            self._highlight_all_entities(current_result)
+
+    def on_entities_added(self, entities: list):
+        """エンティティが複数追加された"""
+        count = len([entity for entity in entities if isinstance(entity, dict)])
+        if count <= 0:
+            return
+
+        self.log_message(f"PII追加: {count}件")
+        self._set_dirty(True)
+
+        self._update_app_state_from_result_panel()
+
         current_result = (
             self.app_state.duplicate_result
             or self.app_state.detect_result
@@ -2068,6 +2178,247 @@ class MainWindow(QMainWindow):
             return text_2d
         return []
 
+    def _get_search_text_2d(self) -> List[List[str]]:
+        """検索に使う text 二次元配列を返す"""
+        text_2d = self._extract_text_2d_from_result(self._get_current_result())
+        if text_2d:
+            return text_2d
+        return self._extract_text_2d_from_result(self.app_state.read_result)
+
+    @staticmethod
+    def _flatten_text_2d(text_2d: List[List[str]]) -> str:
+        """text 二次元配列を全文文字列へ連結する"""
+        full_text_parts: List[str] = []
+        for page_blocks in text_2d:
+            if not isinstance(page_blocks, list):
+                continue
+            for block in page_blocks:
+                full_text_parts.append(str(block or ""))
+        return "".join(full_text_parts)
+
+    def _has_search_source(self) -> bool:
+        """検索可能な text 情報があるかを返す"""
+        return bool(self._get_search_text_2d())
+
+    def on_search_text_changed(self, _: str):
+        """検索文字列変更時は候補をクリアする"""
+        self._clear_search_matches()
+        self._update_search_ui_state()
+
+    def _hide_search_bar(self):
+        """検索バーを閉じ、検索候補だけをクリアする"""
+        if not hasattr(self, "search_panel"):
+            return
+        self.search_panel.setVisible(False)
+        self._clear_search_matches()
+        self._update_search_ui_state()
+
+    def show_search_bar(self):
+        """検索バーの表示/非表示を切り替える"""
+        if not hasattr(self, "search_panel"):
+            return
+        if self.search_panel.isVisible():
+            self._hide_search_bar()
+            return
+
+        self.search_panel.setVisible(True)
+        self.search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.search_input.selectAll()
+        self._update_search_ui_state()
+
+    def _clear_search_matches(self):
+        """検索候補とハイライトをクリアする"""
+        self._search_matches = []
+        self._current_search_match_index = -1
+        if hasattr(self, "pdf_preview"):
+            self.pdf_preview.set_search_highlight(None)
+
+    def _update_search_ui_state(self):
+        """検索UIの有効状態を更新する"""
+        if not hasattr(self, "search_input") or not hasattr(self, "search_panel"):
+            return
+
+        has_query = bool(self.search_input.text())
+        has_matches = len(self._search_matches) > 0
+        has_source = self._has_search_source()
+        panel_enabled = self.search_panel.isEnabled()
+        self.search_execute_button.setEnabled(has_query and has_source and panel_enabled)
+        self.search_prev_button.setEnabled(has_matches and panel_enabled)
+        self.search_next_button.setEnabled(has_matches and panel_enabled)
+        self.search_add_button.setEnabled(has_matches and panel_enabled)
+        self.search_add_all_button.setEnabled(has_matches and panel_enabled)
+
+    def _refresh_search_matches_from_query(self):
+        """検索候補が有効なときだけ、現在の検索結果を再構築する"""
+        if (
+            not hasattr(self, "search_input")
+            or not hasattr(self, "search_panel")
+            or not self.search_panel.isVisible()
+        ):
+            return
+
+        query = self.search_input.text()
+        if not query:
+            self._clear_search_matches()
+            self._update_search_ui_state()
+            return
+
+        if not self._search_matches:
+            self._update_search_ui_state()
+            return
+
+        previous_key = None
+        if 0 <= self._current_search_match_index < len(self._search_matches):
+            previous_match = self._search_matches[self._current_search_match_index]
+            previous_key = self._build_span_key_from_positions(
+                previous_match.get("start", {}),
+                previous_match.get("end", {}),
+            )
+
+        matches = self._build_search_matches(query)
+        self._search_matches = matches
+        if not matches:
+            self._current_search_match_index = -1
+            self.pdf_preview.set_search_highlight(None)
+            self._update_search_ui_state()
+            return
+
+        next_index = 0
+        if previous_key is not None:
+            for i, match in enumerate(matches):
+                if self._build_span_key_from_positions(
+                    match.get("start", {}),
+                    match.get("end", {}),
+                ) == previous_key:
+                    next_index = i
+                    break
+        self._set_current_search_match(next_index)
+
+    def _build_search_matches(self, query: str) -> List[Dict[str, Any]]:
+        """全文からリテラル一致の検索候補を構築する"""
+        if not query:
+            return []
+
+        text_2d = self._get_search_text_2d()
+        if not text_2d:
+            return []
+        target_text = self._flatten_text_2d(text_2d)
+        if not target_text:
+            return []
+
+        from src.cli.detect_main import _convert_offsets_to_position
+
+        matches: List[Dict[str, Any]] = []
+        offset2coords = self._get_offset2coords_map()
+        seen_spans = set()
+        pattern = re.compile(f"(?={re.escape(query)})")
+        for match in pattern.finditer(target_text):
+            start_offset = int(match.start())
+            end_offset_exclusive = start_offset + len(query)
+            start_pos, end_pos = _convert_offsets_to_position(
+                start_offset,
+                end_offset_exclusive,
+                text_2d,
+            )
+            span_key = self._build_span_key_from_positions(start_pos, end_pos)
+            if span_key in seen_spans:
+                continue
+            seen_spans.add(span_key)
+            matches.append(
+                {
+                    "text": query,
+                    "word": query,
+                    "start": start_pos,
+                    "end": end_pos,
+                    "page_num": int(start_pos.get("page_num", 0) or 0),
+                    "rects_pdf": self._resolve_rects_from_offset_map(
+                        start_pos,
+                        end_pos,
+                        offset2coords,
+                    ),
+                }
+            )
+
+        return matches
+
+    def _set_current_search_match(self, index: int):
+        """現在の検索候補を切り替える"""
+        if not self._search_matches:
+            self._clear_search_matches()
+            self._update_search_ui_state()
+            return
+
+        self._current_search_match_index = index % len(self._search_matches)
+        current_match = self._search_matches[self._current_search_match_index]
+        self.pdf_preview.set_search_highlight(current_match)
+        page_num = int(current_match.get("page_num", 0) or 0)
+        self.pdf_preview.go_to_page(page_num)
+        self.statusBar().showMessage(
+            f"検索候補 {self._current_search_match_index + 1}/{len(self._search_matches)}"
+        )
+        self._update_search_ui_state()
+
+    def on_search_requested(self):
+        """検索語で全文検索を実行する"""
+        query = self.search_input.text()
+        if not query:
+            self._clear_search_matches()
+            self._update_search_ui_state()
+            return
+        if not self._has_search_source():
+            QMessageBox.warning(self, "警告", "検索対象のテキスト情報がありません")
+            self._clear_search_matches()
+            self._update_search_ui_state()
+            return
+
+        self.search_panel.setVisible(True)
+        self._search_matches = self._build_search_matches(query)
+        if not self._search_matches:
+            QMessageBox.information(self, "検索", "一致する候補はありません")
+            self._clear_search_matches()
+            self._update_search_ui_state()
+            return
+
+        self._set_current_search_match(0)
+
+    def on_search_previous(self):
+        """前の検索候補へ移動する"""
+        if not self._search_matches:
+            return
+        self._set_current_search_match(self._current_search_match_index - 1)
+
+    def on_search_next(self):
+        """次の検索候補へ移動する"""
+        if not self._search_matches:
+            return
+        self._set_current_search_match(self._current_search_match_index + 1)
+
+    def on_add_current_search_match(self):
+        """現在の検索候補を手動PIIとして追加する"""
+        if not self._search_matches or self._current_search_match_index < 0:
+            QMessageBox.warning(self, "警告", "追加する検索候補がありません")
+            return
+
+        added_entity = self.result_panel.add_manual_entity(
+            self._search_matches[self._current_search_match_index]
+        )
+        if added_entity is None:
+            QMessageBox.information(
+                self,
+                "検索",
+                "同じ種別・同じ位置の候補は既に追加済みです",
+            )
+
+    def on_add_all_search_matches(self):
+        """検索候補をすべて手動PIIとして追加する"""
+        if not self._search_matches:
+            QMessageBox.warning(self, "警告", "追加する検索候補がありません")
+            return
+
+        added_entities = self.result_panel.add_manual_entities(self._search_matches)
+        if not added_entities:
+            QMessageBox.information(self, "検索", "追加できる候補はありませんでした")
+
     @staticmethod
     def _build_span_key_from_positions(
         start_pos: Dict[str, Any], end_pos: Dict[str, Any]
@@ -2177,14 +2528,67 @@ class MainWindow(QMainWindow):
         # エンティティタイプ選択ダイアログを表示（位置情報は選択領域から自動設定）
         self.result_panel.add_manual_entity(selection_data)
 
+    def on_preview_activated(self):
+        """プレビューがアクティブになったときの処理"""
+        self.pdf_preview.preview_label.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def _is_text_input_widget(self, widget: Optional[QWidget]) -> bool:
+        """テキスト入力系ウィジェットかを返す"""
+        return isinstance(widget, (QLineEdit, QTextEdit))
+
+    def _collect_current_page_entity_indices(self) -> List[int]:
+        """現在ページに表示中の元エンティティインデックス一覧を返す"""
+        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
+        return [
+            row
+            for row in self.result_panel.get_visible_entity_indices()
+            if 0 <= row < len(self.result_panel.entities)
+            and self._entity_page_num(self.result_panel.entities[row]) == current_page
+        ]
+
+    def _apply_select_all_behavior(self):
+        """Ctrl+A の段階選択を適用する"""
+        visible_rows = self.result_panel.get_visible_entity_indices()
+        if not visible_rows:
+            return
+
+        current_page_rows = self._collect_current_page_entity_indices()
+        if not current_page_rows:
+            return
+
+        selected_rows = set(self.result_panel.get_selected_entity_indices())
+        current_page_selected = set(current_page_rows).issubset(selected_rows)
+        if current_page_selected:
+            target_rows = visible_rows
+        else:
+            target_rows = current_page_rows
+        self.result_panel.select_rows(target_rows)
+
+    def on_select_all_shortcut(self):
+        """Ctrl+A を結果表本文・プレビューで共通処理する"""
+        focus_widget = QApplication.focusWidget()
+        if self._is_text_input_widget(focus_widget):
+            return
+        if self.result_panel.is_filter_input_widget(focus_widget):
+            return
+
+        is_preview_context = self._widget_matches_target(
+            focus_widget,
+            self.pdf_preview.preview_label,
+        ) or self._widget_matches_target(focus_widget, self.pdf_preview.scroll_area)
+        is_result_context = (
+            self.result_panel.is_results_table_widget(focus_widget)
+            or self.result_panel.results_table.hasFocus()
+            or self.result_panel.results_table.viewport().hasFocus()
+        )
+        if not is_preview_context and not is_result_context:
+            return
+
+        self._apply_select_all_behavior()
+
     def on_select_current_page_requested(self):
         """Ctrl+A: 表示ページの項目のみResultPanelで全選択"""
-        current_page = int(getattr(self.pdf_preview, "current_page_num", 0) or 0)
-        rows = []
-        for i, entity in enumerate(self.result_panel.get_entities()):
-            if self._entity_page_num(entity) == current_page:
-                rows.append(i)
-        self.result_panel.select_rows(rows)
+        self.result_panel.select_rows(self._collect_current_page_entity_indices())
 
     def on_preview_entity_clicked(self, preview_index: int):
         """PDFプレビュー上のエンティティクリック→ResultPanelの該当行を選択"""
@@ -2847,6 +3251,9 @@ class MainWindow(QMainWindow):
         # 設定: タスク実行中は無効
         self.config_action.setEnabled(not is_running)
 
+        search_enabled = self._has_search_source() and not is_running
+        self.search_action.setEnabled(search_enabled)
+
         # Detect: Read結果があって、タスクが実行中でなければ有効
         detect_enabled = has_read and not is_running
         self.detect_button.setEnabled(detect_enabled)
@@ -2885,6 +3292,9 @@ class MainWindow(QMainWindow):
 
         # Save: PDF + Read結果があり、タスクが実行中でなければ有効
         self.save_action.setEnabled(has_pdf and has_read and not is_running)
+        if hasattr(self, "search_panel"):
+            self.search_panel.setEnabled(not is_running)
+            self._update_search_ui_state()
 
     # =========================================================================
     # TaskRunnerシグナルハンドラ（Phase 2）

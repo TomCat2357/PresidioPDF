@@ -34,7 +34,8 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
   <tr><td><code>Delete</code></td><td>選択エンティティを削除</td></tr>
   <tr><td><code>Backspace</code></td><td>選択語を無視対象に登録</td></tr>
   <tr><td><code>Insert</code></td><td>選択語を追加検出対象に登録</td></tr>
-  <tr><td><code>Ctrl+A</code></td><td>表示ページのエンティティを全選択</td></tr>
+  <tr><td><code>Ctrl+F</code></td><td>検索バーを表示 / 非表示</td></tr>
+  <tr><td><code>Ctrl+A</code></td><td>1回目で表示ページ、2回目で現在表示中の候補を全選択</td></tr>
   <tr><td><code>Ctrl+O</code> / <code>Ctrl+S</code></td><td>PDF を開く / 保存する</td></tr>
 </table>
 <h3>独自用語</h3>
@@ -75,6 +76,21 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
   <li><b>重複削除</b> の判定条件を変えると残る候補が変わります。</li>
 </ul>
 <p>設定ダイアログ内で <code>F1</code> を押すと部品ごとの説明待ちになり、<code>Esc</code> で解除できます。</p>
+""",
+    },
+    "search": {
+        "title": "検索",
+        "body": """
+<h3>対象</h3>
+<p><b>検索</b> ボタンまたは <code>Ctrl+F</code> で検索バーを表示します。もう一度押すと閉じます。</p>
+<h3>できること</h3>
+<ul>
+  <li><b>検索</b>: 入力した文字列そのままで全文検索します。</li>
+  <li><b>前候補</b> / <b>次候補</b>: 一致候補を順に移動し、該当ページへジャンプします。</li>
+  <li><b>追加</b>: 現在候補を手動追加します。</li>
+  <li><b>全件追加</b>: 一致候補をまとめて追加し、種別は1回だけ選びます。</li>
+</ul>
+<p>検索バーを閉じると入力語は残し、候補とハイライトだけをクリアします。</p>
 """,
     },
     "save": {
@@ -181,7 +197,7 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
   <tr><td><code>Delete</code></td><td>選択行を削除</td></tr>
   <tr><td><code>Backspace</code></td><td>選択語を無視対象に登録</td></tr>
   <tr><td><code>Insert</code></td><td>選択語を追加検出対象に登録</td></tr>
-  <tr><td><code>Ctrl+A</code></td><td>表示ページの候補を全選択</td></tr>
+  <tr><td><code>Ctrl+A</code></td><td>1回目で表示ページ、2回目で現在表示中の候補を全選択</td></tr>
 </table>
 """,
     },
@@ -199,6 +215,7 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
   <li><code>PgDown</code> / <code>PgUp</code> でページ移動できます。</li>
   <li><code>Home</code> / <code>End</code> で先頭・末尾ページへ移動できます。</li>
   <li><b>文字列ドラッグ</b> はテキスト範囲選択、<b>長方形ドラッグ</b> と <b>円ドラッグ</b> は図形指定向けです。</li>
+  <li><code>Ctrl+A</code> は1回目で表示ページ、2回目で現在表示中の候補を選択します。</li>
 </ul>
 <p>プレビュー上の候補をクリックすると、対応する結果表の行にフォーカスします。</p>
 """,

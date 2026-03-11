@@ -50,7 +50,13 @@ class ManualAddDialog(QDialog):
         layout = QFormLayout()
 
         # 選択テキスト（読み取り専用）
-        preset_text = str(self.preset_data.get("text", "") or "")
+        preset_text = str(
+            self.preset_data.get(
+                "display_text",
+                self.preset_data.get("text", ""),
+            )
+            or ""
+        )
         self.text_label = QLabel(preset_text if preset_text != "" else "\"\"")
         self.text_label.setWordWrap(True)
         self.text_label.setTextInteractionFlags(
@@ -74,22 +80,23 @@ class ManualAddDialog(QDialog):
 
         self.setLayout(layout)
 
-    def get_entity_data(self) -> Dict:
-        """入力されたエンティティデータを取得"""
-        text = str(self.preset_data.get("text", "") or "")
-        entity_type = self.entity_type_combo.currentData()
+    @staticmethod
+    def build_entity_data(preset_data: Optional[Dict], entity_type: Any) -> Dict:
+        """選択情報と種別からエンティティデータを構築する"""
+        source = dict(preset_data or {})
+        text = str(source.get("text", "") or "")
         # 通常の手動追加（テキスト未選択）は従来どおり無効。
         # 選択モード由来の空文字 "" は有効。
-        if not text and "text" not in self.preset_data:
+        if not text and "text" not in source:
             return {}
 
         # プリセットにstart/endがあればそれを優先。無ければ旧形式から補完。
-        start_pos = self.preset_data.get("start")
-        end_pos = self.preset_data.get("end")
+        start_pos = source.get("start")
+        end_pos = source.get("end")
         if not isinstance(start_pos, dict) or not isinstance(end_pos, dict):
-            page_num = int(self.preset_data.get("page_num", 0) or 0)
-            block_num = int(self.preset_data.get("block_num", 0) or 0)
-            offset = int(self.preset_data.get("offset", 0) or 0)
+            page_num = int(source.get("page_num", 0) or 0)
+            block_num = int(source.get("block_num", 0) or 0)
+            offset = int(source.get("offset", 0) or 0)
             start_pos = {"page_num": page_num, "block_num": block_num, "offset": offset}
             end_pos = {
                 "page_num": page_num,
@@ -107,21 +114,37 @@ class ManualAddDialog(QDialog):
         }
 
         # プリセットから rects_pdf を取得（存在する場合）
-        rects_pdf = self.preset_data.get("rects_pdf")
+        rects_pdf = source.get("rects_pdf")
         if rects_pdf:
             entity["rects_pdf"] = rects_pdf
-        mask_rects_pdf = self.preset_data.get("mask_rects_pdf")
+        mask_rects_pdf = source.get("mask_rects_pdf")
         if mask_rects_pdf:
             entity["mask_rects_pdf"] = mask_rects_pdf
-        mask_circles_pdf = self.preset_data.get("mask_circles_pdf")
+        mask_circles_pdf = source.get("mask_circles_pdf")
         if mask_circles_pdf:
             entity["mask_circles_pdf"] = mask_circles_pdf
 
-        selection_mode = self.preset_data.get("selection_mode")
+        selection_mode = source.get("selection_mode")
         if isinstance(selection_mode, str):
             entity["selection_mode"] = selection_mode
 
         return entity
+
+    @classmethod
+    def select_entity_type(cls, preset_data: Optional[Dict] = None, parent=None) -> Optional[str]:
+        """種別選択ダイアログを開き、選択結果を返す"""
+        dialog = cls(preset_data, parent)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        entity_type = dialog.entity_type_combo.currentData()
+        return str(entity_type) if entity_type else None
+
+    def get_entity_data(self) -> Dict:
+        """入力されたエンティティデータを取得"""
+        return self.build_entity_data(
+            self.preset_data,
+            self.entity_type_combo.currentData(),
+        )
 
 
 class EntityEditDialog(QDialog):
@@ -180,6 +203,7 @@ class ResultPanel(QWidget):
     entity_deleted = pyqtSignal(int)  # 削除されたエンティティのインデックス
     entity_updated = pyqtSignal(int, dict)  # 更新されたエンティティ（インデックス、新しいデータ）
     entity_added = pyqtSignal(dict)  # 追加されたエンティティ
+    entities_added = pyqtSignal(list)  # 追加されたエンティティ（複数）
     register_selected_to_omit_requested = pyqtSignal(list)  # 選択項目をommitへ登録
     register_selected_to_add_requested = pyqtSignal(list)  # 選択項目をadd_entityへ登録
     select_current_page_requested = pyqtSignal()  # Ctrl+A: 表示ページの全選択要求
@@ -281,18 +305,10 @@ class ResultPanel(QWidget):
 
         self.setLayout(layout)
 
-        # ショートカット: Delete / Ctrl+A（表示ページのみ）
+        # ショートカット: Delete
         self.delete_shortcut = QShortcut(QKeySequence("Delete"), self.results_table)
         self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self.delete_selected)
-
-        self.select_current_page_shortcut = QShortcut(QKeySequence("Ctrl+A"), self.results_table)
-        self.select_current_page_shortcut.setContext(
-            Qt.ShortcutContext.WidgetWithChildrenShortcut
-        )
-        self.select_current_page_shortcut.activated.connect(
-            self._on_select_current_page_shortcut
-        )
 
         self.register_omit_shortcut = QShortcut(QKeySequence("Backspace"), self.results_table)
         self.register_omit_shortcut.setContext(
@@ -596,6 +612,21 @@ class ResultPanel(QWidget):
         """Ctrl+Aが押されたときに表示ページ全選択を要求"""
         self.select_current_page_requested.emit()
 
+    def is_filter_input_widget(self, widget: Optional[QWidget]) -> bool:
+        """指定ウィジェットがフィルタ入力欄かを返す"""
+        if widget is None:
+            return False
+        return any(
+            self._widget_matches_target(widget, filter_input)
+            for filter_input in self._filter_inputs
+        )
+
+    def is_results_table_widget(self, widget: Optional[QWidget]) -> bool:
+        """指定ウィジェットが結果テーブル配下かを返す"""
+        if widget is None:
+            return False
+        return self._widget_matches_target(widget, self.results_table)
+
     def show_context_menu(self, pos):
         """コンテキストメニューを表示"""
         if self.results_table.rowCount() == 0:
@@ -640,7 +671,10 @@ class ResultPanel(QWidget):
 
     def focus_results_table(self):
         """結果テーブルにフォーカスを移す"""
+        if self.results_table.rowCount() > 1:
+            self.results_table.setCurrentCell(1, 0)
         self.results_table.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.results_table.viewport().setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def register_selected_to_omit(self):
         """選択語を無視対象（ommit_entity）へ登録する"""
@@ -699,6 +733,18 @@ class ResultPanel(QWidget):
             item.row() - 1 for item in selected_items if item.row() > 0
         ))
         return selected_rows
+
+    def get_selected_entity_indices(self) -> List[int]:
+        """選択中の元エンティティインデックスを返す"""
+        return [
+            self._visible_entity_indices[row]
+            for row in self.get_selected_rows()
+            if 0 <= row < len(self._visible_entity_indices)
+        ]
+
+    def get_visible_entity_indices(self) -> List[int]:
+        """現在表示中の元エンティティインデックス一覧を返す"""
+        return list(self._visible_entity_indices)
 
     def edit_selected(self):
         """選択されたエンティティを編集"""
@@ -813,16 +859,87 @@ class ResultPanel(QWidget):
         """現在のエンティティリストを取得"""
         return self.entities
 
-    def add_manual_entity(self, preset_data: Optional[Dict] = None):
-        """手動PII追加ダイアログを表示"""
-        dialog = ManualAddDialog(preset_data, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            entity = dialog.get_entity_data()
+    @staticmethod
+    def _entity_type_span_key(entity: Dict) -> tuple:
+        """同一種別・同一範囲の判定キー"""
+        start_pos = entity.get("start", {})
+        end_pos = entity.get("end", {})
+        if not isinstance(start_pos, dict):
+            start_pos = {}
+        if not isinstance(end_pos, dict):
+            end_pos = {}
+        return (
+            str(entity.get("entity", "")),
+            int(start_pos.get("page_num", -1) or -1),
+            int(start_pos.get("block_num", -1) or -1),
+            int(start_pos.get("offset", -1) or -1),
+            int(end_pos.get("page_num", -1) or -1),
+            int(end_pos.get("block_num", -1) or -1),
+            int(end_pos.get("offset", -1) or -1),
+        )
+
+    def _append_manual_entities(self, entities: List[Dict]) -> List[Dict]:
+        """手動エンティティを一覧へ追加し、必要なシグナルを発行する"""
+        if not entities:
+            return []
+        self.entities.extend(entities)
+        self.update_table()
+        if len(entities) == 1:
+            self.entity_added.emit(entities[0])
+        else:
+            self.entities_added.emit(list(entities))
+        return entities
+
+    def add_manual_entity(
+        self,
+        preset_data: Optional[Dict] = None,
+        entity_type: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """単一の手動PIIを追加する"""
+        added_entities = self.add_manual_entities(
+            [preset_data or {}],
+            entity_type=entity_type,
+        )
+        if not added_entities:
+            return None
+        return added_entities[0]
+
+    def add_manual_entities(
+        self,
+        preset_items: List[Dict],
+        entity_type: Optional[str] = None,
+    ) -> List[Dict]:
+        """複数の手動PIIをまとめて追加する"""
+        valid_items = [dict(item) for item in preset_items or [] if isinstance(item, dict)]
+        if not valid_items:
+            return []
+
+        resolved_entity_type = entity_type
+        if not resolved_entity_type:
+            dialog_preset = (
+                valid_items[0]
+                if len(valid_items) == 1
+                else {"display_text": f"{len(valid_items)}件を追加"}
+            )
+            resolved_entity_type = ManualAddDialog.select_entity_type(dialog_preset, self)
+            if not resolved_entity_type:
+                return []
+
+        existing_keys = {
+            self._entity_type_span_key(entity)
+            for entity in self.entities
+            if isinstance(entity, dict)
+        }
+        new_entities: List[Dict] = []
+        new_keys = set()
+        for preset in valid_items:
+            entity = ManualAddDialog.build_entity_data(preset, resolved_entity_type)
             if not entity:
-                return
-            # エンティティをリストに追加
-            self.entities.append(entity)
-            # テーブルを更新
-            self.update_table()
-            # シグナル発行
-            self.entity_added.emit(entity)
+                continue
+            key = self._entity_type_span_key(entity)
+            if key in existing_keys or key in new_keys:
+                continue
+            new_entities.append(entity)
+            new_keys.add(key)
+
+        return self._append_manual_entities(new_entities)

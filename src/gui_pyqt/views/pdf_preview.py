@@ -33,6 +33,7 @@ class PDFPreviewWidget(QWidget):
     entity_clicked = pyqtSignal(int)  # クリックされたエンティティのインデックス
     text_selected = pyqtSignal(dict)  # テキストが選択された（手動PII追記用）
     pdf_file_dropped = pyqtSignal(str)  # ドロップされたPDFファイルパス
+    preview_activated = pyqtSignal()  # プレビューがアクティブになった
     SELECTION_MODE_TEXT = "text_drag"
     SELECTION_MODE_RECT = "rect_drag"
     SELECTION_MODE_CIRCLE = "circle_drag"
@@ -51,6 +52,7 @@ class PDFPreviewWidget(QWidget):
         self.drag_start_char_index: Optional[int] = None
         self._page_chars_cache: Dict[int, List[Dict]] = {}
         self.selection_mode: str = self.SELECTION_MODE_TEXT
+        self.search_highlight: Optional[Dict] = None
 
         self.init_ui()
 
@@ -136,6 +138,7 @@ class PDFPreviewWidget(QWidget):
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setText("PDFファイルを読み込んでください")
         self.preview_label.setStyleSheet("background-color: #e0e0e0; padding: 20px;")
+        self.preview_label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.preview_label.mousePressEvent = self._on_preview_mouse_press
         self.preview_label.mouseMoveEvent = self._on_preview_mouse_move
         self.preview_label.mouseReleaseEvent = self._on_preview_mouse_release
@@ -191,6 +194,7 @@ class PDFPreviewWidget(QWidget):
             self.pdf_document = fitz.open(pdf_path)
             self.current_page_num = 0
             self.highlighted_entities = []
+            self.search_highlight = None
             self._page_chars_cache = {}
             self.drag_start_char_index = None
             self.drag_start_pos = None
@@ -230,7 +234,7 @@ class PDFPreviewWidget(QWidget):
             pixmap = QPixmap.fromImage(qimage)
 
             # ハイライト描画（該当ページのエンティティのみ）
-            if self.highlighted_entities:
+            if self.highlighted_entities or self.search_highlight:
                 pixmap = self.draw_highlights(pixmap, page)
 
             self.preview_label.setPixmap(pixmap)
@@ -306,8 +310,42 @@ class PDFPreviewWidget(QWidget):
                             int(rect[2] - rect[0]), int(rect[3] - rect[1])
                         )
 
+        self._draw_search_highlight(painter, scale)
         painter.end()
         return pixmap
+
+    def _draw_search_highlight(self, painter: QPainter, scale: float):
+        """現在の検索候補を強調表示する"""
+        match = self.search_highlight
+        if not isinstance(match, dict):
+            return
+        page_num = match.get("page_num", match.get("page", self.current_page_num))
+        if page_num != self.current_page_num:
+            return
+
+        rects_pdf = match.get("rects_pdf")
+        if not isinstance(rects_pdf, list):
+            return
+
+        painter.save()
+        painter.setPen(QPen(QColor(255, 140, 0), 3, Qt.PenStyle.DashLine))
+        painter.setBrush(QColor(255, 180, 0, 70))
+        for rect in rects_pdf:
+            if not isinstance(rect, (list, tuple)) or len(rect) < 4:
+                continue
+            try:
+                x0, y0, x1, y1 = [float(value) for value in rect[:4]]
+            except Exception:
+                continue
+            if x1 <= x0 or y1 <= y0:
+                continue
+            painter.drawRect(
+                int(x0 * scale),
+                int(y0 * scale),
+                int((x1 - x0) * scale),
+                int((y1 - y0) * scale),
+            )
+        painter.restore()
 
     def _get_draw_rects(self, entity: dict, scale: float) -> List[list]:
         """エンティティの描画矩形リストを取得（スケール適用済み）"""
@@ -391,6 +429,11 @@ class PDFPreviewWidget(QWidget):
     def set_highlighted_entities(self, entities: List[Dict]):
         """ハイライト表示するエンティティを設定"""
         self.highlighted_entities = entities
+        self.update_preview()
+
+    def set_search_highlight(self, match: Optional[Dict]):
+        """検索候補ハイライトを設定する"""
+        self.search_highlight = dict(match) if isinstance(match, dict) else None
         self.update_preview()
 
     def go_to_page(self, page_num: int):
@@ -870,6 +913,9 @@ class PDFPreviewWidget(QWidget):
         if click_x < 0 or click_y < 0 or click_x > pixmap_w or click_y > pixmap_h:
             return
 
+        self.preview_label.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.preview_activated.emit()
+
         if self.selection_mode == self.SELECTION_MODE_TEXT:
             # 文字列ドラッグはテキスト上のみ開始
             if not self._is_text_hit(click_x, click_y):
@@ -981,6 +1027,8 @@ class PDFPreviewWidget(QWidget):
         if not self.highlighted_entities:
             return
 
+        self.preview_label.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.preview_activated.emit()
         scale = self.zoom_level * 2
 
         for i, entity in enumerate(self.highlighted_entities):
@@ -1279,6 +1327,7 @@ class PDFPreviewWidget(QWidget):
             self.drag_start_char_index = None
             self.drag_start_pos = None
             self.drag_current_pos = None
+            self.search_highlight = None
             self.preview_label.clear()
             self.preview_label.setText("PDFファイルを読み込んでください")
             self.update_navigation_buttons()
