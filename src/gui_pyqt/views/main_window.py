@@ -379,7 +379,12 @@ class MainWindow(QMainWindow):
         self.export_mask_action = QAction("マスク", self)
         self.export_mask_action.triggered.connect(self.on_mask)
 
-        self.export_mask_as_image_action = QAction("マスク（画像として保存）", self)
+        self.export_mask_as_image_action = QAction(
+            "セキュアマスク保存（非表示情報削除＋画像化）", self
+        )
+        self.export_mask_as_image_action.setStatusTip(
+            "メタデータ・テキスト層・しおり等を全て除去し、各ページを画像化して再構築したPDFを保存"
+        )
         self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
         self.export_marked_as_image_action = QAction("マーク（画像として保存）", self)
         self.export_marked_as_image_action.triggered.connect(
@@ -1583,8 +1588,8 @@ class MainWindow(QMainWindow):
             return
 
         output_pdf_path = self._select_output_pdf_path(
-            "マスク（画像として保存）の保存先",
-            "_masked_image",
+            "セキュアマスク保存の保存先",
+            "_secure",
         )
         if not output_pdf_path:
             return
@@ -1592,7 +1597,7 @@ class MainWindow(QMainWindow):
         if dpi is None:
             return
 
-        self.log_message("マスク（画像として保存）を開始...")
+        self.log_message("セキュアマスク保存（非表示情報削除＋画像化）を開始...")
         self.current_task = "mask_as_image"
         self.task_runner.start_task(
             PipelineService.run_mask_as_image,
@@ -3439,10 +3444,10 @@ class MainWindow(QMainWindow):
             output_path = result_dict.get("output_path", "")
             entity_count = result_dict.get("entity_count", 0)
             self.log_message(
-                f"マスク（画像として保存）が完了しました（{entity_count}件）"
+                f"セキュアマスク保存が完了しました（{entity_count}件・非表示情報削除済み）"
             )
             self.log_message(f"保存先: {output_path}")
-            self.statusBar().showMessage("マスク画像PDFを保存しました")
+            self.statusBar().showMessage("セキュアマスクPDFを保存しました")
             self._set_dirty(True)
         elif self.current_task == "marked_as_image":
             result_dict = result if isinstance(result, dict) else {}

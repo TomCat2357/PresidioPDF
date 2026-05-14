@@ -2014,6 +2014,8 @@ class PipelineService:
                             height=page.rect.height,
                         )
                         image_page.insert_image(image_page.rect, pixmap=pix)
+                    image_pdf.set_metadata({})
+                    image_pdf.del_xml_metadata()
                     image_pdf.save(
                         str(output_path), garbage=4, deflate=True, clean=True
                     )
