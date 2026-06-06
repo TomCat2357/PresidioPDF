@@ -564,7 +564,12 @@ class PDFPreviewWidget(QWidget):
             if "lines" not in block:
                 continue
 
+            # ブロック単位で一時バッファに溜め、空白のみブロックは破棄して採番もしない。
+            # 検出/マスク側の PDFBlockTextMapper._extract_page_blocks と採番ルールを完全一致
+            # させるため（食い違うと文字列ドラッグの block_num がずれてマスク位置が崩れる）。
             block_offset = 0
+            block_chars: List[Dict] = []
+            block_text_parts: List[str] = []
             for line_idx, line in enumerate(block.get("lines", [])):
                 for span in line.get("spans", []):
                     for char_info in span.get("chars", []):
@@ -572,11 +577,13 @@ class PDFPreviewWidget(QWidget):
                             continue
                         ch = char_info.get("c", "")
                         bbox = char_info.get("bbox")
+                        # 空白判定は bbox 無し文字も含めて行う（_extract_page_blocks と同様）
+                        block_text_parts.append(ch)
                         if not ch or not bbox or len(bbox) < 4:
                             block_offset += 1
                             continue
 
-                        chars.append(
+                        block_chars.append(
                             {
                                 "char": ch,
                                 "rect": fitz.Rect(bbox[:4]),
@@ -587,7 +594,11 @@ class PDFPreviewWidget(QWidget):
                         )
                         block_offset += 1
 
-            text_block_id += 1
+            block_text = "".join(block_text_parts)
+            if block_text and block_text.strip():
+                chars.extend(block_chars)
+                text_block_id += 1
+            # 空白のみブロックは block_chars を捨て、text_block_id を増やさない
 
         self._page_chars_cache[page_num] = chars
         return chars

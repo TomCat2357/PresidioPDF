@@ -209,6 +209,10 @@ node_modules/
 !tests/cli/
 !tests/cli/*.py
 !tests/gui_pyqt/
+!tests/gui_pyqt/*.py
+!tests/pdf/
+!tests/pdf/*.py
+!tests/gui_pyqt/
 !tests/gui_pyqt/test_detect_config_service.py
 !tests/gui_pyqt/test_main_window_preview_selection.py
 !tests/gui_pyqt/test_pipeline_export.py

@@ -134,6 +134,20 @@ class PDFTextLocator:
                 if "lines" not in block:
                     continue  # 画像ブロックなどをスキップ
 
+                # 空白のみブロック（表の空セル等）をスキップし、PDFBlockTextMapper と
+                # グローバルオフセット空間を一致させる。スキップしないと、検出側の
+                # (block_num, offset) から計算したグローバルオフセットが locator 空間と
+                # ずれ、マスクが文字単位で左へずれる（先頭の空白ブロック分だけずれる）。
+                block_text = "".join(
+                    char_info.get("c", "")
+                    for line in block["lines"]
+                    for span in line.get("spans", [])
+                    for char_info in span.get("chars", [])
+                    if not is_invisible_char(char_info, invisible_char_keys)
+                )
+                if not block_text.strip():
+                    continue
+
                 for line_idx, line in enumerate(block["lines"]):
                     line_chars_processed = False
 
