@@ -57,7 +57,7 @@ from ..controllers.task_runner import TaskRunner
 from ..services.pipeline_service import PipelineService
 from ..services.detect_config_service import DetectConfigService
 from src.core.entity_types import get_entity_type_name_ja, normalize_entity_key
-from src.ocr.ndlocr_service import NDLOCRService
+from src.ocr import RapidOCRService
 from .pdf_preview import PDFPreviewWidget
 from .result_panel import ResultPanel
 from .config_dialog import DetectConfigDialog
@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
                 "entity_overlap_mode"
             ]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
-            self.spacy_model = self.detect_config_service.load_spacy_model()
+            self.sudachi_settings = self.detect_config_service.load_sudachi_settings()
             self.detect_text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
@@ -107,7 +107,10 @@ class MainWindow(QMainWindow):
             self.enabled_detect_entities = list(DetectConfigService.ENTITY_TYPES)
             self.duplicate_entity_overlap_mode = "any"
             self.duplicate_overlap_mode = "overlap"
-            self.spacy_model = DetectConfigService.DEFAULT_SPACY_MODEL
+            self.sudachi_settings = {
+                "dict_type": DetectConfigService.DEFAULT_SUDACHI_DICT_TYPE,
+                "split_mode": DetectConfigService.DEFAULT_SUDACHI_SPLIT_MODE,
+            }
             self.detect_text_preprocess_settings = dict(
                 DetectConfigService.DEFAULT_TEXT_PREPROCESS_SETTINGS
             )
@@ -316,7 +319,7 @@ class MainWindow(QMainWindow):
 
         ocr_button = QToolButton(self)
         ocr_button.setText("OCR")
-        ocr_button.setToolTip("NDLOCR-LiteでOCRテキストを埋め込み")
+        ocr_button.setToolTip("RapidOCRでOCRテキストを埋め込み")
         ocr_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         ocr_button.setMenu(ocr_menu)
         toolbar.addWidget(ocr_button)
@@ -976,15 +979,14 @@ class MainWindow(QMainWindow):
                 "entity_overlap_mode"
             ]
             self.duplicate_overlap_mode = duplicate_settings["overlap"]
-            self.spacy_model = self.detect_config_service.load_spacy_model()
-            installed_models = DetectConfigService.get_installed_spacy_models()
+            self.sudachi_settings = self.detect_config_service.load_sudachi_settings()
             chunk_settings = self.detect_config_service.load_chunk_settings()
             text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
             ocr_settings = self.detect_config_service.load_ocr_settings()
             self.ocr_settings = dict(ocr_settings)
-            ocr_available = NDLOCRService.is_available()
+            ocr_available = RapidOCRService.is_available()
 
             dialog = DetectConfigDialog(
                 entity_types=DetectConfigService.ENTITY_TYPES,
@@ -992,9 +994,8 @@ class MainWindow(QMainWindow):
                 config_path=self.detect_config_service.config_path,
                 duplicate_entity_overlap_mode=self.duplicate_entity_overlap_mode,
                 duplicate_overlap_mode=self.duplicate_overlap_mode,
-                spacy_model=self.spacy_model,
-                installed_models=installed_models,
-                all_models=DetectConfigService.SPACY_MODELS,
+                sudachi_dict_type=self.sudachi_settings.get("dict_type", "core"),
+                sudachi_split_mode=self.sudachi_settings.get("split_mode", "C"),
                 chunk_delimiter=chunk_settings.get("delimiter", "。"),
                 chunk_max_chars=chunk_settings.get("max_chars", 15000),
                 ignore_newlines=text_preprocess_settings.get("ignore_newlines", True),
@@ -1007,6 +1008,7 @@ class MainWindow(QMainWindow):
                 ocr_auto_color=ocr_settings.get("auto_color", False),
                 ocr_offset_x=ocr_settings.get("offset_x", 0.0),
                 ocr_offset_y=ocr_settings.get("offset_y", 0.0),
+                ocr_tier=ocr_settings.get("tier", "light"),
                 ocr_available=ocr_available,
                 parent=self,
             )
@@ -1036,7 +1038,7 @@ class MainWindow(QMainWindow):
                 "entity_overlap_mode"
             ]
             self.duplicate_overlap_mode = saved_duplicate_settings["overlap"]
-            self.spacy_model = self.detect_config_service.load_spacy_model()
+            self.sudachi_settings = self.detect_config_service.load_sudachi_settings()
             self.detect_text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
@@ -1044,7 +1046,8 @@ class MainWindow(QMainWindow):
             self.log_message(
                 f"検出設定を保存: {len(self.enabled_detect_entities)}件を有効化 "
                 f"({self.detect_config_service.config_path.name}), "
-                f"モデル={self.spacy_model}, "
+                f"辞書={self.sudachi_settings.get('dict_type', 'core')}/"
+                f"分割={self.sudachi_settings.get('split_mode', 'C')}, "
                 f"重複設定=entity_overlap_mode:{self.duplicate_entity_overlap_mode}, "
                 f"overlap:{self.duplicate_overlap_mode}, "
                 f"ignore_newlines={self.detect_text_preprocess_settings.get('ignore_newlines', True)}, "
@@ -1106,7 +1109,7 @@ class MainWindow(QMainWindow):
                 "entity_overlap_mode"
             ]
             self.duplicate_overlap_mode = imported_duplicate_settings["overlap"]
-            self.spacy_model = self.detect_config_service.load_spacy_model()
+            self.sudachi_settings = self.detect_config_service.load_sudachi_settings()
             self.detect_text_preprocess_settings = (
                 self.detect_config_service.load_text_preprocess_settings()
             )
@@ -1116,7 +1119,10 @@ class MainWindow(QMainWindow):
                 self.duplicate_entity_overlap_mode,
                 self.duplicate_overlap_mode,
             )
-            dialog.set_spacy_model(self.spacy_model)
+            dialog.set_sudachi_settings(
+                self.sudachi_settings.get("dict_type", "core"),
+                self.sudachi_settings.get("split_mode", "C"),
+            )
             dialog.set_text_preprocess_settings(
                 self.detect_text_preprocess_settings.get("ignore_newlines", True),
                 self.detect_text_preprocess_settings.get("ignore_whitespace", False),
@@ -1128,6 +1134,7 @@ class MainWindow(QMainWindow):
                 auto_color=self.ocr_settings.get("auto_color", False),
                 offset_x=self.ocr_settings.get("offset_x", 0.0),
                 offset_y=self.ocr_settings.get("offset_y", 0.0),
+                tier=self.ocr_settings.get("tier", "light"),
             )
             self.log_message(
                 f"設定インポート: {file_path} -> {self.detect_config_service.config_path}"
@@ -1212,11 +1219,11 @@ class MainWindow(QMainWindow):
             return
 
         self.ocr_settings = self.detect_config_service.load_ocr_settings()
-        if not NDLOCRService.is_available():
+        if not RapidOCRService.is_available():
             QMessageBox.warning(
                 self,
                 "警告",
-                "NDLOCR-Liteが見つかりません。`pip install ndlocr-lite` を実行してください。",
+                "RapidOCRが見つかりません。`uv sync --extra ocr` を実行してください。",
             )
             return
 
@@ -1318,7 +1325,8 @@ class MainWindow(QMainWindow):
         self.detect_text_preprocess_settings = dict(text_preprocess_settings)
         task_kwargs: Dict[str, Any] = {
             "entities": list(self.enabled_detect_entities),
-            "model_names": (self.spacy_model,),
+            "sudachi_dict_type": self.sudachi_settings.get("dict_type", "core"),
+            "sudachi_split_mode": self.sudachi_settings.get("split_mode", "C"),
             "chunk_delimiter": chunk_settings.get("delimiter", "。"),
             "chunk_max_chars": chunk_settings.get("max_chars", 15000),
             "ignore_newlines": text_preprocess_settings.get("ignore_newlines", True),
@@ -1342,11 +1350,11 @@ class MainWindow(QMainWindow):
         self.ocr_settings = self.detect_config_service.load_ocr_settings()
         use_ocr_then_detect = bool(self.ocr_settings.get("ocr_before_detect", False))
         if use_ocr_then_detect:
-            if not NDLOCRService.is_available():
+            if not RapidOCRService.is_available():
                 QMessageBox.warning(
                     self,
                     "警告",
-                    "OCR先行が有効ですがNDLOCR-Liteが見つかりません",
+                    "OCR先行が有効ですがRapidOCRが見つかりません",
                 )
                 self._reset_detect_scope_context()
                 return

@@ -51,9 +51,8 @@ class DetectConfigDialog(QDialog):
         config_path: Path,
         duplicate_entity_overlap_mode: str = "any",
         duplicate_overlap_mode: str = "overlap",
-        spacy_model: str = "ja_core_news_sm",
-        installed_models: Optional[List[str]] = None,
-        all_models: Optional[List[str]] = None,
+        sudachi_dict_type: str = "core",
+        sudachi_split_mode: str = "C",
         chunk_delimiter: str = "。",
         chunk_max_chars: int = 15000,
         ignore_newlines: bool = True,
@@ -64,6 +63,7 @@ class DetectConfigDialog(QDialog):
         ocr_auto_color: bool = False,
         ocr_offset_x: float = 0.0,
         ocr_offset_y: float = 0.0,
+        ocr_tier: str = "light",
         ocr_available: bool = False,
         parent=None,
     ):
@@ -79,7 +79,9 @@ class DetectConfigDialog(QDialog):
         self.entity_overlap_any_radio: Optional[QRadioButton] = None
         self.overlap_contain_radio: Optional[QRadioButton] = None
         self.overlap_overlap_radio: Optional[QRadioButton] = None
-        self.model_combo: Optional[QComboBox] = None
+        self.dict_combo: Optional[QComboBox] = None
+        self.split_combo: Optional[QComboBox] = None
+        self.tier_combo: Optional[QComboBox] = None
         self.chunk_delimiter_edit: Optional[QLineEdit] = None
         self.chunk_max_chars_spin: Optional[QSpinBox] = None
         self.ignore_newlines_checkbox: Optional[QCheckBox] = None
@@ -94,8 +96,6 @@ class DetectConfigDialog(QDialog):
         self.ocr_offset_y_spin: Optional[QDoubleSpinBox] = None
         self._ocr_color: List[int] = [0, 0, 0]
         self._ocr_available = bool(ocr_available)
-        self._installed_models: List[str] = list(installed_models or [])
-        self._all_models: List[str] = list(all_models or [])
         self._file_watcher: Optional[QFileSystemWatcher] = None
         self._suspend_auto_save = False
         self.help_dialog: Optional[HelpDialog] = None
@@ -103,7 +103,7 @@ class DetectConfigDialog(QDialog):
         self._help_pick_previous_title = ""
         self.info_label: Optional[QLabel] = None
         self.entity_group: Optional[QGroupBox] = None
-        self.model_group: Optional[QGroupBox] = None
+        self.sudachi_group: Optional[QGroupBox] = None
         self.duplicate_group: Optional[QGroupBox] = None
         self.preprocess_group: Optional[QGroupBox] = None
         self.ocr_group: Optional[QGroupBox] = None
@@ -115,7 +115,7 @@ class DetectConfigDialog(QDialog):
             duplicate_entity_overlap_mode,
             duplicate_overlap_mode,
         )
-        self.set_spacy_model(spacy_model)
+        self.set_sudachi_settings(sudachi_dict_type, sudachi_split_mode)
         self.set_chunk_settings(chunk_delimiter, chunk_max_chars)
         self.set_text_preprocess_settings(ignore_newlines, ignore_whitespace)
         self.set_ocr_settings(
@@ -126,6 +126,7 @@ class DetectConfigDialog(QDialog):
             auto_color=ocr_auto_color,
             offset_x=ocr_offset_x,
             offset_y=ocr_offset_y,
+            tier=ocr_tier,
         )
         self._start_watching()
 
@@ -162,23 +163,24 @@ class DetectConfigDialog(QDialog):
         select_row.addStretch()
         layout.addLayout(select_row)
 
-        # spaCyモデル選択
-        model_group = QGroupBox("spaCyモデル")
-        model_layout = QHBoxLayout()
-        model_label = QLabel("使用モデル:")
-        self.model_combo = QComboBox()
-        if self._installed_models:
-            for model_name in self._installed_models:
-                self.model_combo.addItem(model_name, model_name)
-        else:
-            self.model_combo.addItem("(インストール済みモデルなし)", "")
-            self.model_combo.setEnabled(False)
-        model_layout.addWidget(model_label)
-        model_layout.addWidget(self.model_combo)
-        model_layout.addStretch()
-        model_group.setLayout(model_layout)
-        layout.addWidget(model_group)
-        self.model_group = model_group
+        # Sudachi 辞書 / 分割モード選択
+        sudachi_group = QGroupBox("Sudachi 辞書 / 分割モード")
+        sudachi_layout = QHBoxLayout()
+        sudachi_layout.addWidget(QLabel("辞書:"))
+        self.dict_combo = QComboBox()
+        for dict_type in DetectConfigService.SUDACHI_DICT_TYPES:
+            self.dict_combo.addItem(dict_type, dict_type)
+        sudachi_layout.addWidget(self.dict_combo)
+        sudachi_layout.addSpacing(12)
+        sudachi_layout.addWidget(QLabel("分割モード:"))
+        self.split_combo = QComboBox()
+        for split_mode in DetectConfigService.SUDACHI_SPLIT_MODES:
+            self.split_combo.addItem(split_mode, split_mode)
+        sudachi_layout.addWidget(self.split_combo)
+        sudachi_layout.addStretch()
+        sudachi_group.setLayout(sudachi_layout)
+        layout.addWidget(sudachi_group)
+        self.sudachi_group = sudachi_group
 
         duplicate_group = QGroupBox("重複削除設定")
         duplicate_layout = QVBoxLayout()
@@ -225,15 +227,26 @@ class DetectConfigDialog(QDialog):
         layout.addWidget(preprocess_group)
         self.preprocess_group = preprocess_group
 
-        ocr_group = QGroupBox("OCR設定 (NDLOCR-Lite)")
+        ocr_group = QGroupBox("OCR設定 (RapidOCR)")
         ocr_layout = QVBoxLayout()
         self.ocr_status_label = QLabel()
         self.ocr_status_label.setWordWrap(True)
         if not self._ocr_available:
             self.ocr_status_label.setText(
-                "NDLOCR-Liteが未インストールのためOCRは無効です。"
+                "RapidOCRが未インストールのためOCRは無効です。"
+                "（`uv sync --extra ocr` を実行してください）"
             )
             ocr_layout.addWidget(self.ocr_status_label)
+
+        tier_row = QHBoxLayout()
+        tier_row.addWidget(QLabel("モデル:"))
+        self.tier_combo = QComboBox()
+        self.tier_combo.addItem("軽量 (mobile)", "light")
+        self.tier_combo.addItem("高精度 (server)", "heavy")
+        self.tier_combo.setEnabled(self._ocr_available)
+        tier_row.addWidget(self.tier_combo)
+        tier_row.addStretch()
+        ocr_layout.addLayout(tier_row)
 
         color_row = QHBoxLayout()
         color_row.addWidget(QLabel("埋め込みテキスト色:"))
@@ -329,8 +342,12 @@ class DetectConfigDialog(QDialog):
             self.overlap_contain_radio.toggled.connect(self._on_ui_value_changed)
         if self.overlap_overlap_radio:
             self.overlap_overlap_radio.toggled.connect(self._on_ui_value_changed)
-        if self.model_combo:
-            self.model_combo.currentIndexChanged.connect(self._on_ui_value_changed)
+        if self.dict_combo:
+            self.dict_combo.currentIndexChanged.connect(self._on_ui_value_changed)
+        if self.split_combo:
+            self.split_combo.currentIndexChanged.connect(self._on_ui_value_changed)
+        if self.tier_combo:
+            self.tier_combo.currentIndexChanged.connect(self._on_ui_value_changed)
         if self.chunk_delimiter_edit:
             self.chunk_delimiter_edit.textChanged.connect(self._on_ui_value_changed)
         if self.chunk_max_chars_spin:
@@ -462,7 +479,7 @@ class DetectConfigDialog(QDialog):
                     *self.checkboxes.values(),
                 ],
             ),
-            ("settings_model", [self.model_group, self.model_combo]),
+            ("settings_sudachi", [self.sudachi_group, self.dict_combo, self.split_combo]),
             (
                 "settings_duplicate_entity_overlap",
                 [
@@ -574,21 +591,29 @@ class DetectConfigDialog(QDialog):
             "overlap": overlap_mode,
         }
 
-    def get_spacy_model(self) -> str:
-        if self.model_combo:
-            return self.model_combo.currentData() or ""
-        return ""
+    def get_sudachi_settings(self) -> Dict[str, str]:
+        dict_type = DetectConfigService.DEFAULT_SUDACHI_DICT_TYPE
+        split_mode = DetectConfigService.DEFAULT_SUDACHI_SPLIT_MODE
+        if self.dict_combo and self.dict_combo.currentData():
+            dict_type = self.dict_combo.currentData()
+        if self.split_combo and self.split_combo.currentData():
+            split_mode = self.split_combo.currentData()
+        return {"dict_type": dict_type, "split_mode": split_mode}
 
-    def set_spacy_model(self, model_name: str):
-        if not self.model_combo:
-            return
+    def set_sudachi_settings(self, dict_type: str, split_mode: str):
         previous = self._suspend_auto_save
         self._suspend_auto_save = True
         try:
-            for i in range(self.model_combo.count()):
-                if self.model_combo.itemData(i) == model_name:
-                    self.model_combo.setCurrentIndex(i)
-                    return
+            if self.dict_combo:
+                for i in range(self.dict_combo.count()):
+                    if self.dict_combo.itemData(i) == dict_type:
+                        self.dict_combo.setCurrentIndex(i)
+                        break
+            if self.split_combo:
+                for i in range(self.split_combo.count()):
+                    if self.split_combo.itemData(i) == split_mode:
+                        self.split_combo.setCurrentIndex(i)
+                        break
         finally:
             self._suspend_auto_save = previous
 
@@ -680,10 +705,17 @@ class DetectConfigDialog(QDialog):
         auto_color: bool = False,
         offset_x: float = 0.0,
         offset_y: float = 0.0,
+        tier: str = "light",
     ):
         previous = self._suspend_auto_save
         self._suspend_auto_save = True
         try:
+            if self.tier_combo:
+                target_tier = "heavy" if str(tier or "").lower() == "heavy" else "light"
+                for i in range(self.tier_combo.count()):
+                    if self.tier_combo.itemData(i) == target_tier:
+                        self.tier_combo.setCurrentIndex(i)
+                        break
             self._ocr_color = DetectConfigService._coerce_rgb_color(
                 font_color,
                 DetectConfigService.DEFAULT_OCR_SETTINGS["font_color"],
@@ -731,7 +763,13 @@ class DetectConfigDialog(QDialog):
         if self.ocr_offset_y_spin:
             offset_y = float(self.ocr_offset_y_spin.value())
 
+        tier = "light"
+        if self.tier_combo and self.tier_combo.currentData():
+            tier = self.tier_combo.currentData()
+
         return {
+            "backend": "rapidocr",
+            "tier": tier,
             "font_color": list(self._ocr_color),
             "opacity": max(0.0, min(1.0, 1.0 - opacity_percent / 100.0)),
             "ocr_before_detect": ocr_before_detect,
@@ -773,10 +811,13 @@ class DetectConfigDialog(QDialog):
             entities = data.get("enabled_entities", [])
             if isinstance(entities, list):
                 self.set_enabled_entities(entities)
-            # spaCyモデル
-            model = data.get("spacy_model", "")
-            if isinstance(model, str) and model.strip():
-                self.set_spacy_model(model.strip())
+            # Sudachi 辞書/分割モード
+            sudachi = data.get("sudachi_settings", {})
+            if isinstance(sudachi, dict):
+                self.set_sudachi_settings(
+                    sudachi.get("dict_type", DetectConfigService.DEFAULT_SUDACHI_DICT_TYPE),
+                    sudachi.get("split_mode", DetectConfigService.DEFAULT_SUDACHI_SPLIT_MODE),
+                )
             # 重複削除設定
             dup = data.get("duplicate_settings", {})
             if isinstance(dup, dict):
@@ -806,6 +847,7 @@ class DetectConfigDialog(QDialog):
                     auto_color=ocr_settings.get("auto_color", False),
                     offset_x=ocr_settings.get("offset_x", 0.0),
                     offset_y=ocr_settings.get("offset_y", 0.0),
+                    tier=ocr_settings.get("tier", "light"),
                 )
         except Exception as exc:
             logger.warning(f"設定ファイルの変更反映に失敗: {exc}")
@@ -826,9 +868,8 @@ class DetectConfigDialog(QDialog):
             data["enabled_entities"] = self.get_enabled_entities()
             dup = self.get_duplicate_settings()
             data["duplicate_settings"] = dup
-            model = self.get_spacy_model()
-            if model:
-                data["spacy_model"] = model
+            data["sudachi_settings"] = self.get_sudachi_settings()
+            data.pop("spacy_model", None)
             data["chunk_settings"] = self.get_chunk_settings()
             data["text_preprocess_settings"] = self.get_text_preprocess_settings()
             data["ocr_settings"] = self.get_ocr_settings()

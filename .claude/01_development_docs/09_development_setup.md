@@ -20,7 +20,7 @@ recommended_requirements:
 ```
 
 ### ソフトウェア要件
-- **Python**: 3.13 系（`>=3.13,<3.14`）。3.14 はコア依存（presidio-analyzer / spacy）が未対応のため不可
+- **Python**: 3.14 系（`>=3.14,<3.15`）。PII検出は SudachiPy、OCR は RapidOCR を使用（spaCy/Presidio/NDLOCR は廃止）
 - **uv**: 最新版（パッケージ管理）
 - **Git**: 2.20+
 - **エディタ**: VS Code推奨（拡張設定含む）
@@ -40,7 +40,7 @@ git checkout -b feature/your-feature-name
 ### 2. Python環境確認
 ```bash
 # Pythonバージョン確認
-python --version  # 3.13 系であること（>=3.13,<3.14）
+python --version  # 3.14 系であること（>=3.14,<3.15）
 
 # uvインストール確認
 uv --version
@@ -423,7 +423,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.13"]
+        python-version: ["3.14"]
     
     steps:
     - uses: actions/checkout@v3

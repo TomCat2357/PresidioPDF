@@ -123,13 +123,12 @@ def _detection_id(entity: str, text: str, payload: Tuple) -> str:
 @click.option("--add", "adds", multiple=True, help="追加エンティティ: --add <entity>:<regex>（複数可）")
 @click.option("--exclude", "excludes", multiple=True, help="全エンティティ共通の除外正規表現（複数可）")
 @option_json("入力read JSONファイル（必須。標準入力は不可）")
-@click.option("--model", multiple=True, default=["ja_core_news_trf"], show_default=True, help="spaCyモデルID（複数可。高精度: ja_core_news_trf, ja_ginza, ja_ginza_electra）")
 @option_out("出力先（必須。標準出力は不可）")
 @option_pretty()
 @option_validate("入力JSONのスキーマ検証を実施")
 @click.option("--with-predetect/--no-predetect", default=True, help="入力のdetect情報を含める（旧--highlights-merge append相当）")
 @click.option("--entity", "entities_csv", type=str, help="検出するエンティティ（CSV例: 'PERSON,ADDRESS'。未指定=全エンティティ）")
-def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: str, model: Tuple[str, ...], out: str, pretty: bool, validate: bool, with_predetect: bool, entities_csv: Optional[str]):
+def main(adds: Tuple[str, ...], excludes: Tuple[str, ...], json_file: str, out: str, pretty: bool, validate: bool, with_predetect: bool, entities_csv: Optional[str]):
     validate_input_file_exists(json_file)
     validate_output_parent_exists(out)
 

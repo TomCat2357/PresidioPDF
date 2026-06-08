@@ -1,5 +1,10 @@
 # Microsoft Presidio 統合ガイド
 
+> **【非推奨 / 廃止】** 本ガイドは旧構成（Presidio + spaCy）向けの歴史的資料です。
+> Python 3.14 移行に伴い、PII 検出は **SudachiPy 直叩き**へ全面置換され、Presidio/spaCy への
+> 依存は撤去されました。現行設計は `05_spacy_free_analyzer_design.md` および
+> `src/analysis/`（`backends/sudachi_tokenizer.py`, `recognizers/*`）を参照してください。
+
 ## 概要
 Microsoft Presidio を PresidioPDF プロジェクトに統合するための詳細ガイド。日本語個人情報検出に特化した設定と実装パターンを提供し、高精度な PII 検出を実現する。
 

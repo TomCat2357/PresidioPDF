@@ -21,16 +21,22 @@ def _read_config(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_spacy_models_order_and_default():
-    assert DetectConfigService.SPACY_MODELS == [
-        "ja_core_news_sm",
-        "ja_core_news_md",
-        "ja_core_news_lg",
-        "ja_core_news_trf",
-        "ja_ginza",
-        "ja_ginza_electra",
-    ]
-    assert DetectConfigService.DEFAULT_SPACY_MODEL == "ja_core_news_sm"
+def test_sudachi_options_and_defaults():
+    assert DetectConfigService.SUDACHI_DICT_TYPES == ["core", "full", "small"]
+    assert DetectConfigService.DEFAULT_SUDACHI_DICT_TYPE == "core"
+    assert DetectConfigService.SUDACHI_SPLIT_MODES == ["A", "B", "C"]
+    assert DetectConfigService.DEFAULT_SUDACHI_SPLIT_MODE == "C"
+
+
+def test_sudachi_settings_save_and_load(tmp_path):
+    service = DetectConfigService(tmp_path)
+    service.ensure_config_file()
+    saved = service.save_sudachi_settings("full", "B")
+    assert saved == {"dict_type": "full", "split_mode": "B"}
+    assert service.load_sudachi_settings() == {"dict_type": "full", "split_mode": "B"}
+    # 不正値は既定へ正規化される
+    fixed = service.save_sudachi_settings("bogus", "Z")
+    assert fixed == {"dict_type": "core", "split_mode": "C"}
 
 
 def test_config_path_is_under_presidio_directory(tmp_path):
@@ -313,6 +319,8 @@ def test_ocr_settings_default_values(tmp_path):
 
     settings = service.load_ocr_settings()
     assert settings == {
+        "backend": "rapidocr",
+        "tier": "light",
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
@@ -341,6 +349,8 @@ def test_ocr_settings_save_and_load(tmp_path):
     loaded = service.load_ocr_settings()
 
     assert saved == {
+        "backend": "rapidocr",
+        "tier": "light",
         "font_color": [32, 64, 96],
         "opacity": 0.35,
         "ocr_before_detect": True,
@@ -371,6 +381,8 @@ def test_ocr_settings_are_normalized(tmp_path):
     service.ensure_config_file()
     normalized = _read_config(service.config_path)
     assert normalized.get("ocr_settings") == {
+        "backend": "rapidocr",
+        "tier": "light",
         "font_color": [255, 0, 10],
         "opacity": 1.0,
         "ocr_before_detect": True,
@@ -403,6 +415,8 @@ def test_ocr_settings_migrate_legacy_enabled_field(tmp_path):
 
     assert "enabled" not in ocr_settings
     assert ocr_settings == {
+        "backend": "rapidocr",
+        "tier": "light",
         "font_color": [12, 34, 56],
         "opacity": 0.2,
         "ocr_before_detect": False,

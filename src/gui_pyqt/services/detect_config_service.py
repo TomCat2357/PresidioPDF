@@ -24,15 +24,10 @@ class DetectConfigService:
     CONFIG_DIR_NAME = ".presidio"
     CONFIG_FILE_NAME = "config.json"
     DISPLAY_FILE_NAME = "config.json"
-    SPACY_MODELS = [
-        "ja_core_news_sm",
-        "ja_core_news_md",
-        "ja_core_news_lg",
-        "ja_core_news_trf",
-        "ja_ginza",
-        "ja_ginza_electra",
-    ]
-    DEFAULT_SPACY_MODEL = "ja_core_news_sm"
+    SUDACHI_DICT_TYPES = ["core", "full", "small"]
+    DEFAULT_SUDACHI_DICT_TYPE = "core"
+    SUDACHI_SPLIT_MODES = ["A", "B", "C"]
+    DEFAULT_SUDACHI_SPLIT_MODE = "C"
     ENTITY_TYPES = [
         "PERSON",
         "LOCATION",
@@ -61,7 +56,11 @@ class DetectConfigService:
         "ignore_newlines": True,
         "ignore_whitespace": False,
     }
+    OCR_BACKENDS = ["rapidocr"]
+    OCR_TIERS = ["light", "heavy"]
     DEFAULT_OCR_SETTINGS = {
+        "backend": "rapidocr",
+        "tier": "light",
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
@@ -123,50 +122,49 @@ class DetectConfigService:
         self._write_json(data)
         return normalized
 
-    def load_spacy_model(self) -> str:
-        """設定ファイルからspaCyモデル名を読み込む"""
+    def load_sudachi_settings(self) -> Dict[str, str]:
+        """設定ファイルから Sudachi 辞書種別/分割モードを読み込む"""
+        result = {
+            "dict_type": self.DEFAULT_SUDACHI_DICT_TYPE,
+            "split_mode": self.DEFAULT_SUDACHI_SPLIT_MODE,
+        }
         if not self.config_path.exists():
-            return self.DEFAULT_SPACY_MODEL
+            return result
         try:
             data = self._load_json(self.config_path)
             if isinstance(data, dict):
-                model = data.get("spacy_model", self.DEFAULT_SPACY_MODEL)
-                if isinstance(model, str) and model.strip():
-                    return model.strip()
+                result.update(self._extract_sudachi_settings(data))
         except Exception as exc:
-            logger.warning(f"spaCyモデル設定の読み込みに失敗: {exc}")
-        return self.DEFAULT_SPACY_MODEL
+            logger.warning(f"Sudachi設定の読み込みに失敗: {exc}")
+        return result
 
-    def save_spacy_model(self, model_name: str) -> str:
-        """spaCyモデル名を設定ファイルに保存する"""
-        name = str(model_name or "").strip()
-        if not name:
-            name = self.DEFAULT_SPACY_MODEL
+    def save_sudachi_settings(self, dict_type: str, split_mode: str) -> Dict[str, str]:
+        """Sudachi 辞書種別/分割モードを設定ファイルに保存する"""
         data = self._load_json(self.config_path) if self.config_path.exists() else {}
         if not isinstance(data, dict):
             data = {}
         data = self._normalize_config_data(data)
-        data["spacy_model"] = name
+        normalized = self._extract_sudachi_settings(
+            {"sudachi_settings": {"dict_type": dict_type, "split_mode": split_mode}}
+        )
+        data["sudachi_settings"] = normalized
         self._write_json(data)
-        return name
+        return normalized
 
-    @classmethod
-    def get_installed_spacy_models(cls) -> List[str]:
-        """インストール済みのspaCyモデル一覧を返す"""
-        try:
-            import spacy.util
-        except Exception as exc:
-            logger.warning(f"spaCyの状態確認に失敗: {exc}")
-            return []
-
-        installed = []
-        for model in cls.SPACY_MODELS:
-            try:
-                if spacy.util.is_package(model):
-                    installed.append(model)
-            except Exception as exc:
-                logger.warning(f"spaCyモデル確認失敗: {model} ({exc})")
-        return installed
+    def _extract_sudachi_settings(self, data: Any) -> Dict[str, str]:
+        """Sudachi 設定を抽出・正規化する。"""
+        dict_type = self.DEFAULT_SUDACHI_DICT_TYPE
+        split_mode = self.DEFAULT_SUDACHI_SPLIT_MODE
+        if isinstance(data, dict):
+            section = data.get("sudachi_settings", {})
+            if isinstance(section, dict):
+                dt = str(section.get("dict_type", dict_type) or "").lower()
+                if dt in self.SUDACHI_DICT_TYPES:
+                    dict_type = dt
+                sm = str(section.get("split_mode", split_mode) or "").upper()
+                if sm in self.SUDACHI_SPLIT_MODES:
+                    split_mode = sm
+        return {"dict_type": dict_type, "split_mode": split_mode}
 
     def load_duplicate_settings(self) -> Dict[str, str]:
         """重複削除設定を読み込む"""
@@ -629,7 +627,16 @@ class DetectConfigService:
         if not isinstance(settings, dict):
             settings = {}
 
+        backend = str(settings.get("backend", self.DEFAULT_OCR_SETTINGS["backend"]) or "").lower()
+        if backend not in self.OCR_BACKENDS:
+            backend = self.DEFAULT_OCR_SETTINGS["backend"]
+        tier = str(settings.get("tier", self.DEFAULT_OCR_SETTINGS["tier"]) or "").lower()
+        if tier not in self.OCR_TIERS:
+            tier = self.DEFAULT_OCR_SETTINGS["tier"]
+
         return {
+            "backend": backend,
+            "tier": tier,
             "font_color": self._coerce_rgb_color(
                 settings.get("font_color", self.DEFAULT_OCR_SETTINGS["font_color"]),
                 self.DEFAULT_OCR_SETTINGS["font_color"],
@@ -740,7 +747,10 @@ class DetectConfigService:
     @classmethod
     def _default_json_config(cls) -> Dict[str, Any]:
         return {
-            "spacy_model": cls.DEFAULT_SPACY_MODEL,
+            "sudachi_settings": {
+                "dict_type": cls.DEFAULT_SUDACHI_DICT_TYPE,
+                "split_mode": cls.DEFAULT_SUDACHI_SPLIT_MODE,
+            },
             "enabled_entities": list(cls.ENTITY_TYPES),
             "add_entity": {entity: [] for entity in cls.ENTITY_TYPES},
             "ommit_entity": [],
@@ -755,11 +765,9 @@ class DetectConfigService:
             data = {}
         normalized = dict(data)
 
-        raw_model = normalized.get("spacy_model", self.DEFAULT_SPACY_MODEL)
-        if isinstance(raw_model, str) and raw_model.strip():
-            normalized["spacy_model"] = raw_model.strip()
-        else:
-            normalized["spacy_model"] = self.DEFAULT_SPACY_MODEL
+        # 旧 spaCy モデル設定は撤去。残存していれば破棄する。
+        normalized.pop("spacy_model", None)
+        normalized["sudachi_settings"] = self._extract_sudachi_settings(normalized)
 
         normalized["enabled_entities"] = self._extract_enabled_entities(normalized)
 

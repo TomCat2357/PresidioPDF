@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import fitz
 
-from src.ocr.ndlocr_service import OCRResult
+from src.ocr.base import OCRResult
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,9 @@ class PDFTextEmbedder:
 
     OCR_SUBJECT = "PresidioPDF_OCR"
     OCR_TITLE = "PresidioPDF OCR"
-    OCR_SOURCE = "ndlocr-lite"
+    OCR_SOURCE = "rapidocr"
+    # 旧ビルドが埋め込んだOCRテキストも除去できるよう、過去のソース名も判定に含める
+    OCR_SOURCE_LEGACY = ("ndlocr-lite",)
     FONTNAME = "helv"
 
     @classmethod
@@ -122,6 +124,7 @@ class PDFTextEmbedder:
                     subject == cls.OCR_SUBJECT
                     or title == cls.OCR_TITLE
                     or f"source={cls.OCR_SOURCE}" in content
+                    or any(f"source={s}" in content for s in cls.OCR_SOURCE_LEGACY)
                 )
                 if is_ocr and str(annot_type).lower() == "freetext":
                     page.delete_annot(annot)

@@ -7,31 +7,27 @@ name = "presidio-pdf"
 version = "0.1.0"
 description = "Japanese personal information detection and masking tool for PDF documents"
 readme = "README.md"
-# Python 3.13 系を唯一のサポート対象とする（>=3.13,<3.14）。
-# 上限 <3.14 はコア依存の制約（cp314 wheel が未提供）:
-#   - presidio-analyzer (最新 2.2.362) が requires-python "<3.14,>=3.10"
-#   - spacy 3.8 系（最新 3.8.14）に cp314 wheel が無い
-# 下限 >=3.13 はビルド／配布対象を 3.13 に一本化するため。全コア依存に
-# cp313 wheel（PyMuPDF/PyQt6 は cp39-abi3 wheel）が揃っており、ソースビルド
-# なしで導入できる。
-requires-python = ">=3.13,<3.14"
-# 最小限のデフォルト依存関係（CPUモード）
+# Python 3.14 を唯一のサポート対象とする（>=3.14,<3.15）。
+# PII 検出は SudachiPy 直叩き、OCR は RapidOCR v3 に置き換え、
+# 3.14 を阻んでいた spacy / presidio-analyzer / numpy==2.2.2(ndlocr由来) を撤去した。
+# 全コア依存は cp314 wheel（sudachipy）または純 Python（sudachidict-core/
+# phonenumbers/click/PyYAML）または cp310-abi3 wheel（PyMuPDF）を提供しており、
+# ソースビルドなしで 3.14 に導入できる（2026-06 時点で PyPI 実 wheel を確認）。
+requires-python = ">=3.14,<3.15"
+# 最小限のデフォルト依存関係（CUIコア検出。OCR/GUI は extra）
 dependencies = [
     # 基本的なCLI機能に必要な最小限のパッケージ
     "click>=8.1.0",
-    # ndlocr-lite の固定依存に合わせる（OCR有効時もABI不整合を避ける。cp313 wheel あり）
-    "numpy==2.2.2",
-    # spacy 3.8.7 以降が Python 3.13 (cp313) wheel を提供（3.8.5 以前は <3.13 指定）
-    "spacy>=3.8.7,<3.9.0",
-    # presidio-analyzer は 2.2.355 以降が requires-python "<3.14,>=3.10"
-    "presidio-analyzer>=2.2.355",
-    # PyMuPDF 1.25 系から cp39-abi3 wheel となり 3.13 で利用可能
-    "PyMuPDF>=1.25.1",
-    # PyYAML は 6.0.2 から cp313 wheel を提供
+    # 形態素解析ベースの PII 検出（cp314 win_amd64 wheel あり）
+    "sudachipy>=0.6.11",
+    # Sudachi 標準辞書（py3-none-any のためインタプリタ非依存）
+    "sudachidict-core>=20240409",
+    # PyMuPDF 1.27 系の cp310-abi3 wheel が 3.14 で利用可能
+    "PyMuPDF>=1.27.0",
+    # PyYAML は 6.0.2 から cp314 wheel を提供
     "PyYAML>=6.0.2",
-    # spaCy日本語モデル（py3-none-any のためインタプリタ非依存）
-    "ja-core-news-sm>=3.8.0,<3.9.0",
-    "ja-core-news-md>=3.8.0,<3.9.0",
+    # 電話番号の妥当性検証（純 Python。旧 presidio 経由→明示依存に）
+    "phonenumbers>=8.13.0",
 ]
 
 [project.optional-dependencies]
@@ -47,50 +43,17 @@ dev = [
     "mypy>=1.13.0",
 ]
 
-# spaCyモデル（個別インストール用）
-model-sm = ["ja-core-news-sm>=3.8.0,<3.9.0"]
-model-md = ["ja-core-news-md>=3.8.0,<3.9.0"]
-model-lg = ["ja-core-news-lg>=3.8.0,<3.9.0"]
-model-trf = ["ja-core-news-trf>=3.8.0,<3.9.0"]
-model-ginza = ["ginza>=5.2.0", "ja-ginza>=5.2.0"]
-model-ginza-electra = ["ginza>=5.2.0", "ja-ginza-electra>=5.2.0"]
-
-# GPUモード（GPU系パッケージのみ）
-gpu = [
-    # torch は 2.6.0 で Windows 向け cp313 wheel を提供（2.5.0 は Linux のみ）
-    "torch>=2.6.0",
-    "pandas>=2.3.1",
-    "reportlab>=4.0.0",
-    "pdfplumber>=0.10.0",
-    "ja-core-news-lg>=3.8.0,<3.9.0",
-    # 高精度モデル（Transformer系）
-    "ja-core-news-trf>=3.8.0,<3.9.0",
-    # GiNZA高精度モデル
-    "ginza>=5.2.0",
-    "ja-ginza>=5.2.0",
-    "ja-ginza-electra>=5.2.0"
-]
-
-# 軽量版（Presidio PDF処理のみ、最小構成）
-minimal = [
-    "click>=8.1.0",
-    "spacy>=3.8.7,<3.9.0",
-    "presidio-analyzer>=2.2.355",
-    "PyMuPDF>=1.25.1",
-    "PyYAML>=6.0.2",
-    "ja-core-news-sm>=3.8.0,<3.9.0",
-]
-
 # GUI専用（PyQt6ベース）
 gui = [
-    # PyQt6 は cp38-abi3 wheel のため 3.13 で動作。6.7.0 を 3.13 検証済み下限に設定
-    "PyQt6>=6.7.0",
-    "PyQt6-Qt6>=6.7.0",
+    # PyQt6 は cp310-abi3 wheel のため 3.14 で動作。6.11.0 を下限に設定
+    "PyQt6>=6.11.0",
+    "PyQt6-Qt6>=6.11.0",
 ]
 
-# OCR拡張（NDLOCR-Lite）
+# OCR拡張（RapidOCR v3）。依存(onnxruntime/opencv/numpy/shapely/pyclipper/Pillow)は
+# すべて 3.14 対応（cp314 wheel もしくは abi3 wheel）。日本語認識は PP-OCRv4 を使用。
 ocr = [
-    "ndlocr-lite @ git+https://github.com/ndl-lab/ndlocr-lite.git@master",
+    "rapidocr>=3.8.1",
 ]
 
 [project.scripts]
@@ -110,10 +73,10 @@ where = ["src"]
 
 [tool.black]
 line-length = 88
-target-version = ['py313']
+target-version = ['py314']
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
@@ -124,16 +87,6 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 addopts = "-v --tb=short"
-
-[tool.uv.sources]
-ja-core-news-md = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.8.0/ja_core_news_md-3.8.0-py3-none-any.whl" }
-# GPU用高精度日本語spaCyモデル
-ja-core-news-lg = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_lg-3.8.0/ja_core_news_lg-3.8.0-py3-none-any.whl" }
-ja-core-news-trf = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.8.0/ja_core_news_trf-3.8.0-py3-none-any.whl" }
-ja-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl" }
-
-ja-ginza = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.2.0/ja_ginza-5.2.0-py3-none-any.whl" }
-ja-ginza-electra = { url = "https://github.com/megagonlabs/ginza/releases/download/v5.2.0/ja_ginza_electra-5.2.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

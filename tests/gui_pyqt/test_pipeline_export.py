@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from src.gui_pyqt.services.pipeline_service import PipelineService
-from src.ocr.ndlocr_service import NDLOCRService, OCRResult
+from src.ocr import RapidOCRService, OCRResult
 from src.pdf.pdf_locator import PDFTextLocator
 from src.pdf.pdf_text_embedder import PDFTextEmbedder
 
@@ -358,10 +358,12 @@ def test_run_ocr_and_clear_pipeline(monkeypatch, tmp_path):
             )
         ]
 
-    monkeypatch.setattr(NDLOCRService, "is_available", staticmethod(lambda: True))
-    monkeypatch.setattr(NDLOCRService, "run_ocr_on_page", _fake_run_ocr_on_page)
+    monkeypatch.setattr(RapidOCRService, "is_available", staticmethod(lambda: True))
+    monkeypatch.setattr(RapidOCRService, "run_ocr_on_page", _fake_run_ocr_on_page)
 
     ocr_settings = {
+        "backend": "rapidocr",
+        "tier": "light",
         "font_color": [0, 0, 0],
         "opacity": 0.0,
         "ocr_before_detect": False,
@@ -391,102 +393,8 @@ def test_run_ocr_and_clear_pipeline(monkeypatch, tmp_path):
         assert "OCR_WORD" not in doc[0].get_text("text")
 
 
-def _create_fake_ndlocr_layout(base_dir: Path) -> Path:
-    (base_dir / "model").mkdir(parents=True, exist_ok=True)
-    (base_dir / "config").mkdir(parents=True, exist_ok=True)
-    (base_dir / "model" / "deim-s-1024x1024.onnx").write_bytes(b"")
-    (base_dir / "model" / "parseq-ndl-16x768-100-tiny-165epoch-tegaki2.onnx").write_bytes(
-        b""
-    )
-    (base_dir / "config" / "ndl.yaml").write_text("", encoding="utf-8")
-    (base_dir / "config" / "NDLmoji.yaml").write_text("", encoding="utf-8")
-
-    ocr_path = base_dir / "ocr.py"
-    ocr_path.write_text(
-        "\n".join(
-            [
-                "import json",
-                "from pathlib import Path",
-                "",
-                "def process(args):",
-                "    src = Path(args.sourceimg)",
-                "    out_dir = Path(args.output)",
-                "    payload = {",
-                "        'contents': [[{'text': 'FAKE', 'box': [1, 2, 10, 8], 'confidence': 0.9}]]",
-                "    }",
-                "    (out_dir / f'{src.stem}.json').write_text(json.dumps(payload), encoding='utf-8')",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return ocr_path
-
-
-class _FakeDistribution:
-    def __init__(self, ocr_path: Path):
-        self._ocr_path = ocr_path
-
-    def locate_file(self, _relative_path: Path) -> Path:
-        return self._ocr_path
-
-
-def test_ndlocr_get_distribution_ocr_path_uses_importlib_metadata(monkeypatch, tmp_path):
-    ocr_path = _create_fake_ndlocr_layout(tmp_path)
-
-    monkeypatch.setattr(
-        "src.ocr.ndlocr_service.importlib_metadata.distribution",
-        lambda _name: _FakeDistribution(ocr_path),
-    )
-
-    resolved = NDLOCRService._get_distribution_ocr_path()
-    assert resolved == ocr_path.resolve()
-
-
-def test_ndlocr_is_available_returns_true_with_distribution_layout(
-    monkeypatch, tmp_path
-):
-    ocr_path = _create_fake_ndlocr_layout(tmp_path)
-
-    monkeypatch.setattr(
-        "src.ocr.ndlocr_service.importlib_metadata.distribution",
-        lambda _name: _FakeDistribution(ocr_path),
-    )
-
-    assert NDLOCRService.is_available() is True
-
-
-def test_ndlocr_get_process_callable_falls_back_to_distribution_path(
-    monkeypatch, tmp_path
-):
-    ocr_path = _create_fake_ndlocr_layout(tmp_path)
-
-    monkeypatch.setattr(
-        NDLOCRService,
-        "_MODULE_CANDIDATES",
-        (("missing.ndlocr.module", "process", "legacy"),),
-    )
-    monkeypatch.setattr(
-        "src.ocr.ndlocr_service.importlib_metadata.distribution",
-        lambda _name: _FakeDistribution(ocr_path),
-    )
-
-    source_image = tmp_path / "page.png"
-    source_image.write_bytes(b"png")
-
-    service = NDLOCRService()
-    runner = service._get_process_callable()
-    result = runner(str(source_image))
-
-    assert callable(runner)
-    assert isinstance(result, list)
-    assert result
-    first = result[0]
-    assert isinstance(first, dict)
-    assert first.get("text") == "FAKE"
-
-
-def test_ndlocr_parse_raw_result_item_accepts_bounds():
-    parsed = NDLOCRService._parse_raw_result_item(
+def test_ocr_parse_raw_result_item_accepts_bounds():
+    parsed = RapidOCRService._parse_raw_result_item(
         {
             "text": "BOUND",
             "bounds": [10, 20, 30, 45],
@@ -495,6 +403,25 @@ def test_ndlocr_parse_raw_result_item_accepts_bounds():
     )
 
     assert parsed == ("BOUND", (10.0, 20.0, 20.0, 25.0), 0.8)
+
+
+def test_ocr_parse_raw_result_item_accepts_quad_points():
+    # RapidOCR は四隅点(quad)を返す。(text, quad, score) 順で解釈される。
+    parsed = RapidOCRService._parse_raw_result_item(
+        ("WORD", [[10, 20], [30, 20], [30, 45], [10, 45]], 0.9)
+    )
+
+    assert parsed == ("WORD", (10.0, 20.0, 20.0, 25.0), 0.9)
+
+
+def test_rapidocr_output_to_items_reorders_box_text_score():
+    class _Out:
+        boxes = [[[1, 2], [11, 2], [11, 8], [1, 8]]]
+        txts = ["FAKE"]
+        scores = [0.9]
+
+    items = RapidOCRService._output_to_items(_Out())
+    assert items == [("FAKE", [[1, 2], [11, 2], [11, 8], [1, 8]], 0.9)]
 
 
 def test_calculate_fitting_fontsize_shrinks_for_long_text():

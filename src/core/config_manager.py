@@ -75,17 +75,15 @@ class ConfigManager:
                 },
             },
             "nlp": {
-                "spacy_model": "ja_core_news_trf",  # デフォルトは高精度Transformerモデル
-                "fallback_models": [
-                    "ja_ginza_electra",
-                    "ja_ginza",
-                    "ja_core_news_lg",
-                    "ja_core_news_md",
-                    "ja_core_news_sm",
-                ],
-                "auto_download": True,
+                # 形態素解析（SudachiPy）の辞書種別と分割モード
+                "sudachi_dict_type": "core",   # core | full | small
+                "sudachi_split_mode": "C",     # A | B | C（Cが最長単位）
                 "chunk_delimiter": "。",
                 "chunk_max_chars": 15000,
+            },
+            "ocr": {
+                "backend": "rapidocr",          # OCRバックエンド
+                "tier": "light",                # light(mobile) | heavy(server)
             },
             "deduplication": {
                 "enabled": False,  # デフォルトは無効
@@ -557,34 +555,62 @@ class ConfigManager:
         """読み取りレポートを生成するかどうかを返す"""
         return self._safe_get_config("pdf_processing.read_report", True)
 
-    # NLP/spaCy設定メソッド
-    def get_spacy_model(self) -> str:
-        """使用するspaCyモデル名を返す"""
-        return self._safe_get_config("nlp.spacy_model", "ja_core_news_trf")
+    # NLP（形態素解析）設定メソッド
+    def get_sudachi_dict_type(self) -> str:
+        """SudachiPy 辞書種別（core/full/small）を返す"""
+        return self._safe_get_config("nlp.sudachi_dict_type", "core")
 
-    def set_spacy_model(self, model_name: str):
-        """spaCyモデル名を設定する"""
+    def set_sudachi_dict_type(self, dict_type: str):
+        """SudachiPy 辞書種別を設定する"""
         if "nlp" not in self.config:
             self.config["nlp"] = {}
-        self.config["nlp"]["spacy_model"] = model_name
-        logger.info(f"spaCyモデル設定を更新: {model_name}")
+        value = str(dict_type or "core").lower()
+        if value not in ("core", "full", "small"):
+            value = "core"
+        self.config["nlp"]["sudachi_dict_type"] = value
+
+    def get_sudachi_split_mode(self) -> str:
+        """SudachiPy 分割モード（A/B/C）を返す"""
+        return self._safe_get_config("nlp.sudachi_split_mode", "C")
+
+    def set_sudachi_split_mode(self, split_mode: str):
+        """SudachiPy 分割モードを設定する"""
+        if "nlp" not in self.config:
+            self.config["nlp"] = {}
+        value = str(split_mode or "C").upper()
+        if value not in ("A", "B", "C"):
+            value = "C"
+        self.config["nlp"]["sudachi_split_mode"] = value
+
+    # OCR 設定メソッド
+    def get_ocr_backend(self) -> str:
+        """OCR バックエンド名を返す"""
+        return self._safe_get_config("ocr.backend", "rapidocr")
+
+    def get_ocr_tier(self) -> str:
+        """OCR モデル tier（light/heavy）を返す"""
+        tier = str(self._safe_get_config("ocr.tier", "light") or "light").lower()
+        return "heavy" if tier == "heavy" else "light"
+
+    def set_ocr_tier(self, tier: str):
+        """OCR モデル tier を設定する"""
+        if "ocr" not in self.config:
+            self.config["ocr"] = {}
+        value = str(tier or "light").lower()
+        self.config["ocr"]["tier"] = "heavy" if value == "heavy" else "light"
+
+    # --- 後方互換シム（spaCy/Presidio 撤去済み。値は無害化）---
+    def get_spacy_model(self) -> str:
+        """[非推奨] spaCy は撤去済み。空文字を返す。"""
+        return ""
+
+    def set_spacy_model(self, model_name: str):
+        """[非推奨] spaCy は撤去済み。no-op。"""
+        logger.debug("set_spacy_model は非推奨です（spaCy 撤去済み）: %s", model_name)
 
     def get_models(self) -> Tuple[str, ...]:
-        """互換API: 利用候補モデルを優先順で返す"""
-        models: List[str] = []
-
-        primary = self.get_spacy_model()
-        if isinstance(primary, str) and primary:
-            models.append(primary)
-
-        for model in self.get_fallback_models():
-            if isinstance(model, str) and model and model not in models:
-                models.append(model)
-
-        if not models:
-            models = ["ja_core_news_trf", "ja_ginza_electra", "ja_ginza", "ja_core_news_lg"]
-
-        return tuple(models)
+        """[非推奨] spaCy は撤去済み。空タプルを返す。"""
+        return tuple()
 
     def get_chunk_delimiter(self) -> str:
         """チャンク分割の区切り文字を返す"""
@@ -608,15 +634,12 @@ class ConfigManager:
         self.config["nlp"]["chunk_max_chars"] = min(100000, max(100, parsed))
 
     def get_fallback_models(self) -> List[str]:
-        """フォールバックモデルのリストを返す"""
-        return self._safe_get_config(
-            "nlp.fallback_models",
-            ["ja_ginza_electra", "ja_ginza", "ja_core_news_lg", "ja_core_news_md", "ja_core_news_sm"],
-        )
+        """[非推奨] spaCy は撤去済み。空リストを返す。"""
+        return []
 
     def is_auto_download_enabled(self) -> bool:
-        """モデル自動ダウンロードが有効かどうかを返す"""
-        return self._safe_get_config("nlp.auto_download", True)
+        """[非推奨] spaCy モデル自動DLは撤去済み。常に False。"""
+        return False
 
     # 重複除去設定メソッド
     def is_deduplication_enabled(self) -> bool:

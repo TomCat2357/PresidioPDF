@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PresidioエンジンによるPII分析（重複除去はCLI共通ユーティリティへ委譲）
+形態素解析（SudachiPy）ベースの PII 分析。
+
+旧構成（spaCy + presidio-analyzer による統計 NER）から、SudachiPy 直叩きの
+固有名詞サブ品詞分類＋正規表現認識器へ置き換えたもの。検出結果の dict 形状
+（``{start, end, entity_type, text}``）と公開メソッドのシグネチャは維持しており、
+CLI / GUI / PDF 処理 / dedup / annotation は無改修で動作する。
+重複除去は CLI 共通ユーティリティへ委譲。
 """
 
 import logging
-import spacy
-from presidio_analyzer import (
-    AnalyzerEngine,
-    PatternRecognizer,
-    Pattern,
-    RecognizerResult,
-)
-from presidio_analyzer.nlp_engine import NlpEngineProvider
 from typing import List, Dict
 
 from src.core.config_manager import ConfigManager
 from src.core.regex_match_utils import resolve_mark_span
+from src.analysis.backends.sudachi_tokenizer import SudachiTokenizer
+from src.analysis.recognizers.regex_recognizers import detect_regex_entities
+from src.analysis.recognizers.pos_ne_recognizer import detect_pos_entities
+from src.analysis.recognizers.datetime_recognizer import detect_datetime
 
 logger = logging.getLogger(__name__)
 
 
 class Analyzer:
-    """Presidioエンジンの設定とPII分析を担当するクラス"""
-    # spaCy(ja_core_news_*) が利用する Sudachi の入力上限に合わせ、
-    # 上限値手前でチャンクを確定して tokenization エラーを回避する。
+    """SudachiPy エンジンの設定と PII 分析を担当するクラス"""
+    # SudachiPy の入力上限（バイト）に合わせ、上限値手前でチャンクを確定して
+    # tokenization エラーを回避する。
     _SUDACHI_MAX_INPUT_BYTES = 49149
     _SUDACHI_SAFE_MARGIN_BYTES = 1024
 
@@ -36,120 +38,10 @@ class Analyzer:
         self.config_manager = config_manager
         self._chunk_delimiter = config_manager.get_chunk_delimiter()
         self._chunk_max_chars = config_manager.get_chunk_max_chars()
-        self.analyzer = self._setup_presidio()
-
-    def _setup_presidio(self) -> AnalyzerEngine:
-        """Presidioエンジンを初期化"""
-        preferred_model = str(self.config_manager.get_spacy_model() or "").strip()
-        fallback_models = self.config_manager.get_fallback_models()
-
-        candidate_models: List[str] = []
-        for name in [preferred_model] + list(fallback_models):
-            model_name = str(name or "").strip()
-            if not model_name or model_name in candidate_models:
-                continue
-            candidate_models.append(model_name)
-
-        if not candidate_models:
-            candidate_models = ["ja_core_news_trf", "ja_core_news_lg", "ja_core_news_md", "ja_core_news_sm"]
-
-        last_error: Exception | None = None
-
-        for model_name in candidate_models:
-            try:
-                nlp = spacy.load(model_name)
-                config_models = [{"lang_code": "ja", "model_name": model_name}]
-                provider = NlpEngineProvider(
-                    nlp_configuration={
-                        "nlp_engine_name": "spacy",
-                        "models": config_models,
-                    }
-                )
-                analyzer = AnalyzerEngine(
-                    nlp_engine=provider.create_engine(),
-                    supported_languages=["ja"],
-                )
-                self.nlp = nlp
-
-                # 既定の認識器のみを登録（追加ルールは独自パイプラインで適用）
-                self._add_default_recognizers(analyzer)
-                logger.info(f"spaCyモデルを読み込みました: {model_name}")
-                return analyzer
-            except Exception as exc:
-                last_error = exc
-                logger.warning(f"spaCyモデル初期化失敗: {model_name} ({type(exc).__name__}: {exc})")
-                continue
-
-        tried = ", ".join(candidate_models)
-        message = f"利用可能なspaCyモデルが見つかりません。試行したモデル: {tried}"
-        if last_error is not None:
-            message = f"{message}. 最終エラー: {type(last_error).__name__}: {last_error}"
-        logger.error(message)
-        raise OSError(message)
-
-    # 旧方式（Presidioに直接登録）を保持する場合は上記で呼び出す
-    # def _add_custom_recognizers(self, analyzer: AnalyzerEngine):
-    #     ...
-
-    # カスタム人名辞書のPresidio登録は廃止し、追加パターンとして独自適用する
-
-    def _add_default_recognizers(self, analyzer: AnalyzerEngine):
-        """デフォルトの認識器を追加"""
-        # マイナンバー認識
-        individual_number_recognizer = PatternRecognizer(
-            supported_entity="INDIVIDUAL_NUMBER",
-            supported_language="ja",
-            patterns=[
-                Pattern(
-                    name="マイナンバー",
-                    score=0.9,
-                    regex=r"(?<!\d)(?:\d{4}-?\d{4}-?\d{4})(?!\d)",
-                )
-            ],
+        self._tokenizer = SudachiTokenizer(
+            dict_type=config_manager.get_sudachi_dict_type(),
+            split_mode=config_manager.get_sudachi_split_mode(),
         )
-        analyzer.registry.add_recognizer(individual_number_recognizer)
-
-        # 年号認識
-        year_recognizer = PatternRecognizer(
-            supported_entity="YEAR",
-            supported_language="ja",
-            patterns=[
-                Pattern(
-                    name="年",
-                    score=0.8,
-                    regex="([1-9][0-9]{3}年|(令和|平成|昭和|大正|明治)([1-9][0-9]?)年)",
-                )
-            ],
-        )
-        analyzer.registry.add_recognizer(year_recognizer)
-
-        # 敬称付き人名認識
-        person_name_recognizer = PatternRecognizer(
-            supported_entity="PERSON",
-            supported_language="ja",
-            patterns=[
-                Pattern(
-                    name="名前",
-                    score=0.7,
-                    regex=r"([\u4e00-\u9fff]+)(?:くん|さん|君|ちゃん|様)",
-                )
-            ],
-        )
-        analyzer.registry.add_recognizer(person_name_recognizer)
-
-        # 電話番号認識
-        phone_recognizer = PatternRecognizer(
-            supported_entity="PHONE_NUMBER",
-            supported_language="ja",
-            patterns=[
-                Pattern(
-                    name="電話番号",
-                    regex=r"(?<!\d)(?:0\d{1,4}[-]?\d{1,4}[-]?\d{4})(?!\d)",
-                    score=0.8,
-                )
-            ],
-        )
-        analyzer.registry.add_recognizer(phone_recognizer)
 
     def analyze_text(self, text: str, entities: List[str] = None) -> List[Dict]:
         """テキストの個人情報を解析（大容量ファイル対応）"""
@@ -210,10 +102,11 @@ class Analyzer:
             occupied.append((s, e))
             add_selected.append({k: v for k, v in cand.items() if not k.startswith("_")})
 
-        # 2) モデル検出（既存Presidio + 固有名詞）
-        analyzer_results = self.analyzer.analyze(text=text, language="ja", entities=entities)
-        if "PROPER_NOUN" in entities:
-            analyzer_results.extend(self._detect_proper_nouns(text))
+        # 2) モデル検出（正規表現認識器 + 形態素 NE + 日時）。返却は素の dict。
+        analyzer_results: List[Dict] = []
+        analyzer_results += detect_regex_entities(text, entities)
+        analyzer_results += detect_pos_entities(self._tokenizer, text, entities)
+        analyzer_results += detect_datetime(text, entities)
 
         # 3) モデル結果に除外適用＆追加と重複するものを抑制
         def overlaps_any(span):
@@ -225,38 +118,39 @@ class Analyzer:
 
         model_filtered: List[Dict] = []
         for r in analyzer_results:
-            if r.entity_type not in entities:
+            entity_type = r["entity_type"]
+            if entity_type not in entities:
                 continue
-            s, e = r.start, r.end
+            s, e = r["start"], r["end"]
             ent_text = text[s:e]
-            refined_text = self._refine_entity_text(ent_text, r.entity_type, text, s, e)
+            refined_text = self._refine_entity_text(ent_text, entity_type, text, s, e)
             if not refined_text or refined_text.isspace():
                 continue
             rs, re_ = self._calculate_refined_positions(text, s, e, refined_text)
             # 追加と重なればスキップ（追加優先）
             if overlaps_any((rs, re_)):
                 continue
-            if not self._is_valid_entity_candidate(r.entity_type, refined_text):
+            if not self._is_valid_entity_candidate(entity_type, refined_text):
                 logger.debug(
-                    f"エンティティ候補を妥当性検証で除外: '{refined_text}' ({r.entity_type})"
+                    f"エンティティ候補を妥当性検証で除外: '{refined_text}' ({entity_type})"
                 )
                 continue
             # 除外はモデル結果のみに適用
-            if self.config_manager.is_entity_excluded(r.entity_type, refined_text):
-                logger.debug(f"エンティティ除外: '{refined_text}' ({r.entity_type})")
+            if self.config_manager.is_entity_excluded(entity_type, refined_text):
+                logger.debug(f"エンティティ除外: '{refined_text}' ({entity_type})")
                 continue
             model_filtered.append(
                 {
                     "start": rs,
                     "end": re_,
-                    "entity_type": r.entity_type,
+                    "entity_type": entity_type,
                     "text": refined_text,
                 }
             )
 
         results = add_selected + model_filtered
         # Analyzer系の重複除去は廃止（Web/CLIで実施）
-        return sorted(results, key=lambda x: x["start"]) 
+        return sorted(results, key=lambda x: x["start"])
 
     @staticmethod
     def _digits_only(text: str) -> str:
@@ -345,17 +239,6 @@ class Analyzer:
 
         return sorted(all_results, key=lambda x: x["start"])
 
-    def _detect_proper_nouns(self, text: str) -> List[RecognizerResult]:
-        """固有名詞を検出（大容量テキスト対応）"""
-        if self._needs_chunking(text):
-            logger.debug(
-                f"固有名詞検出: 大容量テキスト ({len(text):,} 文字 / {self._utf8_len(text):,} bytes)"
-                " - チャンク処理"
-            )
-            return self._detect_proper_nouns_chunked(text)
-
-        return self._detect_proper_nouns_single(text)
-
     @staticmethod
     def _utf8_len(text: str) -> int:
         """UTF-8バイト長を返す"""
@@ -414,48 +297,6 @@ class Analyzer:
             cursor = end
 
         return chunks
-
-    def _detect_proper_nouns_single(self, text: str) -> List[RecognizerResult]:
-        """単一テキストの固有名詞検出"""
-        results = []
-        doc = self.nlp(text)
-
-        for token in doc:
-            if token.pos_ == "PROPN":
-                result = RecognizerResult(
-                    entity_type="PROPER_NOUN",
-                    start=token.idx,
-                    end=token.idx + len(token.text),
-                    score=0.85,
-                    recognition_metadata={"recognizer_name": "ProperNounRecognizer"},
-                )
-                results.append(result)
-
-        return results
-
-    def _detect_proper_nouns_chunked(self, text: str) -> List[RecognizerResult]:
-        """チャンク分割による大容量テキストの固有名詞検出"""
-        chunks = self._chunk_text(text)
-        all_results = []
-
-        for i, chunk_info in enumerate(chunks):
-            chunk_text = chunk_info["text"]
-            start_offset = chunk_info["start_offset"]
-
-            try:
-                chunk_results = self._detect_proper_nouns_single(chunk_text)
-
-                for result in chunk_results:
-                    result.start += start_offset
-                    result.end += start_offset
-
-                all_results.extend(chunk_results)
-
-            except Exception as e:
-                logger.error(f"固有名詞検出 チャンク {i+1} でエラー: {e}")
-                continue
-
-        return all_results
 
     def _chunk_text(self, text: str) -> List[Dict]:
         """テキストをチャンクに分割（区切り文字→文字数/バイト数フォールバック）"""
@@ -524,8 +365,6 @@ class Analyzer:
             chunks = self._split_text_by_hard_limits(text, 0, max_chars, max_bytes)
 
         return chunks if chunks else [{"text": text, "start_offset": 0}]
-
-    # Analyzer系の独自重複除去実装は廃止（共通ユーティリティへ移行）
 
     def _refine_entity_text(
         self, entity_text: str, entity_type: str, full_text: str, start: int, end: int
