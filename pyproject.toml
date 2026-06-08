@@ -7,31 +7,44 @@ name = "presidio-pdf"
 version = "0.1.0"
 description = "Japanese personal information detection and masking tool for PDF documents"
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
+# Python 3.13 系を唯一のサポート対象とする（>=3.13,<3.14）。
+# 上限 <3.14 はコア依存の制約（cp314 wheel が未提供）:
+#   - presidio-analyzer (最新 2.2.362) が requires-python "<3.14,>=3.10"
+#   - spacy 3.8 系（最新 3.8.14）に cp314 wheel が無い
+# 下限 >=3.13 はビルド／配布対象を 3.13 に一本化するため。全コア依存に
+# cp313 wheel（PyMuPDF/PyQt6 は cp39-abi3 wheel）が揃っており、ソースビルド
+# なしで導入できる。
+requires-python = ">=3.13,<3.14"
 # 最小限のデフォルト依存関係（CPUモード）
 dependencies = [
     # 基本的なCLI機能に必要な最小限のパッケージ
-    "click>=8.0.0",
-    # ndlocr-lite の固定依存に合わせる（OCR有効時もABI不整合を避ける）
+    "click>=8.1.0",
+    # ndlocr-lite の固定依存に合わせる（OCR有効時もABI不整合を避ける。cp313 wheel あり）
     "numpy==2.2.2",
-    "spacy>=3.8.0,<3.9.0",
-    "presidio-analyzer>=2.2.0",
-    "PyMuPDF>=1.23.0",
-    "PyYAML>=6.0",
-    # spaCy日本語モデル
+    # spacy 3.8.7 以降が Python 3.13 (cp313) wheel を提供（3.8.5 以前は <3.13 指定）
+    "spacy>=3.8.7,<3.9.0",
+    # presidio-analyzer は 2.2.355 以降が requires-python "<3.14,>=3.10"
+    "presidio-analyzer>=2.2.355",
+    # PyMuPDF 1.25 系から cp39-abi3 wheel となり 3.13 で利用可能
+    "PyMuPDF>=1.25.1",
+    # PyYAML は 6.0.2 から cp313 wheel を提供
+    "PyYAML>=6.0.2",
+    # spaCy日本語モデル（py3-none-any のためインタプリタ非依存）
     "ja-core-news-sm>=3.8.0,<3.9.0",
     "ja-core-news-md>=3.8.0,<3.9.0",
 ]
 
 [project.optional-dependencies]
-# 開発用ツール
+# 開発用ツール（いずれも Python 3.13 対応版を下限に設定）
 dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "pytest-mock>=3.10.0",
-    "black>=23.0.0",
-    "flake8>=6.0.0",
-    "mypy>=1.0.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "pytest-mock>=3.14.0",
+    # black は 24.10.0 で Python 3.13 / target-version py313 をサポート
+    "black>=24.10.0",
+    "flake8>=7.0.0",
+    # mypy は 1.13.0 で Python 3.13 typeshed をサポート
+    "mypy>=1.13.0",
 ]
 
 # spaCyモデル（個別インストール用）
@@ -44,7 +57,8 @@ model-ginza-electra = ["ginza>=5.2.0", "ja-ginza-electra>=5.2.0"]
 
 # GPUモード（GPU系パッケージのみ）
 gpu = [
-    "torch>=2.0.0",
+    # torch は 2.6.0 で Windows 向け cp313 wheel を提供（2.5.0 は Linux のみ）
+    "torch>=2.6.0",
     "pandas>=2.3.1",
     "reportlab>=4.0.0",
     "pdfplumber>=0.10.0",
@@ -59,18 +73,19 @@ gpu = [
 
 # 軽量版（Presidio PDF処理のみ、最小構成）
 minimal = [
-    "click>=8.0.0",
-    "spacy>=3.8.0,<3.9.0",
-    "presidio-analyzer>=2.2.0",
-    "PyMuPDF>=1.23.0",
-    "PyYAML>=6.0",
+    "click>=8.1.0",
+    "spacy>=3.8.7,<3.9.0",
+    "presidio-analyzer>=2.2.355",
+    "PyMuPDF>=1.25.1",
+    "PyYAML>=6.0.2",
     "ja-core-news-sm>=3.8.0,<3.9.0",
 ]
 
 # GUI専用（PyQt6ベース）
 gui = [
-    "PyQt6>=6.6.0",
-    "PyQt6-Qt6>=6.6.0",
+    # PyQt6 は cp38-abi3 wheel のため 3.13 で動作。6.7.0 を 3.13 検証済み下限に設定
+    "PyQt6>=6.7.0",
+    "PyQt6-Qt6>=6.7.0",
 ]
 
 # OCR拡張（NDLOCR-Lite）
@@ -95,10 +110,10 @@ where = ["src"]
 
 [tool.black]
 line-length = 88
-target-version = ['py311']
+target-version = ['py313']
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
@@ -124,5 +139,3 @@ ja-ginza-electra = { url = "https://github.com/megagonlabs/ginza/releases/downlo
 dev = [
     "pytest>=8.4.1",
 ]
-
-# [dependency-groups] - 不要なので削除

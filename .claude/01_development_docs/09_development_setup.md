@@ -20,7 +20,7 @@ recommended_requirements:
 ```
 
 ### ソフトウェア要件
-- **Python**: 3.8+ (3.9-3.11推奨)
+- **Python**: 3.13 系（`>=3.13,<3.14`）。3.14 はコア依存（presidio-analyzer / spacy）が未対応のため不可
 - **uv**: 最新版（パッケージ管理）
 - **Git**: 2.20+
 - **エディタ**: VS Code推奨（拡張設定含む）
@@ -40,7 +40,7 @@ git checkout -b feature/your-feature-name
 ### 2. Python環境確認
 ```bash
 # Pythonバージョン確認
-python --version  # 3.8+ であること
+python --version  # 3.13 系であること（>=3.13,<3.14）
 
 # uvインストール確認
 uv --version
@@ -423,7 +423,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.8, 3.9, 3.10, 3.11]
+        python-version: ["3.13"]
     
     steps:
     - uses: actions/checkout@v3
