@@ -11,7 +11,7 @@ import sys
 
 # Windows環境でPyQt6とonnxruntimeのDLL衝突を回避するため、
 # PyQt6より先にonnxruntimeとcv2をインポートする。
-# ndlocr-liteはオプション依存のためインポート失敗は無視する。
+# RapidOCR(onnxruntime/cv2)はオプション依存のためインポート失敗は無視する。
 try:
     import onnxruntime  # noqa: F401
     import cv2  # noqa: F401

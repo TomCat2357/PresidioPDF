@@ -411,7 +411,7 @@ class PipelineService:
         logger.info("run_ocr開始")
 
         import fitz
-        from src.ocr.ndlocr_service import NDLOCRService
+        from src.ocr import get_ocr_service
         from src.pdf.pdf_text_embedder import PDFTextEmbedder
 
         if not isinstance(pdf_path, Path):
@@ -427,12 +427,8 @@ class PipelineService:
             raise ValueError("dpiは1以上で指定してください")
 
         settings = PipelineService._normalize_ocr_settings(ocr_settings)
-        if not NDLOCRService.is_available():
-            raise RuntimeError(
-                "NDLOCR-Liteが利用できません。`pip install ndlocr-lite` を実行してください。"
-            )
-
-        service = NDLOCRService()
+        # get_ocr_service は利用不可時に RuntimeError を送出する
+        service = get_ocr_service(settings)
         ocr_results_by_page: Dict[int, List[Dict[str, Any]]] = {}
         embedded_count = 0
         target_pages: List[int] = []
@@ -590,7 +586,8 @@ class PipelineService:
     def run_detect(
         read_result: Dict[str, Any],
         entities: Optional[List[str]] = None,
-        model_names: Optional[Tuple[str, ...]] = None,
+        sudachi_dict_type: Optional[str] = None,
+        sudachi_split_mode: Optional[str] = None,
         use_predetect: bool = True,
         add_patterns: Optional[List[Tuple[str, str]]] = None,
         exclude_patterns: Optional[List[str]] = None,
@@ -605,7 +602,8 @@ class PipelineService:
         Args:
             read_result: run_readの結果
             entities: 検出対象のエンティティリスト（省略時は設定ファイルから）
-            model_names: 使用するモデル名のタプル（省略時は設定ファイルから）
+            sudachi_dict_type: Sudachi 辞書種別（core/full/small。省略時は既定）
+            sudachi_split_mode: Sudachi 分割モード（A/B/C。省略時は既定）
             use_predetect: 事前検出を使用するか
             add_patterns: 追加パターン [(entity_type, regex), ...]
             exclude_patterns: 除外パターン [regex, ...]
@@ -642,12 +640,11 @@ class PipelineService:
         if entities is None:
             entities = cfg.get_enabled_entities()
 
-        # モデルの決定
-        if model_names is not None and model_names:
-            cfg.set_spacy_model(model_names[0])
-            model_names = cfg.get_models()
-        else:
-            model_names = cfg.get_models()
+        # Sudachi 設定の適用（指定があれば反映）
+        if sudachi_dict_type is not None:
+            cfg.set_sudachi_dict_type(sudachi_dict_type)
+        if sudachi_split_mode is not None:
+            cfg.set_sudachi_split_mode(sudachi_split_mode)
 
         # チャンク分割設定の適用
         if chunk_delimiter is not None:

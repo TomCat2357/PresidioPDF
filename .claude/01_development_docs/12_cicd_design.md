@@ -37,7 +37,7 @@ on:
     branches: [ main, develop ]
 
 env:
-  PYTHON_VERSION: '3.11'
+  PYTHON_VERSION: '3.14'
   UV_VERSION: '0.1.0'
 
 jobs:
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.14']
     
     steps:
     - name: Checkout code
@@ -98,7 +98,7 @@ jobs:
           --junitxml=pytest-results.xml
           
     - name: Upload coverage to Codecov
-      if: matrix.python-version == '3.11'
+      if: matrix.python-version == '3.14'
       uses: codecov/codecov-action@v3
       with:
         file: ./coverage.xml
@@ -330,7 +330,7 @@ jobs:
 ```dockerfile
 # Dockerfile
 # ビルドステージ
-FROM python:3.11-slim as builder
+FROM python:3.14-slim as builder
 
 WORKDIR /app
 
@@ -343,15 +343,12 @@ RUN apt-get update && apt-get install -y \
 # uvインストール
 RUN pip install uv
 
-# 依存関係インストール
+# 依存関係インストール（PII検出は SudachiPy、辞書は sudachidict-core を同梱）
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-editable
 
-# spaCyモデルダウンロード
-RUN uv run python -m spacy download ja_core_news_sm
-
 # プロダクションステージ
-FROM python:3.11-slim as production
+FROM python:3.14-slim as production
 
 WORKDIR /app
 

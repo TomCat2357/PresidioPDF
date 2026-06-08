@@ -11,7 +11,8 @@ from src.gui_pyqt.views.main_window import MainWindow
 class _FakeDetectConfigService:
     ENTITY_TYPES = ["PERSON"]
     ENTITY_ALIASES = {}
-    DEFAULT_SPACY_MODEL = "ja_core_news_sm"
+    DEFAULT_SUDACHI_DICT_TYPE = "core"
+    DEFAULT_SUDACHI_SPLIT_MODE = "C"
     DISPLAY_FILE_NAME = "config.json"
 
     def __init__(self, _home_path):
@@ -23,14 +24,19 @@ class _FakeDetectConfigService:
     def load_duplicate_settings(self):
         return {"entity_overlap_mode": "any", "overlap": "overlap"}
 
-    def load_spacy_model(self):
-        return self.DEFAULT_SPACY_MODEL
+    def load_sudachi_settings(self):
+        return {
+            "dict_type": self.DEFAULT_SUDACHI_DICT_TYPE,
+            "split_mode": self.DEFAULT_SUDACHI_SPLIT_MODE,
+        }
 
     def load_text_preprocess_settings(self):
         return {"ignore_newlines": True, "ignore_whitespace": False}
 
     def load_ocr_settings(self):
         return {
+            "backend": "rapidocr",
+            "tier": "light",
             "font_color": [0, 0, 0],
             "opacity": 0.0,
             "ocr_before_detect": False,

@@ -67,9 +67,9 @@
 ## 技術的制約と前提
 
 ### 技術制約
-- Python 3.8+ 必須
-- spaCy日本語モデルのダウンロードが必要（200MB-2GB）
-- PDFテキスト抽出可能な形式のみ対応（画像PDFは非対応）
+- Python 3.14 系必須（`>=3.14,<3.15`）
+- SudachiPy 辞書（`sudachidict-core`）を使用。被覆向上には `sudachidict-full`（数百MB）
+- OCR（RapidOCR）有効時は初回にONNXモデルを自動DL（画像PDFもOCR経由で対応可）
 
 ### 非機能要件
 - 処理時間: 10ページPDFを30秒以内で処理

@@ -122,7 +122,7 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
         "title": "OCR",
         "body": """
 <h3>対象</h3>
-<p><b>OCR</b> は NDLOCR-Lite を使って画像化された文字をテキスト化します。</p>
+<p><b>OCR</b> は RapidOCR を使って画像化された文字をテキスト化します。軽量(mobile)/高精度(server)の2モデルを設定で選べます。</p>
 <h3>メニュー</h3>
 <ul>
   <li><b>OCR実行</b>: 表示ページまたは全ページに OCR テキストを埋め込みます。</li>
@@ -261,16 +261,16 @@ HELP_TOPICS: Dict[str, Dict[str, str]] = {
 </ul>
 """,
     },
-    "settings_model": {
-        "title": "設定: spaCyモデル",
+    "settings_sudachi": {
+        "title": "設定: Sudachi 辞書 / 分割モード",
         "body": """
 <h3>対象</h3>
-<p><b>使用モデル</b> のコンボボックスです。</p>
+<p><b>辞書</b> と <b>分割モード</b> のコンボボックスです。</p>
 <h3>ポイント</h3>
 <ul>
-  <li>検出に使う spaCy 日本語モデルを切り替えます。</li>
-  <li>未インストールのモデルは選べません。</li>
-  <li>モデル変更も自動保存されます。</li>
+  <li>検出に使う SudachiPy の辞書種別（core/full/small）を切り替えます。</li>
+  <li>分割モード（A=短/B=中/C=長単位）を切り替えます。固有名詞検出は C 推奨。</li>
+  <li>変更は自動保存されます。</li>
 </ul>
 """,
     },
