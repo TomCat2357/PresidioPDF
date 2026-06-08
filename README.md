@@ -6,7 +6,7 @@
 - 中核処理は `read -> detect -> duplicate -> mask` の分割コマンドで構成されています。
 
 ## Requirements
-- Python `>=3.11,<3.12`
+- Python `>=3.13,<3.14`（3.13 系を前提）
 - `uv` による依存管理
 
 ## Install
