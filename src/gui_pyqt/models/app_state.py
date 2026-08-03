@@ -135,8 +135,13 @@ class AppState(QObject):
 
     def clear(self):
         """全ての状態をクリア"""
-        self.reset_results()
+        # pdf_pathを先にNoneへ更新してからreset_results()を呼ぶ。
+        # reset_results()が発火するシグナルの購読側（ResultPanel等）は
+        # 通知を受けた時点のpdf_pathを参照することがあるため、逆順だと
+        # 「PDFが閉じられたのにpdf_pathはまだ旧PDFのまま」という
+        # 不整合な中間状態を観測させてしまう。
         self.pdf_path = None
+        self.reset_results()
         self.status_message = "準備完了"
 
     def has_pdf(self) -> bool:
