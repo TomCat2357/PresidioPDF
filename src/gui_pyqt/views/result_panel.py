@@ -217,6 +217,9 @@ class ResultPanel(QWidget):
         self._sort_ascending: bool = True
         self._filter_inputs: List[QLineEdit] = []
         self._filter_patterns: List[Optional[Pattern[str]]] = [None] * 5
+        # 現在表示中のentitiesがどのPDFに属するか（二重防御用。呼び出し側が
+        # owner_pdf_pathを渡さない限りNoneのままで、既存挙動は変わらない）
+        self._owner_pdf_path: Optional[str] = None
         self.init_ui()
 
     def init_ui(self):
@@ -349,8 +352,18 @@ class ResultPanel(QWidget):
             current = current.parentWidget()
         return False
 
-    def load_entities(self, result: Optional[dict]):
-        """検出結果を読み込んでテーブルに表示"""
+    def load_entities(
+        self, result: Optional[dict], owner_pdf_path: Optional[str] = None
+    ):
+        """検出結果を読み込んでテーブルに表示
+
+        Args:
+            result: 表示するdetect結果（Noneの場合は空表示にする）
+            owner_pdf_path: このentitiesがどのPDFに属するかを示す識別子（任意）。
+                省略時は既存動作と同じくNoneのまま扱う（後方互換）。
+        """
+        self._owner_pdf_path = owner_pdf_path
+
         if not result:
             self.entities = []
             self._visible_entities = []
@@ -866,6 +879,10 @@ class ResultPanel(QWidget):
     def get_entities(self) -> List[Dict]:
         """現在のエンティティリストを取得"""
         return self.entities
+
+    def get_owner_pdf_path(self) -> Optional[str]:
+        """現在表示中のentitiesが属するPDFの識別子を取得（未設定ならNone）"""
+        return self._owner_pdf_path
 
     @staticmethod
     def _entity_type_span_key(entity: Dict) -> tuple:

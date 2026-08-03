@@ -859,12 +859,12 @@ class MainWindow(QMainWindow):
 
     def _open_pdf_path(self, pdf_path: Path):
         """指定パスのPDFを読み込む"""
+        # PDF切り替え時は前回結果を必ずクリアする（値がNoneのままでも
+        # 手動マーク等の残骸をビュー側から確実に消し去るためreset_resultsを使う）
+        self.app_state.reset_results()
+        self._reset_detect_scope_context()
+        self._reset_duplicate_scope_context()
         self.app_state.pdf_path = pdf_path
-        # PDF切り替え時は前回結果をクリア
-        self.app_state.read_result = None
-        self.app_state.detect_result = None
-        self.app_state.duplicate_result = None
-        self.app_state.ocr_result = None
         self.log_message(f"PDFファイルを選択: {pdf_path}")
         self._set_dirty(False)
         self.update_action_states()
@@ -1906,7 +1906,11 @@ class MainWindow(QMainWindow):
     def _refresh_result_view_from_state(self):
         """現在の状態から結果一覧とプレビューハイライトを再構築する"""
         current_result = self.app_state.duplicate_result or self.app_state.detect_result
-        self.result_panel.load_entities(current_result)
+        current_pdf_path = self.app_state.pdf_path
+        self.result_panel.load_entities(
+            current_result,
+            owner_pdf_path=str(current_pdf_path) if current_pdf_path else None,
+        )
         if current_result:
             self._highlight_all_entities(current_result)
         else:
@@ -3062,7 +3066,20 @@ class MainWindow(QMainWindow):
             read_detect = []
 
         # ResultPanelに表示中の項目をDetect入力へそのまま反映する
+        # （二重防御）ResultPanelが保持するentitiesが現在のPDFと異なるPDFのもの
+        # であれば、前PDFの手動マーク等の混入を防ぐため利用しない
         current_entities = self.result_panel.get_entities()
+        if current_entities:
+            current_pdf_path = self.app_state.pdf_path
+            owner_pdf_path = self.result_panel.get_owner_pdf_path()
+            expected_owner = str(current_pdf_path) if current_pdf_path else None
+            if owner_pdf_path is not None and owner_pdf_path != expected_owner:
+                self.log_message(
+                    "警告: 検出結果パネルの内容が現在のPDFと一致しないため無視します"
+                    f"（owner={owner_pdf_path}, current={expected_owner}）"
+                )
+                current_entities = []
+
         panel_entities: List[Dict[str, Any]] = []
         if isinstance(current_entities, list):
             for entity in current_entities:

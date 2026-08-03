@@ -681,17 +681,23 @@ def test_dedupe_detect_by_entity_and_span_keeps_different_entity_same_span():
 
 
 class _ResultPanelDetectInputDouble:
-    def __init__(self, entities):
+    def __init__(self, entities, owner_pdf_path=None):
         self._entities = entities
+        self._owner_pdf_path = owner_pdf_path
 
     def get_entities(self):
         return self._entities
 
+    def get_owner_pdf_path(self):
+        return self._owner_pdf_path
+
 
 class _MainWindowDetectInputDouble:
-    def __init__(self, read_result, panel_entities):
-        self.app_state = SimpleNamespace(read_result=read_result)
-        self.result_panel = _ResultPanelDetectInputDouble(panel_entities)
+    def __init__(self, read_result, panel_entities, pdf_path=None, owner_pdf_path=None):
+        self.app_state = SimpleNamespace(read_result=read_result, pdf_path=pdf_path)
+        self.result_panel = _ResultPanelDetectInputDouble(
+            panel_entities, owner_pdf_path=owner_pdf_path
+        )
         self.messages = []
 
     def log_message(self, message):
@@ -733,6 +739,36 @@ def test_build_read_result_for_detect_uses_current_panel_entities():
     assert result["detect"] is not panel_entities
     assert any(
         "既存検出 2件を保持してDetectを実行します" in msg for msg in fake.messages
+    )
+
+
+def test_build_read_result_for_detect_ignores_stale_panel_entities_from_other_pdf():
+    """ResultPanelが別PDFのentitiesを保持している場合は混入させない（二重防御）"""
+    read_result = {
+        "metadata": {"pdf": {"path": "/tmp/sample.pdf"}},
+        "text": [["dummy"]],
+        "detect": [],
+    }
+    panel_entities = [
+        {
+            "word": "前のPDFの手動マーク",
+            "entity": "PERSON",
+            "start": {"page_num": 0, "block_num": 0, "offset": 0},
+            "end": {"page_num": 0, "block_num": 0, "offset": 1},
+        }
+    ]
+    fake = _MainWindowDetectInputDouble(
+        read_result,
+        panel_entities,
+        pdf_path="/tmp/new.pdf",
+        owner_pdf_path="/tmp/old.pdf",
+    )
+
+    result = MainWindow._build_read_result_for_detect(fake)
+
+    assert result["detect"] == []
+    assert any(
+        "現在のPDFと一致しないため無視します" in msg for msg in fake.messages
     )
 
 
