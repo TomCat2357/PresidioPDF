@@ -859,12 +859,23 @@ class MainWindow(QMainWindow):
 
     def _open_pdf_path(self, pdf_path: Path):
         """指定パスのPDFを読み込む"""
+        # 先にpdf_pathを新しい値へ更新してからreset_results()を呼ぶ。
+        # reset_results()が発火するdetect_result_changed/duplicate_result_changed
+        # 経由で_refresh_result_view_from_state()が呼ばれ、そこでResultPanelの
+        # owner_pdf_pathがapp_state.pdf_pathで更新される。pdf_pathの更新を後回しに
+        # すると、この時点のapp_state.pdf_pathがまだ旧PDFのままとなり、
+        # owner_pdf_pathに旧PDFのパスが刻まれて残ってしまう
+        # （Detectを一度も実行しないまま新PDFへ手動マークした場合に、次のDetect実行時
+        # 「別PDFのものと誤判定されて正当なマークまで破棄される」新たな不具合となる）。
+        # なお、pdf_path変更で走るon_pdf_path_changed（PDFプレビューの再描画）は
+        # イベントループへ戻る前にreset_resultsで結果もクリアされるため、
+        # 旧結果が残った中間状態が実際に描画されることはない。
         self.app_state.pdf_path = pdf_path
-        # PDF切り替え時は前回結果をクリア
-        self.app_state.read_result = None
-        self.app_state.detect_result = None
-        self.app_state.duplicate_result = None
-        self.app_state.ocr_result = None
+        # PDF切り替え時は前回結果を必ずクリアする（値がNoneのままでも
+        # 手動マーク等の残骸をビュー側から確実に消し去るためreset_resultsを使う）
+        self.app_state.reset_results()
+        self._reset_detect_scope_context()
+        self._reset_duplicate_scope_context()
         self.log_message(f"PDFファイルを選択: {pdf_path}")
         self._set_dirty(False)
         self.update_action_states()
@@ -1906,7 +1917,11 @@ class MainWindow(QMainWindow):
     def _refresh_result_view_from_state(self):
         """現在の状態から結果一覧とプレビューハイライトを再構築する"""
         current_result = self.app_state.duplicate_result or self.app_state.detect_result
-        self.result_panel.load_entities(current_result)
+        current_pdf_path = self.app_state.pdf_path
+        self.result_panel.load_entities(
+            current_result,
+            owner_pdf_path=str(current_pdf_path) if current_pdf_path else None,
+        )
         if current_result:
             self._highlight_all_entities(current_result)
         else:
@@ -3062,7 +3077,20 @@ class MainWindow(QMainWindow):
             read_detect = []
 
         # ResultPanelに表示中の項目をDetect入力へそのまま反映する
+        # （二重防御）ResultPanelが保持するentitiesが現在のPDFと異なるPDFのもの
+        # であれば、前PDFの手動マーク等の混入を防ぐため利用しない
         current_entities = self.result_panel.get_entities()
+        if current_entities:
+            current_pdf_path = self.app_state.pdf_path
+            owner_pdf_path = self.result_panel.get_owner_pdf_path()
+            expected_owner = str(current_pdf_path) if current_pdf_path else None
+            if owner_pdf_path is not None and owner_pdf_path != expected_owner:
+                self.log_message(
+                    "警告: 検出結果パネルの内容が現在のPDFと一致しないため無視します"
+                    f"（owner={owner_pdf_path}, current={expected_owner}）"
+                )
+                current_entities = []
+
         panel_entities: List[Dict[str, Any]] = []
         if isinstance(current_entities, list):
             for entity in current_entities:

@@ -116,13 +116,32 @@ class AppState(QObject):
             self._status_message = value
             self.status_message_changed.emit(value)
 
+    def reset_results(self):
+        """処理結果を強制的にクリアする
+
+        通常のsetterは値が変化した場合のみシグナルを発火するため、
+        既にNoneの状態でreadResult等をNoneに再代入してもシグナルは飛ばない。
+        PDF切り替え時など「値の変化に関わらず必ずビュー側へ通知したい」場面では
+        このメソッドを使い、値比較を行わず常にシグナルを発火させる。
+        """
+        self._read_result = None
+        self.read_result_changed.emit(None)
+        self._detect_result = None
+        self.detect_result_changed.emit(None)
+        self._duplicate_result = None
+        self.duplicate_result_changed.emit(None)
+        self._ocr_result = None
+        self.ocr_result_changed.emit(None)
+
     def clear(self):
         """全ての状態をクリア"""
+        # pdf_pathを先にNoneへ更新してからreset_results()を呼ぶ。
+        # reset_results()が発火するシグナルの購読側（ResultPanel等）は
+        # 通知を受けた時点のpdf_pathを参照することがあるため、逆順だと
+        # 「PDFが閉じられたのにpdf_pathはまだ旧PDFのまま」という
+        # 不整合な中間状態を観測させてしまう。
         self.pdf_path = None
-        self.read_result = None
-        self.detect_result = None
-        self.duplicate_result = None
-        self.ocr_result = None
+        self.reset_results()
         self.status_message = "準備完了"
 
     def has_pdf(self) -> bool:
