@@ -5,12 +5,60 @@
 - 実行インターフェースは **CUI** と **PyQt GUI** のみです。
 - 中核処理は `read -> detect -> duplicate -> mask` の分割コマンドで構成されています。
 
+## クイックスタート（初回セットアップ）
+
+初めて利用する場合は、次の 4 ステップで PyQt GUI を起動できます。
+
+### 1. `uv` をインストール
+
+依存管理には [`uv`](https://docs.astral.sh/uv/) を使います（未導入の場合のみ実行）。
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+`uv --version` が表示されれば準備完了です（必要な Python 3.14 系は `uv` が自動取得します）。
+
+### 2. リポジトリを取得
+
+```bash
+git clone <repository-url>
+cd presidio-pdf
+```
+
+### 3. 依存をインストール
+
+```bash
+# GUI のみ
+uv sync --extra gui
+
+# GUI + OCR（RapidOCR）も使う場合
+uv sync --extra gui --extra ocr
+```
+
+### 4. GUI を起動
+
+```bash
+uv run presidio-gui
+```
+
+起動後は PDF をウィンドウにドラッグ＆ドロップして読み込みます。CUI のみを使う場合は [CUI Usage](#cui-usage) を参照してください。
+
 ## Requirements
 - Python `>=3.14,<3.15`（3.14 系を前提）
 - `uv` による依存管理
 - PII 検出は **SudachiPy**（形態素解析）、OCR は **RapidOCR v3** を使用します（spaCy / Presidio / NDLOCR-Lite は廃止）。
 
 ## Install
+
+> 事前に `uv` が必要です。未導入の場合は [クイックスタート](#クイックスタート初回セットアップ) の手順 1 を実行してください。
+
 ```bash
 git clone <repository-url>
 cd presidio-pdf
@@ -114,6 +162,9 @@ uv run python -m src.cli.run_config_main config/sample_run.yaml
 ```
 
 ## PyQt GUI Usage
+
+初回セットアップは [クイックスタート](#クイックスタート初回セットアップ) を参照してください。導入済みの場合の起動コマンドは次のとおりです。
+
 ```bash
 uv sync --extra gui
 uv run presidio-gui
