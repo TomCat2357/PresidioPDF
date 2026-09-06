@@ -50,10 +50,15 @@ gui = [
     "PyQt6-Qt6>=6.11.0",
 ]
 
-# OCR拡張（RapidOCR v3）。依存(onnxruntime/opencv/numpy/shapely/pyclipper/Pillow)は
+# OCR拡張（RapidOCR v3）。依存(opencv/numpy/shapely/pyclipper/Pillow)は
 # すべて 3.14 対応（cp314 wheel もしくは abi3 wheel）。日本語認識は PP-OCRv4 を使用。
 ocr = [
     "rapidocr>=3.8.1",
+    # RapidOCR v3 は推論バックエンド(onnxruntime/openvino/paddle/torch)を
+    # 依存に含めず実行時に選ばせる。既定の ONNXRuntime バックエンドを使うため
+    # 明示的に追加する（未導入だと ImportError: onnxruntime is not installed）。
+    # cp314 win_amd64 wheel あり（2026-09 時点で PyPI に 1.29.0 の実 wheel を確認）。
+    "onnxruntime>=1.22.0",
 ]
 
 [project.scripts]
