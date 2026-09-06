@@ -11,8 +11,11 @@ from src.pdf.pdf_text_embedder import PDFTextEmbedder
 def _create_sample_pdf(pdf_path):
     with fitz.open() as doc:
         page = doc.new_page(width=595, height=842)
-        page.insert_text((72, 120), "機密情報1234", fontsize=14)
-        page.insert_text((72, 180), "四角指定", fontsize=14)
+        # PyMuPDF 1.27 系の既定フォント(helv)には CJK グリフが無く、
+        # insert_text しても文字が落ちて search_for でヒットしない。
+        # MuPDF 同梱の日本語フォント "japan" を明示指定する。
+        page.insert_text((72, 120), "機密情報1234", fontsize=14, fontname="japan")
+        page.insert_text((72, 180), "四角指定", fontsize=14, fontname="japan")
         doc.save(str(pdf_path))
 
 
