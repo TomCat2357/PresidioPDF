@@ -814,6 +814,54 @@ def test_get_image_export_source_result_prefers_duplicate_then_detect_then_read(
     assert MainWindow._get_image_export_source_result(fake) is None
 
 
+def test_get_export_source_result_falls_back_to_read_result():
+    """Detect未実行でも Read結果をエクスポート入力として使う（回帰）。
+
+    以前は _get_export_source_result() が duplicate/detect しか見ず、
+    「Read済み・Detect未実行・手動マークのみ」だと マスク/アノテーション/CSV が
+    グレーアウトして使えなかった。
+    """
+    read_result = {"detect": [{"word": "手動マーク"}]}
+
+    # read_result のみでも返る（これがバグ修正の本体）
+    fake = _MainWindowExportSourceDouble(read_result=read_result)
+    assert MainWindow._get_export_source_result(fake) is read_result
+
+    # duplicate > detect > read の優先順位は不変
+    detect_result = {"detect": []}
+    duplicate_result = {"detect": [{"word": "A"}]}
+    fake = _MainWindowExportSourceDouble(
+        read_result=read_result,
+        detect_result=detect_result,
+        duplicate_result=duplicate_result,
+    )
+    assert MainWindow._get_export_source_result(fake) is duplicate_result
+    fake = _MainWindowExportSourceDouble(
+        read_result=read_result, detect_result=detect_result
+    )
+    assert MainWindow._get_export_source_result(fake) is detect_result
+
+    # 何も無ければ None
+    assert MainWindow._get_export_source_result(_MainWindowExportSourceDouble()) is None
+
+
+def test_image_and_detect_export_sources_resolve_identically():
+    """画像系と検出系のエクスポート入力解決は同一（片方だけ直す再発を防ぐ）。"""
+    for kwargs in (
+        {"read_result": {"detect": []}},
+        {"detect_result": {"detect": [{"word": "A"}]}},
+        {
+            "duplicate_result": {"detect": [{"word": "B"}]},
+            "read_result": {"detect": []},
+        },
+        {},
+    ):
+        fake = _MainWindowExportSourceDouble(**kwargs)
+        assert MainWindow._get_image_export_source_result(
+            fake
+        ) is MainWindow._get_export_source_result(fake)
+
+
 class _ResultPanelPreviewClickDouble:
     def __init__(self, entities):
         self.entities = entities

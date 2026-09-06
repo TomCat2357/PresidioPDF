@@ -1532,7 +1532,7 @@ class MainWindow(QMainWindow):
         detect_or_dup_result = self._get_export_source_result()
 
         if not detect_or_dup_result:
-            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            QMessageBox.warning(self, "警告", "PDFの読み込み（Read）が完了していません")
             return
 
         if not self.app_state.has_pdf():
@@ -1541,6 +1541,16 @@ class MainWindow(QMainWindow):
 
         if self.task_runner.is_running():
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        mask_targets = detect_or_dup_result.get("detect")
+        if not isinstance(mask_targets, list) or not mask_targets:
+            QMessageBox.warning(
+                self,
+                "警告",
+                "マスク対象がありません。対象検出（Detect）を実行するか、"
+                "プレビュー上で手動マークしてください。",
+            )
             return
 
         output_pdf_path = self._select_output_pdf_path(
@@ -1568,13 +1578,23 @@ class MainWindow(QMainWindow):
         """検出結果を注釈付きPDFとしてエクスポート"""
         detect_or_dup_result = self._get_export_source_result()
         if not detect_or_dup_result:
-            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            QMessageBox.warning(self, "警告", "PDFの読み込み（Read）が完了していません")
             return
         if not self.app_state.has_pdf():
             QMessageBox.warning(self, "警告", "PDFファイルが選択されていません")
             return
         if self.task_runner.is_running():
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
+            return
+
+        annotation_targets = detect_or_dup_result.get("detect")
+        if not isinstance(annotation_targets, list) or not annotation_targets:
+            QMessageBox.warning(
+                self,
+                "警告",
+                "アノテーション対象がありません。対象検出（Detect）を実行するか、"
+                "プレビュー上で手動マークしてください。",
+            )
             return
 
         output_pdf_path = self._select_output_pdf_path(
@@ -1664,7 +1684,7 @@ class MainWindow(QMainWindow):
         """検出結果一覧をCSVとして保存"""
         source_result = self._get_export_source_result()
         if not source_result:
-            QMessageBox.warning(self, "警告", "Detect処理が完了していません")
+            QMessageBox.warning(self, "警告", "PDFの読み込み（Read）が完了していません")
             return
         if self.task_runner.is_running():
             QMessageBox.warning(self, "警告", "別のタスクが実行中です")
@@ -1672,7 +1692,12 @@ class MainWindow(QMainWindow):
 
         detect_list = source_result.get("detect", [])
         if not isinstance(detect_list, list) or not detect_list:
-            QMessageBox.warning(self, "警告", "CSVに出力する検出結果がありません")
+            QMessageBox.warning(
+                self,
+                "警告",
+                "CSVに出力する結果がありません。対象検出（Detect）を実行するか、"
+                "プレビュー上で手動マークしてください。",
+            )
             return
 
         base_name = "detect_results.csv"
@@ -2862,21 +2887,29 @@ class MainWindow(QMainWindow):
         return None
 
     def _get_export_source_result(self) -> Optional[dict]:
-        """エクスポート用に使用する結果（duplicate優先）を返す"""
+        """エクスポート用に使用する結果（duplicate → detect → read の順）を返す。
+
+        Detectを一度も実行していなくても、Read結果に手動マークが積まれていれば
+        それをマスク/アノテーション/CSVの入力として使う。run_read()の戻り値は
+        run_detect()と同じキー構成（text / detect / offset2coordsMap）を持つため、
+        これらの処理にとって構造的に等価。
+        解決順は _get_current_result() と同一。変更するときは両方を揃えること。
+        """
         if isinstance(self.app_state.duplicate_result, dict):
             return self.app_state.duplicate_result
         if isinstance(self.app_state.detect_result, dict):
             return self.app_state.detect_result
-        return None
-
-    def _get_image_export_source_result(self) -> Optional[dict]:
-        """画像系エクスポート用に使用する結果（duplicate/detect/read優先）を返す"""
-        export_result = self._get_export_source_result()
-        if isinstance(export_result, dict):
-            return export_result
         if isinstance(self.app_state.read_result, dict):
             return self.app_state.read_result
         return None
+
+    def _get_image_export_source_result(self) -> Optional[dict]:
+        """画像系エクスポート用に使用する結果を返す。
+
+        現在は _get_export_source_result() と同一（duplicate → detect → read）。
+        画像系固有の入力条件が生じたときの拡張点として名前を残している。
+        """
+        return self._get_export_source_result()
 
     def _sync_all_result_states_from_entities(
         self, entities: List[Dict[str, Any]]
@@ -3325,7 +3358,10 @@ class MainWindow(QMainWindow):
         self.duplicate_current_action.setEnabled(duplicate_enabled and has_pdf)
         self.duplicate_all_action.setEnabled(duplicate_enabled)
 
-        # Export: 機能ごとに必要な前提を分離する
+        # Export: いずれも「duplicate/detect/read のうち存在する結果」を入力に取る。
+        # マスク/アノテーション/CSV は detect が 0 件でも項目自体は有効化し、
+        # 対象なしは各 on_* ハンドラ側の実行時ガードで弾いて理由を案内する
+        # （グレーアウトのままだと「なぜ使えないのか」が伝わらないため）。
         export_detect_enabled = has_pdf and has_detect_export_source and not is_running
         export_image_enabled = has_pdf and has_image_export_source and not is_running
         self.export_annotations_action.setEnabled(export_detect_enabled)
