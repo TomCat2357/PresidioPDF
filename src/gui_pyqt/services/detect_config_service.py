@@ -336,8 +336,23 @@ class DetectConfigService:
 
     @classmethod
     def build_exact_word_pattern(cls, word: Any) -> str:
-        """語をそのままパターンとして返す"""
-        return str(word or "").strip()
+        """語の完全一致を狙う正規表現パターンを返す。
+
+        add_entity / ommit_entity に登録した語は run_detect() 内で
+        ``re.compile(...).finditer(target_text)`` に掛けられる。素の語のまま
+        だと部分一致してしまい（例:「山田」が「大山田」「山田川」に一致）、
+        誤検出・誤除外の原因になる。前後を境界文字クラスの否定後読み／
+        先読みで挟み、語単位の一致に限定する。
+        """
+        normalized_word = str(word or "").strip()
+        if not normalized_word:
+            return ""
+        escaped = re.escape(normalized_word)
+        return (
+            rf"(?<![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
+            rf"{escaped}"
+            rf"(?![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
+        )
 
     def add_omit_patterns(self, patterns: List[Any]) -> List[str]:
         """ommit_entity にパターンを追記して保存する"""
@@ -464,14 +479,9 @@ class DetectConfigService:
             if not word:
                 continue
             keys.add(word)
-            # 旧形式（境界チェック付き）のパターンも削除候補として追加
-            escaped = re.escape(word)
-            old_pattern = (
-                rf"(?<![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
-                rf"{escaped}"
-                rf"(?![{cls.EXACT_MATCH_BOUNDARY_CHAR_CLASS}])"
-            )
-            keys.add(old_pattern)
+            # build_exact_word_pattern() が生成する境界チェック付きパターンと、
+            # 一時的に素の語で保存されていた設定の両方を削除候補に含める。
+            keys.add(cls.build_exact_word_pattern(word))
         return keys
 
     @staticmethod
