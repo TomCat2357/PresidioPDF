@@ -61,7 +61,8 @@ def _make_entity(word: str, page_num: int, block_num: int, offset: int) -> dict:
     }
 
 
-def test_preview_click_keeps_clicked_entity_selection(monkeypatch):
+def _make_window_with_two_entities(monkeypatch):
+    """Alice(page0)/Bob(page1)のエンティティを持つMainWindowを組み立てる共通処理"""
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(
         "src.gui_pyqt.views.main_window.DetectConfigService",
@@ -69,9 +70,28 @@ def test_preview_click_keeps_clicked_entity_selection(monkeypatch):
     )
 
     window = MainWindow(AppState())
+    window.show()
+    # jump_to_detection はPDF読み込み済みであることを前提にページ範囲を判定するため、
+    # ダミーのpdf_documentを設定しておく（実データ不要、len()が使えれば十分）。
+    monkeypatch.setattr(
+        window.pdf_preview,
+        "pdf_document",
+        [object(), object()],
+    )
+
+    window.app_state.detect_result = {
+        "detect": [
+            _make_entity("Alice", 0, 0, 0),
+            _make_entity("Bob", 1, 0, 0),
+        ]
+    }
+    app.processEvents()
+    return app, window
+
+
+def test_preview_click_keeps_clicked_entity_selection(monkeypatch):
+    app, window = _make_window_with_two_entities(monkeypatch)
     try:
-        assert app is not None
-        window.show()
         visited_pages = []
         monkeypatch.setattr(
             window.pdf_preview,
@@ -79,19 +99,64 @@ def test_preview_click_keeps_clicked_entity_selection(monkeypatch):
             lambda page: visited_pages.append(page),
         )
 
-        window.app_state.detect_result = {
-            "detect": [
-                _make_entity("Alice", 0, 0, 0),
-                _make_entity("Bob", 1, 0, 0),
-            ]
-        }
-        app.processEvents()
-
         window.on_preview_entity_clicked(1)
         app.processEvents()
 
         assert window.result_panel.get_selected_entity_indices() == [1]
-        assert visited_pages == [1]
+        # プレビュー上のクリックは、クリックした位置が既にそのページ上にあるため
+        # 追加のページ切り替えやスクロール（go_to_page/jump_to_detection）は
+        # 発生しない（発生するとクリック位置から視点がズレて見えてしまう）。
+        assert visited_pages == []
+    finally:
+        window._set_dirty(False)
+        window.close()
+
+
+def test_preview_click_does_not_trigger_jump_to_detection(monkeypatch):
+    """プレビュー起点のクリックは jump_to_detection / go_to_page を呼ばない（回帰防止）"""
+    app, window = _make_window_with_two_entities(monkeypatch)
+    try:
+        jump_calls = []
+        go_to_page_calls = []
+        monkeypatch.setattr(
+            window.pdf_preview,
+            "jump_to_detection",
+            lambda *a, **k: jump_calls.append((a, k)),
+        )
+        monkeypatch.setattr(
+            window.pdf_preview,
+            "go_to_page",
+            lambda page: go_to_page_calls.append(page),
+        )
+
+        window.on_preview_entity_clicked(1)
+        app.processEvents()
+
+        assert jump_calls == []
+        assert go_to_page_calls == []
+    finally:
+        window._set_dirty(False)
+        window.close()
+
+
+def test_direct_entity_selected_triggers_jump_to_detection(monkeypatch):
+    """ResultPanel側の選択変更（プレビュー起点でない）は jump_to_detection を呼ぶ"""
+    app, window = _make_window_with_two_entities(monkeypatch)
+    try:
+        jump_calls = []
+        monkeypatch.setattr(
+            window.pdf_preview,
+            "jump_to_detection",
+            lambda *a, **k: jump_calls.append((a, k)),
+        )
+
+        # _suppress_preview_jump が立っていないことを前提に、直接 on_entity_selected を呼ぶ
+        assert window._suppress_preview_jump is False
+        window.on_entity_selected([_make_entity("Bob", 1, 0, 0)])
+        app.processEvents()
+
+        assert len(jump_calls) == 1
+        assert jump_calls[0][0][0] == 1  # page_num引数
     finally:
         window._set_dirty(False)
         window.close()

@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QRadioButton,
     QButtonGroup,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QDragEnterEvent, QDropEvent
 
 from src.pdf.text_visibility import build_invisible_char_keys, is_invisible_char
@@ -446,6 +446,101 @@ class PDFPreviewWidget(QWidget):
             self.update_preview()
             self.update_navigation_buttons()
             self.page_changed.emit(page_num)
+
+    def jump_to_detection(
+        self,
+        page_index: int,
+        rects_pdf: Optional[List[list]] = None,
+        mask_circles_pdf: Optional[List] = None,
+    ):
+        """指定エンティティの検出位置へページ移動し、ビューポート中央付近へスクロールする
+
+        右ペイン（結果一覧）でエンティティが選択された際に呼び出す想定。
+        ページが異なる場合は先にページを切り替え、その後スクロール位置を計算する。
+        """
+        if not self.pdf_document or not (0 <= page_index < len(self.pdf_document)):
+            return
+
+        if page_index != self.current_page_num:
+            self.go_to_page(page_index)
+
+        target_rect = self._compute_target_rect_pdf(rects_pdf, mask_circles_pdf)
+        if target_rect is None:
+            return
+
+        # ページ切り替え直後はレイアウト/スクロール範囲がまだ更新されていないため、
+        # イベントループを一巡させてからスクロール位置を計算する
+        QTimer.singleShot(0, lambda: self._scroll_to_pdf_rect(target_rect))
+
+    @staticmethod
+    def _compute_target_rect_pdf(
+        rects_pdf: Optional[List[list]],
+        mask_circles_pdf: Optional[List],
+    ) -> Optional[fitz.Rect]:
+        """rects_pdf / mask_circles_pdf からスクロール対象の外接矩形（PDF座標）を求める"""
+        union_rect: Optional[fitz.Rect] = None
+
+        if isinstance(rects_pdf, list):
+            for r in rects_pdf:
+                if not isinstance(r, (list, tuple)) or len(r) < 4:
+                    continue
+                try:
+                    x0, y0, x1, y1 = [float(v) for v in r[:4]]
+                except Exception:
+                    continue
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                cur = fitz.Rect(x0, y0, x1, y1)
+                union_rect = cur if union_rect is None else union_rect | cur
+
+        if union_rect is None and isinstance(mask_circles_pdf, list):
+            for raw_circle in mask_circles_pdf:
+                center_x = center_y = radius = None
+                if isinstance(raw_circle, dict):
+                    center = raw_circle.get("center")
+                    try:
+                        if isinstance(center, (list, tuple)) and len(center) >= 2:
+                            center_x = float(center[0])
+                            center_y = float(center[1])
+                        else:
+                            center_x = float(raw_circle.get("center_x"))
+                            center_y = float(raw_circle.get("center_y"))
+                        radius = float(raw_circle.get("radius"))
+                    except Exception:
+                        center_x = center_y = radius = None
+                elif isinstance(raw_circle, (list, tuple)) and len(raw_circle) >= 3:
+                    try:
+                        center_x = float(raw_circle[0])
+                        center_y = float(raw_circle[1])
+                        radius = float(raw_circle[2])
+                    except Exception:
+                        center_x = center_y = radius = None
+
+                if center_x is None or center_y is None or radius is None or radius <= 0.0:
+                    continue
+                cur = fitz.Rect(center_x - radius, center_y - radius, center_x + radius, center_y + radius)
+                union_rect = cur if union_rect is None else union_rect | cur
+
+        return union_rect
+
+    def _scroll_to_pdf_rect(self, rect: fitz.Rect):
+        """PDF座標の矩形の中心がビューポート中央付近に来るようスクロールする（縦横とも）"""
+        if not self.pdf_document:
+            return
+
+        center_x_pdf = (rect.x0 + rect.x1) / 2.0
+        center_y_pdf = (rect.y0 + rect.y1) / 2.0
+        target_cx, target_cy = self._pdf_to_view(center_x_pdf, center_y_pdf)
+
+        viewport = self.scroll_area.viewport()
+        v_bar = self.scroll_area.verticalScrollBar()
+        h_bar = self.scroll_area.horizontalScrollBar()
+
+        target_v = int(target_cy - viewport.height() / 2)
+        target_h = int(target_cx - viewport.width() / 2)
+
+        v_bar.setValue(max(v_bar.minimum(), min(target_v, v_bar.maximum())))
+        h_bar.setValue(max(h_bar.minimum(), min(target_h, h_bar.maximum())))
 
     def previous_page(self):
         """前のページに移動"""

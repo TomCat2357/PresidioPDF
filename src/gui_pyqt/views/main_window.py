@@ -86,6 +86,12 @@ class MainWindow(QMainWindow):
         # 全プレビューエンティティを保持（選択状態管理用）
         self._all_preview_entities: List[Dict] = []
 
+        # PDFプレビュー側のクリック起点でResultPanel選択を更新している間、
+        # on_entity_selected によるページジャンプ/中央スクロールを抑止するフラグ。
+        # プレビュークリックは元々そのページ上のエンティティなので、ページ移動や
+        # 強制的な再センタリングは不要（かつユーザ視点でカクつく原因になる）。
+        self._suppress_preview_jump = False
+
         # GUI検出設定（$HOME/.presidio/config.json）
         self.detect_config_service = DetectConfigService(Path.home())
         try:
@@ -1981,7 +1987,8 @@ class MainWindow(QMainWindow):
             )
             selected_keys.add(key)
 
-        # 全エンティティの選択状態を更新
+        # 全エンティティの選択状態を更新し、キーからプレビューエンティティを引けるようにする
+        pe_by_key = {}
         for pe in self._all_preview_entities:
             key = (
                 pe.get("text", ""),
@@ -1991,17 +1998,38 @@ class MainWindow(QMainWindow):
                 pe.get("offset", 0),
             )
             pe["is_selected"] = key in selected_keys
+            pe_by_key[key] = pe
 
         # プレビューを再描画（全エンティティを維持）
         self.pdf_preview.set_highlighted_entities(self._all_preview_entities)
 
-        # 選択されたエンティティのページに移動
-        if entities:
-            start_pos = entities[0].get("start", {})
+        # 選択された先頭エンティティの位置へページ移動し、検出位置が画面中央付近に
+        # 来るようスクロールする（ページ内のどこにあっても見失わないようにするため）。
+        # ただし、この選択変更がPDFプレビュー上のクリックに起因する場合は、
+        # 元々そのページ上のエンティティをクリックしているのでページ移動も
+        # 再センタリングも不要（強制ジャンプはクリック位置から視点がズレて見える）。
+        if entities and not self._suppress_preview_jump:
+            target_entity = entities[0]
+            start_pos = target_entity.get("start", {})
             page_num = (
                 start_pos.get("page_num", 0) if isinstance(start_pos, dict) else 0
             )
-            self.pdf_preview.go_to_page(page_num)
+            target_key = (
+                target_entity.get("word", ""),
+                target_entity.get("entity", ""),
+                page_num,
+                start_pos.get("block_num", 0) if isinstance(start_pos, dict) else 0,
+                start_pos.get("offset", 0) if isinstance(start_pos, dict) else 0,
+            )
+            target_pe = pe_by_key.get(target_key)
+            if target_pe is not None:
+                self.pdf_preview.jump_to_detection(
+                    page_num,
+                    rects_pdf=target_pe.get("rects_pdf"),
+                    mask_circles_pdf=target_pe.get("mask_circles_pdf"),
+                )
+            else:
+                self.pdf_preview.go_to_page(page_num)
 
     def on_entity_deleted(self, index: int):
         """エンティティが削除された"""
@@ -2676,8 +2704,16 @@ class MainWindow(QMainWindow):
                 and block_num == clicked_block
                 and offset == clicked_offset
             ):
-                self.result_panel.select_row(i)
-                self.result_panel.focus_results_table()
+                # select_row は selectionChanged を同期発火させ、on_entity_selected
+                # まで連鎖する。プレビュー起点のクリックは元々そのページ上にある
+                # ため、ページジャンプ/強制再センタリングは不要（かつ視点が
+                # クリック位置からズレて見えてしまう）ので、その間だけ抑止する。
+                self._suppress_preview_jump = True
+                try:
+                    self.result_panel.select_row(i)
+                    self.result_panel.focus_results_table()
+                finally:
+                    self._suppress_preview_jump = False
                 return
 
     def _highlight_all_entities(self, result: dict):
