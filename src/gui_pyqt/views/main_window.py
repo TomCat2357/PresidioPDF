@@ -242,43 +242,87 @@ class MainWindow(QMainWindow):
         open_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         open_action.triggered.connect(self.on_open_pdf)
         self.addAction(open_action)
-        toolbar.addAction(open_action)
         self.open_action = open_action
 
         # ファイルを閉じる
         close_pdf_action = QAction("閉じる", self)
         close_pdf_action.setStatusTip("現在開いているPDFファイルを閉じる")
         close_pdf_action.triggered.connect(self.on_close_pdf)
-        toolbar.addAction(close_pdf_action)
         self.close_pdf_action = close_pdf_action
 
-        # 設定（検出/重複設定）
-        config_action = QAction("設定", self)
-        config_action.setShortcut(QKeySequence("Ctrl+,"))
-        config_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        config_action.setStatusTip(
-            f"検出対象と重複削除設定（{DetectConfigService.DISPLAY_FILE_NAME}）"
+        # 保存（PDF + JSONマッピング）
+        save_action = QAction("保存", self)
+        save_action.setStatusTip("PDFとサイドカーJSONマッピングを保存")
+        save_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        save_action.triggered.connect(self.on_save)
+        self.addAction(save_action)
+        self.save_action = save_action
+
+        # エクスポート（「ファイル」配下のサブメニュー）
+        self.export_annotations_action = QAction("アノテーション付き", self)
+        self.export_annotations_action.triggered.connect(self.on_export_annotations)
+
+        self.export_mask_action = QAction("マスク", self)
+        self.export_mask_action.triggered.connect(self.on_mask)
+
+        self.export_mask_as_image_action = QAction(
+            "セキュアマスク保存（非表示情報削除＋画像化）", self
         )
-        config_action.triggered.connect(self.on_open_config_dialog)
-        self.addAction(config_action)
-        toolbar.addAction(config_action)
-        self.config_action = config_action
+        self.export_mask_as_image_action.setStatusTip(
+            "メタデータ・テキスト層・しおり等を全て除去し、各ページを画像化して再構築したPDFを保存"
+        )
+        self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
+        self.export_marked_as_image_action = QAction("マーク（画像として保存）", self)
+        self.export_marked_as_image_action.triggered.connect(
+            self.on_export_marked_as_image
+        )
+        self.export_detect_list_csv_action = QAction("検出結果一覧（CSV）", self)
+        self.export_detect_list_csv_action.triggered.connect(
+            self.on_export_detect_list_csv
+        )
 
-        search_action = QAction("検索", self)
-        search_action.setShortcut(QKeySequence("Ctrl+F"))
-        search_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        search_action.setStatusTip("検索バーを表示して文書内検索")
-        search_action.triggered.connect(self.show_search_bar)
-        self.addAction(search_action)
-        toolbar.addAction(search_action)
-        self.search_action = search_action
+        export_menu = QMenu("エクスポート", self)
+        export_menu.setStatusTip("検出結果を各モードで保存")
+        export_menu.addAction(self.export_annotations_action)
+        export_menu.addAction(self.export_mask_action)
+        export_menu.addAction(self.export_mask_as_image_action)
+        export_menu.addAction(self.export_marked_as_image_action)
+        export_menu.addSeparator()
+        export_menu.addAction(self.export_detect_list_csv_action)
+        self.export_menu = export_menu
+        # 有効/無効の切り替えは menuAction() 経由（メニュー内の行のグレーアウトに反映される）
+        self.export_button = export_menu.menuAction()
 
-        # Read（内部的に保持、ツールバーには非表示）
-        read_action = QAction("📖 Read", self)
-        read_action.triggered.connect(self.on_read)
-        self.read_action = read_action
+        # 「ファイル」（開く/閉じる/保存/エクスポートをまとめたぶら下がりメニュー）
+        file_menu = QMenu(self)
+        file_menu.addAction(open_action)
+        file_menu.addAction(close_pdf_action)
+        file_menu.addSeparator()
+        file_menu.addAction(save_action)
+        file_menu.addSeparator()
+        file_menu.addMenu(export_menu)
+        self.file_menu = file_menu
 
-        # 対象検出（ぶら下がりメニュー）
+        # ボタン本体クリックで「開く」を1クリック実行し、右側の矢印クリックでメニューを開く。
+        # setDefaultAction(open_action) を使うと ActionChanged のたびにボタン表示が
+        # open_action のテキストへ同期され直してしまうため、表示専用のアクションを別に用意する。
+        file_default_action = QAction("ファイル", self)
+        file_default_action.setToolTip(
+            "クリック: PDFを開く（Ctrl+O） / ▾: 開く・閉じる・保存・エクスポート"
+        )
+        file_default_action.setStatusTip(open_action.statusTip())
+        file_default_action.triggered.connect(open_action.trigger)
+        self.file_default_action = file_default_action
+
+        file_button = QToolButton(self)
+        file_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        file_button.setDefaultAction(file_default_action)
+        file_button.setMenu(file_menu)
+        toolbar.addWidget(file_button)
+        self.file_button = file_button
+
+        # 対象検出（「処理」配下のサブメニュー）
         self.detect_current_action = QAction("表示ページ", self)
         self.detect_current_action.setShortcut(QKeySequence("F5"))
         self.detect_current_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
@@ -291,19 +335,59 @@ class MainWindow(QMainWindow):
         self.detect_all_action.triggered.connect(self.on_detect_all_pages)
         self.addAction(self.detect_all_action)
 
-        detect_menu = QMenu(self)
+        detect_menu = QMenu("対象検出", self)
+        detect_menu.setStatusTip("個人情報（PII）を検出")
         detect_menu.addAction(self.detect_current_action)
         detect_menu.addAction(self.detect_all_action)
+        self.detect_menu = detect_menu
+        self.detect_button = detect_menu.menuAction()
 
-        detect_button = QToolButton(self)
-        detect_button.setText("対象検出")
-        detect_button.setToolTip("個人情報（PII）を検出")
-        detect_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        detect_button.setMenu(detect_menu)
-        toolbar.addWidget(detect_button)
-        self.detect_button = detect_button
+        # 対象削除（自動検出のみ、「処理」配下のサブメニュー）
+        self.target_delete_current_action = QAction("表示ページ", self)
+        self.target_delete_current_action.triggered.connect(
+            self.on_target_delete_current_page
+        )
 
-        # OCR（ぶら下がりメニュー）
+        self.target_delete_all_action = QAction("全ページ", self)
+        self.target_delete_all_action.triggered.connect(self.on_target_delete_all_pages)
+
+        target_delete_menu = QMenu("対象削除", self)
+        target_delete_menu.setStatusTip("自動検出項目を削除")
+        target_delete_menu.addAction(self.target_delete_current_action)
+        target_delete_menu.addAction(self.target_delete_all_action)
+        self.target_delete_menu = target_delete_menu
+        self.target_delete_button = target_delete_menu.menuAction()
+
+        # 重複削除（「処理」配下のサブメニュー）
+        self.duplicate_current_action = QAction("表示ページ", self)
+        self.duplicate_current_action.triggered.connect(self.on_duplicate_current_page)
+
+        self.duplicate_all_action = QAction("全ページ", self)
+        self.duplicate_all_action.triggered.connect(self.on_duplicate_all_pages)
+
+        duplicate_menu = QMenu("重複削除", self)
+        duplicate_menu.setStatusTip("重複する検出結果を処理")
+        duplicate_menu.addAction(self.duplicate_current_action)
+        duplicate_menu.addAction(self.duplicate_all_action)
+        self.duplicate_menu = duplicate_menu
+        self.duplicate_button = duplicate_menu.menuAction()
+
+        # 「処理」（対象検出/対象削除/重複削除をまとめたぶら下がりメニュー）
+        processing_menu = QMenu(self)
+        processing_menu.addMenu(detect_menu)
+        processing_menu.addMenu(target_delete_menu)
+        processing_menu.addMenu(duplicate_menu)
+        self.processing_menu = processing_menu
+
+        processing_button = QToolButton(self)
+        processing_button.setText("処理")
+        processing_button.setToolTip("対象検出・対象削除・重複削除")
+        processing_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        processing_button.setMenu(processing_menu)
+        toolbar.addWidget(processing_button)
+        self.processing_button = processing_button
+
+        # OCR（ぶら下がりメニュー、引き続きトップレベル）
         self.ocr_current_action = QAction("OCR実行（表示ページ）", self)
         self.ocr_current_action.triggered.connect(self.on_ocr_current_page)
 
@@ -331,94 +415,32 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(ocr_button)
         self.ocr_button = ocr_button
 
-        # 対象削除（自動検出のみ、ぶら下がりメニュー）
-        self.target_delete_current_action = QAction("表示ページ", self)
-        self.target_delete_current_action.triggered.connect(
-            self.on_target_delete_current_page
+        # 検索
+        search_action = QAction("検索", self)
+        search_action.setShortcut(QKeySequence("Ctrl+F"))
+        search_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        search_action.setStatusTip("検索バーを表示して文書内検索")
+        search_action.triggered.connect(self.show_search_bar)
+        self.addAction(search_action)
+        toolbar.addAction(search_action)
+        self.search_action = search_action
+
+        # 設定（検出/重複設定）
+        config_action = QAction("設定", self)
+        config_action.setShortcut(QKeySequence("Ctrl+,"))
+        config_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        config_action.setStatusTip(
+            f"検出対象と重複削除設定（{DetectConfigService.DISPLAY_FILE_NAME}）"
         )
+        config_action.triggered.connect(self.on_open_config_dialog)
+        self.addAction(config_action)
+        toolbar.addAction(config_action)
+        self.config_action = config_action
 
-        self.target_delete_all_action = QAction("全ページ", self)
-        self.target_delete_all_action.triggered.connect(self.on_target_delete_all_pages)
-
-        target_delete_menu = QMenu(self)
-        target_delete_menu.addAction(self.target_delete_current_action)
-        target_delete_menu.addAction(self.target_delete_all_action)
-
-        target_delete_button = QToolButton(self)
-        target_delete_button.setText("対象削除")
-        target_delete_button.setToolTip("自動検出項目を削除")
-        target_delete_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        target_delete_button.setMenu(target_delete_menu)
-        toolbar.addWidget(target_delete_button)
-        self.target_delete_button = target_delete_button
-
-        # 重複削除（ぶら下がりメニュー）
-        self.duplicate_current_action = QAction("表示ページ", self)
-        self.duplicate_current_action.triggered.connect(self.on_duplicate_current_page)
-
-        self.duplicate_all_action = QAction("全ページ", self)
-        self.duplicate_all_action.triggered.connect(self.on_duplicate_all_pages)
-
-        duplicate_menu = QMenu(self)
-        duplicate_menu.addAction(self.duplicate_current_action)
-        duplicate_menu.addAction(self.duplicate_all_action)
-
-        duplicate_button = QToolButton(self)
-        duplicate_button.setText("重複削除")
-        duplicate_button.setToolTip("重複する検出結果を処理")
-        duplicate_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        duplicate_button.setMenu(duplicate_menu)
-        toolbar.addWidget(duplicate_button)
-        self.duplicate_button = duplicate_button
-
-        # 保存（PDF + JSONマッピング）
-        save_action = QAction("保存", self)
-        save_action.setStatusTip("PDFとサイドカーJSONマッピングを保存")
-        save_action.setShortcut(QKeySequence("Ctrl+S"))
-        save_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-        save_action.triggered.connect(self.on_save)
-        self.addAction(save_action)
-        toolbar.addAction(save_action)
-        self.save_action = save_action
-
-        # エクスポート（ぶら下がりメニュー）
-        self.export_annotations_action = QAction("アノテーション付き", self)
-        self.export_annotations_action.triggered.connect(self.on_export_annotations)
-
-        self.export_mask_action = QAction("マスク", self)
-        self.export_mask_action.triggered.connect(self.on_mask)
-
-        self.export_mask_as_image_action = QAction(
-            "セキュアマスク保存（非表示情報削除＋画像化）", self
-        )
-        self.export_mask_as_image_action.setStatusTip(
-            "メタデータ・テキスト層・しおり等を全て除去し、各ページを画像化して再構築したPDFを保存"
-        )
-        self.export_mask_as_image_action.triggered.connect(self.on_export_mask_as_image)
-        self.export_marked_as_image_action = QAction("マーク（画像として保存）", self)
-        self.export_marked_as_image_action.triggered.connect(
-            self.on_export_marked_as_image
-        )
-        self.export_detect_list_csv_action = QAction("検出結果一覧（CSV）", self)
-        self.export_detect_list_csv_action.triggered.connect(
-            self.on_export_detect_list_csv
-        )
-
-        export_menu = QMenu(self)
-        export_menu.addAction(self.export_annotations_action)
-        export_menu.addAction(self.export_mask_action)
-        export_menu.addAction(self.export_mask_as_image_action)
-        export_menu.addAction(self.export_marked_as_image_action)
-        export_menu.addSeparator()
-        export_menu.addAction(self.export_detect_list_csv_action)
-
-        export_button = QToolButton(self)
-        export_button.setText("エクスポート")
-        export_button.setToolTip("検出結果を各モードで保存")
-        export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        export_button.setMenu(export_menu)
-        toolbar.addWidget(export_button)
-        self.export_button = export_button
+        # Read（内部的に保持、ツールバーには非表示）
+        read_action = QAction("📖 Read", self)
+        read_action.triggered.connect(self.on_read)
+        self.read_action = read_action
 
         # ヘルプ（ぶら下がりメニュー）
         self.help_context_action = QAction("部品をクリックして説明 (F1)", self)
@@ -561,24 +583,23 @@ class MainWindow(QMainWindow):
         self._toolbar_help_targets = []
 
         action_targets = [
-            (self.open_action, "file"),
-            (self.close_pdf_action, "file"),
             (self.config_action, "settings"),
             (self.search_action, "search"),
-            (self.save_action, "save"),
         ]
         for action, topic_id in action_targets:
             widget = self.main_toolbar.widgetForAction(action)
             if widget is not None:
                 self._toolbar_help_targets.append((widget, topic_id))
 
+        # 開く/閉じる/保存/エクスポートは「ファイル」に、対象検出/対象削除/重複削除は
+        # 「処理」にまとめられているため、F1クリック対象はグループボタン単位で登録する
+        # （個々のサブメニュー項目はメニュー表示中にクリックが説明モードへ吸収され、
+        # 単独では到達できないため）。
         self._toolbar_help_targets.extend(
             [
-                (self.detect_button, "detect"),
+                (self.file_button, "file"),
+                (self.processing_button, "processing"),
                 (self.ocr_button, "ocr"),
-                (self.target_delete_button, "target_delete"),
-                (self.duplicate_button, "duplicate"),
-                (self.export_button, "export"),
                 (self.help_button, "help"),
             ]
         )
@@ -3393,6 +3414,12 @@ class MainWindow(QMainWindow):
         self.duplicate_button.setEnabled(duplicate_enabled)
         self.duplicate_current_action.setEnabled(duplicate_enabled and has_pdf)
         self.duplicate_all_action.setEnabled(duplicate_enabled)
+
+        # 処理（対象検出/対象削除/重複削除をまとめたボタン）:
+        # いずれか1つでもサブメニューが有効なら開けるようにする
+        self.processing_button.setEnabled(
+            detect_enabled or target_delete_enabled or duplicate_enabled
+        )
 
         # Export: いずれも「duplicate/detect/read のうち存在する結果」を入力に取る。
         # マスク/アノテーション/CSV は detect が 0 件でも項目自体は有効化し、
