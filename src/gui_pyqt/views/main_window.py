@@ -3469,8 +3469,9 @@ class MainWindow(QMainWindow):
             read_result = result_dict.get("read_result")
             if isinstance(read_result, dict):
                 self.app_state.read_result = read_result
-            self.app_state.detect_result = None
-            self.app_state.duplicate_result = None
+            # OCRで追加されるテキストは既存ブロックの後ろに追記されるだけで、
+            # 既存の検出結果・手動マークが参照するpage_num/block_num/offsetは
+            # 変化しないため、ここではクリアしない。
             self.app_state.ocr_result = result_dict
             embedded_count = int(result_dict.get("embedded_count", 0) or 0)
             ocr_item_count = int(result_dict.get("ocr_item_count", 0) or 0)
@@ -3479,6 +3480,9 @@ class MainWindow(QMainWindow):
             )
             if self.app_state.pdf_path:
                 self.pdf_preview.load_pdf(str(self.app_state.pdf_path))
+                # load_pdf()でプレビュー側のハイライトがリセットされるため、
+                # 保持したdetect_result/duplicate_resultから再描画する。
+                self._refresh_result_view_from_state()
             self._set_dirty(True)
         elif self.current_task == "ocr_clear":
             result_dict = result if isinstance(result, dict) else {}
