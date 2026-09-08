@@ -111,10 +111,16 @@ def _blocks_plain_text(pdf_path: str) -> List[List[str]]:
                 mapper = PDFBlockTextMapper(doc, enable_cache=True)
                 
                 # ページごとにブロックテキストを取得
+                # 注意: ブロックが1つも無い（空白）ページでもエントリを必ず追加する。
+                # ここで空ページをスキップすると text[] のページインデックスと
+                # 実際のPDFページ番号がずれ、そのページ以降の全ての検出結果が
+                # 誤ったページ番号・座標にマッピングされてしまう
+                # （detect_main._convert_offsets_to_position や
+                # pipeline_service の enumerate(text_2d) など、下流の全処理は
+                # text_2d[i] が PDF の 0-based ページ i に一致する前提で書かれている）。
                 for page_num in range(len(doc)):
                     page_block_texts = mapper.get_page_block_texts(page_num)
-                    if page_block_texts:
-                        pages_out.append(page_block_texts)
+                    pages_out.append(page_block_texts)
     
     except Exception as e:
         print(f"ブロックテキスト抽出エラー: {e}")
