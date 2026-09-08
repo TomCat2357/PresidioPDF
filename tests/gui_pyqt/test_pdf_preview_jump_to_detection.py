@@ -3,8 +3,9 @@
 ことを検証する退行テスト。
 
 対象: PDFPreviewWidget.jump_to_detection（縦横ともに中央寄せでスクロールする）。
-テストPDF harumichi.pdf は複数ページにわたって検出位置が散らばっており、
-2ページ目（page_index=1）のページ下寄りの単語をスクロール対象として使う。
+テストPDFは fixture 内で生成する2ページのA4文書で、各ページに複数の単語を
+上下に散らして配置し、2ページ目（page_index=1）のページ下寄りの単語を
+スクロール対象として使う。
 """
 
 import os
@@ -17,18 +18,29 @@ from PyQt6.QtWidgets import QApplication
 
 from src.gui_pyqt.views.pdf_preview import PDFPreviewWidget
 
-HARUMICHI_PDF = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "test_pdfs",
-    "harumichi.pdf",
-)
-
 TARGET_PAGE_INDEX = 1
 
 
 @pytest.fixture(scope="module")
 def _qapp():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(scope="module")
+def sample_pdf_path(tmp_path_factory) -> str:
+    """検出位置がページ内に散らばった2ページのA4 PDFを生成して返す。"""
+    pdf_path = tmp_path_factory.mktemp("jump_to_detection") / "sample.pdf"
+    with fitz.open() as doc:
+        for page_index in range(2):
+            page = doc.new_page(width=595, height=842)
+            for row, y in enumerate((100, 300, 500, 700, 780)):
+                page.insert_text(
+                    (72, y),
+                    f"page{page_index}_word{row}",
+                    fontsize=14,
+                )
+        doc.save(str(pdf_path))
+    return str(pdf_path)
 
 
 def _find_target_word_rect(pdf_path: str, page_index: int) -> list:
@@ -45,11 +57,11 @@ def _find_target_word_rect(pdf_path: str, page_index: int) -> list:
 
 
 @pytest.fixture()
-def preview_widget(_qapp):
+def preview_widget(_qapp, sample_pdf_path):
     widget = PDFPreviewWidget()
     widget.resize(400, 300)
     widget.show()
-    widget.load_pdf(HARUMICHI_PDF)
+    widget.load_pdf(sample_pdf_path)
     _qapp.processEvents()
     try:
         yield widget
@@ -57,11 +69,11 @@ def preview_widget(_qapp):
         widget.close()
 
 
-def test_jump_to_detection_switches_page(preview_widget, _qapp):
+def test_jump_to_detection_switches_page(preview_widget, sample_pdf_path, _qapp):
     """ページが異なる検出位置へジャンプすると、current_page_numが切り替わる。"""
     assert preview_widget.current_page_num == 0
 
-    rect = _find_target_word_rect(HARUMICHI_PDF, TARGET_PAGE_INDEX)
+    rect = _find_target_word_rect(sample_pdf_path, TARGET_PAGE_INDEX)
     preview_widget.jump_to_detection(TARGET_PAGE_INDEX, rects_pdf=[rect])
     _qapp.processEvents()
     _qapp.processEvents()
@@ -69,9 +81,11 @@ def test_jump_to_detection_switches_page(preview_widget, _qapp):
     assert preview_widget.current_page_num == TARGET_PAGE_INDEX
 
 
-def test_jump_to_detection_centers_rect_vertically_and_horizontally(preview_widget, _qapp):
+def test_jump_to_detection_centers_rect_vertically_and_horizontally(
+    preview_widget, sample_pdf_path, _qapp
+):
     """スクロール後、対象矩形の中心がビューポート中央付近（クランプ後）に来る。"""
-    rect = _find_target_word_rect(HARUMICHI_PDF, TARGET_PAGE_INDEX)
+    rect = _find_target_word_rect(sample_pdf_path, TARGET_PAGE_INDEX)
     preview_widget.jump_to_detection(TARGET_PAGE_INDEX, rects_pdf=[rect])
     _qapp.processEvents()
     _qapp.processEvents()

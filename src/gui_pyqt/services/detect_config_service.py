@@ -336,13 +336,32 @@ class DetectConfigService:
 
     @classmethod
     def build_exact_word_pattern(cls, word: Any) -> str:
-        """語の完全一致を狙う正規表現パターンを返す。
+        """語をそのまま検出パターン化する（正規表現メタ文字のみエスケープ）。
 
-        add_entity / ommit_entity に登録した語は run_detect() 内で
-        ``re.compile(...).finditer(target_text)`` に掛けられる。素の語のまま
-        だと部分一致してしまい（例:「山田」が「大山田」「山田川」に一致）、
-        誤検出・誤除外の原因になる。前後を境界文字クラスの否定後読み／
-        先読みで挟み、語単位の一致に限定する。
+        以前は add_entity / ommit_entity に登録した語の前後を
+        ``EXACT_MATCH_BOUNDARY_CHAR_CLASS``（漢字・カタカナ・英数字を広く含む
+        文字クラス）の否定後読み／先読みで挟み、語単位の完全一致に限定して
+        いた（誤検出・誤除外対策）。しかし分かち書きのない日本語文では語の
+        前後がほぼ必ずこの境界文字クラスに一致してしまうため、隣接して
+        漢字・カタカナが続く語（例:「山田太郎」の一部としての「山田」）が
+        一切検出されなくなる問題があった。ユーザーの要望によりこの境界
+        チェックは撤去し、語をそのまま（正規表現メタ文字のみエスケープして）
+        返す。過去に境界チェック付きで保存された設定は自動移行しない（手動で
+        修正する）。解除操作での削除だけは ``_build_legacy_boundary_pattern``
+        経由で旧形式にも対応する。
+        """
+        normalized_word = str(word or "").strip()
+        if not normalized_word:
+            return ""
+        return re.escape(normalized_word)
+
+    @classmethod
+    def _build_legacy_boundary_pattern(cls, word: Any) -> str:
+        """旧バージョン(2026-09-06〜)が生成していた境界チェック付きパターンを返す。
+
+        ``build_exact_word_pattern`` が境界チェックを撤去した後も、既存の
+        config.json にはこの形式で保存済みのパターンが残り得る。削除処理
+        (``_build_exact_pattern_keys_from_words``) から後方互換のために参照する。
         """
         normalized_word = str(word or "").strip()
         if not normalized_word:
@@ -479,9 +498,11 @@ class DetectConfigService:
             if not word:
                 continue
             keys.add(word)
-            # build_exact_word_pattern() が生成する境界チェック付きパターンと、
-            # 一時的に素の語で保存されていた設定の両方を削除候補に含める。
+            # build_exact_word_pattern() が生成する現行パターン（素の語の
+            # エスケープ）と、旧バージョンが生成していた境界チェック付き
+            # パターンの両方を削除候補に含める。
             keys.add(cls.build_exact_word_pattern(word))
+            keys.add(cls._build_legacy_boundary_pattern(word))
         return keys
 
     @staticmethod

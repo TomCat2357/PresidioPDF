@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
         self._help_pick_previous_status_message = ""
         self._search_matches: List[Dict[str, Any]] = []
         self._current_search_match_index: int = -1
+        self._search_query_had_no_match = False
 
         self.init_ui()
         self.connect_signals()
@@ -503,6 +504,10 @@ class MainWindow(QMainWindow):
         self.search_next_button.clicked.connect(self.on_search_next)
         search_layout.addWidget(self.search_next_button)
 
+        self.search_count_label = QLabel("")
+        self.search_count_label.setMinimumWidth(80)
+        search_layout.addWidget(self.search_count_label)
+
         self.search_add_button = QPushButton("追加")
         self.search_add_button.clicked.connect(self.on_add_current_search_match)
         search_layout.addWidget(self.search_add_button)
@@ -520,6 +525,7 @@ class MainWindow(QMainWindow):
             self.search_execute_button,
             self.search_prev_button,
             self.search_next_button,
+            self.search_count_label,
             self.search_add_button,
             self.search_add_all_button,
         ]
@@ -2336,8 +2342,29 @@ class MainWindow(QMainWindow):
         """検索候補とハイライトをクリアする"""
         self._search_matches = []
         self._current_search_match_index = -1
+        self._search_query_had_no_match = False
         if hasattr(self, "pdf_preview"):
             self.pdf_preview.set_search_highlight(None)
+        self._update_search_count_label()
+
+    def _update_search_count_label(self):
+        """検索候補の「何件中何件目」ラベルを更新する
+
+        - 検出中の候補がある場合: 「N / M 件」
+        - 検索語を実行したが一致候補が0件だった場合: 「0 件」
+        - 検索語未入力、またはクリア直後の場合: 空文字
+        """
+        if not hasattr(self, "search_count_label"):
+            return
+
+        if self._search_matches and self._current_search_match_index >= 0:
+            self.search_count_label.setText(
+                f"{self._current_search_match_index + 1} / {len(self._search_matches)} 件"
+            )
+        elif self._search_query_had_no_match:
+            self.search_count_label.setText("0 件")
+        else:
+            self.search_count_label.setText("")
 
     def _update_search_ui_state(self):
         """検索UIの有効状態を更新する"""
@@ -2385,7 +2412,9 @@ class MainWindow(QMainWindow):
         self._search_matches = matches
         if not matches:
             self._current_search_match_index = -1
+            self._search_query_had_no_match = True
             self.pdf_preview.set_search_highlight(None)
+            self._update_search_count_label()
             self._update_search_ui_state()
             return
 
@@ -2455,6 +2484,7 @@ class MainWindow(QMainWindow):
             return
 
         self._current_search_match_index = index % len(self._search_matches)
+        self._search_query_had_no_match = False
         current_match = self._search_matches[self._current_search_match_index]
         self.pdf_preview.set_search_highlight(current_match)
         page_num = int(current_match.get("page_num", 0) or 0)
@@ -2462,6 +2492,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"検索候補 {self._current_search_match_index + 1}/{len(self._search_matches)}"
         )
+        self._update_search_count_label()
         self._update_search_ui_state()
 
     def on_search_requested(self):
@@ -2482,6 +2513,8 @@ class MainWindow(QMainWindow):
         if not self._search_matches:
             QMessageBox.information(self, "検索", "一致する候補はありません")
             self._clear_search_matches()
+            self._search_query_had_no_match = True
+            self._update_search_count_label()
             self._update_search_ui_state()
             return
 

@@ -139,6 +139,41 @@ def test_preview_click_does_not_trigger_jump_to_detection(monkeypatch):
         window.close()
 
 
+def test_search_count_label_shows_current_index_and_total(monkeypatch):
+    """検索候補ラベルが「N / M 件」を表示し、クリア後は空文字に戻ることを確認する"""
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(
+        "src.gui_pyqt.views.main_window.DetectConfigService",
+        _FakeDetectConfigService,
+    )
+
+    window = MainWindow(AppState())
+    window.show()
+    try:
+        window._search_matches = [
+            {"page_num": 0},
+            {"page_num": 0},
+            {"page_num": 0},
+        ]
+        monkeypatch.setattr(window.pdf_preview, "go_to_page", lambda page: None)
+        monkeypatch.setattr(
+            window.pdf_preview, "set_search_highlight", lambda match: None
+        )
+
+        window._set_current_search_match(1)
+        app.processEvents()
+
+        assert window.search_count_label.text() == "2 / 3 件"
+
+        window._clear_search_matches()
+        app.processEvents()
+
+        assert window.search_count_label.text() == ""
+    finally:
+        window._set_dirty(False)
+        window.close()
+
+
 def test_direct_entity_selected_triggers_jump_to_detection(monkeypatch):
     """ResultPanel側の選択変更（プレビュー起点でない）は jump_to_detection を呼ぶ"""
     app, window = _make_window_with_two_entities(monkeypatch)

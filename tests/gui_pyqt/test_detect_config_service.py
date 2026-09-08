@@ -451,7 +451,17 @@ def test_add_add_patterns_appends_and_keeps_unknown_keys(tmp_path):
     assert add_entity.get("固有名詞") == ["東京タワー", "大阪城"]
 
 
-def test_build_exact_word_pattern_matches_exact_only():
+def test_build_exact_word_pattern_returns_plain_escaped_word():
+    # 境界チェック（EXACT_MATCH_BOUNDARY_CHAR_CLASS）は漢字・カタカナ・英数字を
+    # 広く含むため、分かち書きのない日本語文では語の前後がほぼ必ず境界文字
+    # クラスに一致してしまい、隣接して漢字が続く語（「山田太郎」の一部として
+    # の「山田」等）が検出できなくなる。そのため語をそのまま
+    # （正規表現メタ文字のみエスケープして）返す仕様に変更した。
+    assert DetectConfigService.build_exact_word_pattern("ABC") == "ABC"
+    assert DetectConfigService.build_exact_word_pattern(
+        "株式会社(仮)"
+    ) == re.escape("株式会社(仮)")
+
     pattern = DetectConfigService.build_exact_word_pattern("山田")
     regex = re.compile(pattern)
 
@@ -460,7 +470,8 @@ def test_build_exact_word_pattern_matches_exact_only():
     assert regex.search("（山田）")
     assert regex.search("山田")
     assert regex.search("山田。")
-    assert not regex.search("大山田")
+    assert regex.search("大山田")
+    assert regex.search("山田太郎")
 
 
 def test_build_detect_list_csv_rows_formats_columns():
@@ -493,7 +504,9 @@ def test_build_detect_list_csv_rows_formats_columns():
 def test_remove_add_patterns_by_words_removes_all_entities(tmp_path):
     service = DetectConfigService(tmp_path)
     config_path = service.config_path
-    tanaka_pattern = DetectConfigService.build_exact_word_pattern("田中")
+    # 旧バージョン(2026-09-06〜)が保存していた境界チェック付きパターンを
+    # ビルダーを使わずリテラルで再現し、レガシー削除経路を検証する。
+    tanaka_pattern = DetectConfigService._build_legacy_boundary_pattern("田中")
     yamada_pattern = DetectConfigService.build_exact_word_pattern("山田")
     _write_config(
         config_path,
@@ -520,7 +533,9 @@ def test_remove_add_patterns_by_words_removes_all_entities(tmp_path):
 def test_remove_omit_patterns_by_words_removes_exact_word_and_pattern(tmp_path):
     service = DetectConfigService(tmp_path)
     config_path = service.config_path
-    tanaka_pattern = DetectConfigService.build_exact_word_pattern("田中")
+    # 旧バージョン(2026-09-06〜)が保存していた境界チェック付きパターンを
+    # ビルダーを使わずリテラルで再現し、レガシー削除経路を検証する。
+    tanaka_pattern = DetectConfigService._build_legacy_boundary_pattern("田中")
     yamada_pattern = DetectConfigService.build_exact_word_pattern("山田")
     _write_config(
         config_path,
