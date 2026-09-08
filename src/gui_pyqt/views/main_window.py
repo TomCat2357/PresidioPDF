@@ -305,20 +305,12 @@ class MainWindow(QMainWindow):
         file_menu.addMenu(export_menu)
         self.file_menu = file_menu
 
-        # ボタン本体クリックで「開く」を1クリック実行し、右側の矢印クリックでメニューを開く。
-        # setDefaultAction(open_action) を使うと ActionChanged のたびにボタン表示が
-        # open_action のテキストへ同期され直してしまうため、表示専用のアクションを別に用意する。
-        file_default_action = QAction("ファイル", self)
-        file_default_action.setToolTip(
-            "クリック: PDFを開く（Ctrl+O） / ▾: 開く・閉じる・保存・エクスポート"
-        )
-        file_default_action.setStatusTip(open_action.statusTip())
-        file_default_action.triggered.connect(open_action.trigger)
-        self.file_default_action = file_default_action
-
+        # ボタンをクリックするとメニューが開く（本体クリックでの誤操作を防ぐため、
+        # 「処理」「OCR」「ヘルプ」ボタンと同じ InstantPopup に統一している）。
         file_button = QToolButton(self)
-        file_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        file_button.setDefaultAction(file_default_action)
+        file_button.setText("ファイル")
+        file_button.setToolTip("開く・閉じる・保存・エクスポート（Ctrl+O で直接開くことも可能）")
+        file_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         file_button.setMenu(file_menu)
         toolbar.addWidget(file_button)
         self.file_button = file_button
